@@ -19,7 +19,7 @@ XTREAM_PASSWORD=<<XTREAM_PASSWORD>>
 
 ## Paramètres fixes
 REPO=https://github.com/rachid598/xtream-m3u-local
-BRANCH=main            # si la branche main n'existe pas encore, utiliser la branche par défaut du dépôt
+BRANCH=main            # si « main » n'existe pas encore : claude/wizardly-keller-bd38ld (branche par défaut actuelle)
 PORTS : 7777 (playlists/lecteurs) et 7778 (interface Web) — ne pas les changer
 CONTENEUR : xtream-m3u-local
 

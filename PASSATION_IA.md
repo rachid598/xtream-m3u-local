@@ -161,7 +161,8 @@ Couverture des tests unitaires : M3U complet et personnalisé (métadonnées, in
 ## 7. Non testé / limites connues
 
 - **Aucun essai avec le vrai fournisseur ni sur le vrai Unraid** (débit TS réel, taille réelle de l'EPG, comportement exact de `get_live_categories` du fournisseur, lecteurs Android TV/TiviMate/VLC réels).
-- **Publication GitHub/GHCR** : code poussé sur la branche `claude/wizardly-keller-bd38ld` du dépôt `rachid598/xtream-m3u-local` (dépôt vide auparavant : cette branche peut être devenue la branche par défaut). L'image GHCR n'est publiée que si le workflow tourne sur la branche par défaut ; vérifier l'onglet Actions puis la visibilité du package (privé par défaut). Ne pas présenter `ghcr.io/rachid598/xtream-m3u-local:latest` comme disponible tant que ce n'est pas vérifié.
+- **Publication GitHub/GHCR (vérifiée le 15/11/2026)** : code poussé sur `claude/wizardly-keller-bd38ld` de `rachid598/xtream-m3u-local`. Le dépôt étant vide, cette branche est devenue la **branche par défaut**. Le workflow Actions (run n° 1) a réussi : tests OK puis image amd64+arm64 publiée sous `ghcr.io/rachid598/xtream-m3u-local:latest` (+ `sha-279f857`). Le manifeste se résout sans authentification ; le `docker pull` complet n'a pas pu être testé depuis l'environnement de l'IA (réseau bloqué vers `pkg-containers.githubusercontent.com`) → **à confirmer sur Tower**. Si le pull demande une authentification : rendre le package public (GitHub → Packages → xtream-m3u-local → Package settings → Change visibility).
+- Les liens `TemplateURL` / `Icon` du template Unraid et la variable `BRANCH=main` du prompt Hermès supposent une branche `main` : renommer la branche par défaut en `main` (GitHub → Settings → Branches → renommer), ou adapter ces liens.
 - Le relais local est **TS uniquement** (pas de HLS proxifié ; le mode direct HLS expose les identifiants).
 - Pas de renommage/réordonnancement **chaîne par chaîne** (seulement les groupes) ; pas de favoris ; pas de VOD/séries (`get_vod_streams`, `get_series`).
 - Protection contre le *DNS rebinding* non implémentée (l'API ne contient aucun secret ; `WEB_PASSWORD` recommandé sur un réseau partagé).
@@ -174,7 +175,7 @@ Couverture des tests unitaires : M3U complet et personnalisé (métadonnées, in
    - mêmes groupes que le JSON brut mais pas dans le projet → corriger l'importation ;
    - projet = JSON mais TV différente → filtres/cache de l'application TV.
 3. Tester 2–3 chaînes et une playlist filtrée dans VLC, TiviMate et le lecteur Android TV ; vérifier logos, groupes, EPG ; noter les erreurs exactes.
-4. Fusionner la branche dans `main` (ou confirmer la branche par défaut), vérifier le workflow Actions, rendre le package GHCR public ou documenter `docker login`, puis tester `compose.ghcr.yaml` / le template Unraid.
+4. Renommer la branche par défaut en `main`, vérifier que le package GHCR est public (ou documenter `docker login`), puis tester `compose.ghcr.yaml` / le template Unraid.
 5. Évolutions possibles : renommage et ordre des chaînes, favoris, numérotation personnalisée (`tvg-chno`), VOD/séries, proxy HLS, option `ALLOWED_HOSTS` anti-rebinding, statistiques de lecture, sauvegarde/restauration des playlists depuis l'interface, historique des exports catalogue avec comparaison (diff).
 6. Mettre à jour CE fichier après chaque étape (commits, digest d'image, essais réels, TODO, blocages).
 
@@ -195,4 +196,4 @@ Couverture des tests unitaires : M3U complet et personnalisé (métadonnées, in
 - [x] Catalogue fournisseur préservé (ordre, `parent_id`, catégories vides) consultable et exportable (tests + navigateur).
 - [x] Tests verts, documentation alignée sur le comportement.
 - [ ] Validation sur le vrai Unraid, le vrai fournisseur et les vrais lecteurs (à faire par l'utilisateur / Hermès).
-- [ ] Image GHCR publiée et testée (à vérifier après exécution du workflow).
+- [x] Image GHCR publiée par le workflow (run n° 1 réussi) — [ ] `docker pull` à confirmer sur Tower.
