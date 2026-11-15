@@ -1,0 +1,245 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="referrer" content="no-referrer">
+<meta name="color-scheme" content="dark light">
+<title>Xtream M3U Local</title>
+<link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<a class="skip" href="#editor">Aller à l'éditeur</a>
+<header class="topbar">
+  <div class="brand">
+    <div class="logo" aria-hidden="true">M3U</div>
+    <div>
+      <h1>Xtream M3U Local</h1>
+      <p class="subtitle">Playlists IPTV personnalisées pour ton réseau local</p>
+    </div>
+  </div>
+  <nav class="views" aria-label="Vues">
+    <button type="button" class="view-btn" id="view-btn-playlists" aria-pressed="true">Mes playlists</button>
+    <button type="button" class="view-btn" id="view-btn-catalog" aria-pressed="false">Catalogue fournisseur</button>
+  </nav>
+  <div class="top-actions">
+    <span class="pill" id="connection" role="status" aria-live="polite"><span class="dot"></span><span id="connection-text">Connexion au fournisseur…</span></span>
+    <span class="pill subtle" id="account" hidden></span>
+    <button type="button" class="btn" id="refresh" title="Recharger la liste des chaînes depuis le fournisseur">
+      <span aria-hidden="true">↻</span> <span class="hide-sm">Actualiser le catalogue</span>
+    </button>
+  </div>
+</header>
+
+<div class="layout" id="view-playlists">
+  <aside class="sidebar" aria-label="Playlists enregistrées">
+    <section class="card">
+      <div class="card-head">
+        <h2>Mes playlists</h2>
+        <button type="button" class="btn primary small" id="new">+ Nouvelle</button>
+      </div>
+      <ul id="saved" class="playlist-list"></ul>
+    </section>
+
+    <section class="card">
+      <h2 class="h3">Playlist complète</h2>
+      <p class="muted small">Toutes les chaînes du fournisseur, relayées par ton serveur.</p>
+      <div class="url-box">
+        <code id="full-url">—</code>
+        <button type="button" class="btn small" data-copy="full-url">Copier</button>
+      </div>
+    </section>
+
+    <section class="card" id="token-card" hidden>
+      <h2 class="h3">Token de lecture</h2>
+      <p class="muted small">ACCESS_TOKEN est activé : saisis-le ici pour qu'il soit ajouté aux URL copiées. Il reste dans ce navigateur.</p>
+      <label class="sr-only" for="token">Token de lecture</label>
+      <input id="token" type="password" autocomplete="off" placeholder="Valeur de ACCESS_TOKEN">
+    </section>
+
+    <section class="card help">
+      <h2 class="h3">Mode d'emploi</h2>
+      <ol class="small">
+        <li>Crée une playlist et donne-lui un nom.</li>
+        <li>Coche des catégories entières.</li>
+        <li>Affine chaîne par chaîne si besoin.</li>
+        <li>Enregistre, puis colle l'URL dans VLC, TiviMate ou ton lecteur Android TV.</li>
+      </ol>
+      <p class="muted small">L'URL ne change jamais : il suffit d'actualiser la playlist dans le lecteur après une modification.</p>
+    </section>
+  </aside>
+
+  <main id="editor" class="main" tabindex="-1">
+    <div id="alert" class="alert" role="alert" hidden></div>
+
+    <section class="card editor-head">
+      <div class="card-head">
+        <h2 id="editor-title">Nouvelle playlist</h2>
+        <span id="dirty" class="badge warn" hidden>Modifications non enregistrées</span>
+      </div>
+      <div class="fields">
+        <div class="field">
+          <label for="name">Nom de la playlist</label>
+          <input id="name" type="text" maxlength="100" placeholder="Ex. Salon, Chambre, TV française" autocomplete="off">
+        </div>
+        <div class="field">
+          <label for="slug">Adresse (identifiant dans l'URL)</label>
+          <div class="slug-input">
+            <span class="prefix">/p/</span>
+            <input id="slug" type="text" maxlength="60" placeholder="salon" autocomplete="off" spellcheck="false" aria-describedby="slug-help">
+            <span class="suffix">.m3u</span>
+          </div>
+          <p id="slug-help" class="hint">Minuscules, chiffres, « - » et « _ ». Fixée après le premier enregistrement pour que l'URL reste permanente.</p>
+        </div>
+      </div>
+      <div class="url-box big" id="url-box">
+        <div class="url-text">
+          <span class="label">URL permanente pour le lecteur</span>
+          <code id="url">Enregistre la playlist pour obtenir son URL</code>
+        </div>
+        <div class="url-actions">
+          <button type="button" class="btn" id="copy" disabled>Copier l'URL</button>
+          <a class="btn ghost" id="open" target="_blank" rel="noopener noreferrer" aria-disabled="true">Ouvrir le M3U</a>
+        </div>
+      </div>
+      <div class="stats" aria-live="polite">
+        <div class="stat"><strong id="stat-channels">0</strong><span>chaînes retenues</span></div>
+        <div class="stat"><strong id="stat-categories">0</strong><span>catégories cochées</span></div>
+        <div class="stat"><strong id="stat-included">0</strong><span>ajouts manuels</span></div>
+        <div class="stat"><strong id="stat-excluded">0</strong><span>exclusions</span></div>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="tabs" role="tablist" aria-label="Étapes">
+        <button type="button" role="tab" id="tab-categories" aria-controls="panel-categories" aria-selected="true">1. Catégories <span class="count" id="tab-cat-count"></span></button>
+        <button type="button" role="tab" id="tab-channels" aria-controls="panel-channels" aria-selected="false" tabindex="-1">2. Chaînes <span class="count" id="tab-ch-count"></span></button>
+        <button type="button" role="tab" id="tab-summary" aria-controls="panel-summary" aria-selected="false" tabindex="-1">3. Résumé</button>
+      </div>
+
+      <div id="panel-categories" role="tabpanel" aria-labelledby="tab-categories" class="panel">
+        <div class="toolbar">
+          <div class="search"><label class="sr-only" for="cat-search">Filtrer les catégories</label><input id="cat-search" type="search" placeholder="Filtrer les catégories…" autocomplete="off"></div>
+          <div class="segmented" role="group" aria-label="Afficher">
+            <button type="button" data-catfilter="all" aria-pressed="true">Toutes</button>
+            <button type="button" data-catfilter="on" aria-pressed="false">Cochées</button>
+            <button type="button" data-catfilter="off" aria-pressed="false">Non cochées</button>
+          </div>
+          <div class="btn-row">
+            <button type="button" class="btn small" id="cat-all">Tout cocher</button>
+            <button type="button" class="btn small" id="cat-none">Tout décocher</button>
+          </div>
+        </div>
+        <p class="hint" id="cat-info"></p>
+        <div id="categories" class="category-grid"></div>
+      </div>
+
+      <div id="panel-channels" role="tabpanel" aria-labelledby="tab-channels" class="panel" hidden>
+        <div class="toolbar">
+          <div class="search grow"><label class="sr-only" for="search">Rechercher une chaîne</label><input id="search" type="search" placeholder="Rechercher une chaîne…" autocomplete="off"></div>
+          <label class="sr-only" for="ch-category">Catégorie</label>
+          <select id="ch-category"><option value="">Toutes les catégories</option></select>
+          <label class="sr-only" for="ch-state">État</label>
+          <select id="ch-state">
+            <option value="all">Toutes les chaînes</option>
+            <option value="on">Retenues</option>
+            <option value="off">Non retenues</option>
+            <option value="included">Ajoutées manuellement</option>
+            <option value="excluded">Exclues</option>
+          </select>
+        </div>
+        <div class="toolbar between">
+          <p class="hint" id="shown"></p>
+          <div class="btn-row">
+            <button type="button" class="btn small" id="ch-check">Retenir les résultats</button>
+            <button type="button" class="btn small" id="ch-uncheck">Écarter les résultats</button>
+          </div>
+        </div>
+        <ul id="channels" class="channel-list"></ul>
+        <div class="more"><button type="button" class="btn" id="more" hidden>Afficher plus de chaînes</button></div>
+      </div>
+
+      <div id="panel-summary" role="tabpanel" aria-labelledby="tab-summary" class="panel" hidden>
+        <div class="summary-grid">
+          <div>
+            <div class="card-head"><h3>Groupes dans la playlist</h3><button type="button" class="btn small ghost" id="reset-groups">Ordre et noms du fournisseur</button></div>
+            <p class="hint">Réorganise et renomme les groupes de cette playlist uniquement : le catalogue du fournisseur n'est jamais modifié.</p>
+            <ol id="sum-groups" class="group-list"></ol>
+          </div>
+          <div>
+            <div class="card-head"><h3>Ajouts manuels</h3><button type="button" class="btn small ghost" id="clear-included">Tout retirer</button></div>
+            <ul id="sum-included" class="sum-list"></ul>
+            <div class="card-head"><h3>Exclusions</h3><button type="button" class="btn small ghost" id="clear-excluded">Tout retirer</button></div>
+            <ul id="sum-excluded" class="sum-list"></ul>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<div class="layout single" id="view-catalog" hidden>
+  <main class="main">
+    <section class="card">
+      <div class="card-head">
+        <div>
+          <h2>Catalogue original du fournisseur</h2>
+          <p class="muted small">Lecture seule : catégories et chaînes exactement dans l'ordre renvoyé par <code>player_api.php</code> (<code>get_live_categories</code> et <code>get_live_streams</code>), avec leurs identifiants et sous-groupes (<code>parent_id</code>).</p>
+        </div>
+        <div class="btn-row">
+          <a class="btn" id="export" href="/api/catalog/export" download>Exporter le catalogue fournisseur (JSON)</a>
+          <a class="btn ghost" href="/api/catalog?refresh=1" target="_blank" rel="noopener noreferrer">Voir le JSON interprété</a>
+        </div>
+      </div>
+      <div id="catalog-warning" class="alert warn" role="status" hidden></div>
+      <div class="stats" id="catalog-stats"></div>
+      <p class="hint">L'API Xtream n'expose que les catégories et chaînes autorisées pour ton compte, pas la configuration administrative du fournisseur. Le catalogue est gardé en cache (CACHE_SECONDS, 30 min par défaut) : « Actualiser le catalogue » force un nouvel appel.</p>
+    </section>
+    <section class="card">
+      <div class="toolbar">
+        <div class="search grow"><label class="sr-only" for="prov-search">Rechercher dans le catalogue</label><input id="prov-search" type="search" placeholder="Catégorie, chaîne ou identifiant…" autocomplete="off"></div>
+        <div class="btn-row">
+          <button type="button" class="btn small" id="prov-expand">Tout déplier</button>
+          <button type="button" class="btn small" id="prov-collapse">Tout replier</button>
+        </div>
+      </div>
+      <p class="hint" id="prov-info"></p>
+      <div id="prov-results"></div>
+      <div id="provider-tree" class="tree"></div>
+    </section>
+  </main>
+</div>
+
+<div class="actionbar" role="region" aria-label="Actions de la playlist">
+  <div class="actionbar-inner">
+    <p class="actionbar-info"><strong id="bar-count">0 chaîne</strong> <span id="bar-name" class="muted"></span></p>
+    <div class="btn-row">
+      <button type="button" class="btn ghost danger" id="delete" hidden>Supprimer</button>
+      <button type="button" class="btn ghost" id="duplicate" hidden>Dupliquer</button>
+      <button type="button" class="btn ghost" id="revert" hidden>Annuler</button>
+      <button type="button" class="btn primary" id="save">Enregistrer</button>
+    </div>
+  </div>
+</div>
+
+<dialog id="dialog">
+  <form method="dialog">
+    <h2 id="dialog-title">Confirmer</h2>
+    <p id="dialog-text"></p>
+    <div class="field" id="dialog-field" hidden>
+      <label for="dialog-input" id="dialog-label"></label>
+      <input id="dialog-input" type="text" autocomplete="off">
+    </div>
+    <div class="btn-row end">
+      <button type="submit" class="btn ghost" value="cancel">Annuler</button>
+      <button type="submit" class="btn primary" value="ok" id="dialog-ok">Confirmer</button>
+    </div>
+  </form>
+</dialog>
+
+<div id="toasts" class="toasts" aria-live="polite"></div>
+<footer class="footer">Service local · Ne pas exposer les ports 7777 et 7778 directement sur Internet · <span id="version"></span></footer>
+<script src="/static/app.js"></script>
+</body>
+</html>

@@ -5,20 +5,29 @@
   <Registry>https://github.com/rachid598/xtream-m3u-local/pkgs/container/xtream-m3u-local</Registry>
   <Network>bridge</Network>
   <Shell>sh</Shell>
-  <WebUI>http://[IP]:[PORT:7778]/</WebUI>
   <Privileged>false</Privileged>
-  <Support>https://github.com/rachid598/xtream-m3u-local</Support>
-  <Overview>Construit une playlist M3U locale depuis l'API Xtream lorsque get.php ne fonctionne pas. Port 7777 M3U et 7778 WebUI, selection de categories et playlists persistantes.</Overview>
-  <Category>MediaApp:Video</Category>
-  <Config Name="M3U / Port" Target="7777" Default="7777" Mode="tcp" Description="Port local du service" Type="Port" Display="always" Required="true" Mask="false">7777</Config>
-  <Config Name="Interface Web / Port" Target="7778" Default="7778" Mode="tcp" Description="Port de gestion Web" Type="Port" Display="always" Required="true" Mask="false">7778</Config>
-  <Config Name="Donnees persistantes" Target="/data" Default="/mnt/user/appdata/xtream-m3u-local" Mode="rw" Description="Sauvegarde des playlists personnalisées" Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/xtream-m3u-local</Config>
-  <Config Name="URL Xtream" Target="XTREAM_URL" Default="http://serveur:80" Mode="" Description="URL de base du fournisseur Xtream" Type="Variable" Display="always" Required="true" Mask="false">http://serveur:80</Config>
-  <Config Name="Utilisateur Xtream" Target="XTREAM_USERNAME" Default="" Mode="" Description="Utilisateur fournisseur" Type="Variable" Display="always" Required="true" Mask="false"></Config>
+  <Support>https://github.com/rachid598/xtream-m3u-local/issues</Support>
+  <Project>https://github.com/rachid598/xtream-m3u-local</Project>
+  <Overview>Reconstruit des playlists M3U depuis l'API Xtream (player_api.php) quand get.php ne fonctionne pas. Port 7777 : playlists personnalisées permanentes (/p/salon.m3u), relais TS et EPG filtré. Port 7778 : interface Web (catalogue fournisseur, sélection de catégories et de chaînes, plusieurs playlists).</Overview>
+  <Category>MediaApp:Video MediaServer:Video</Category>
+  <WebUI>http://[IP]:[PORT:7778]/</WebUI>
+  <TemplateURL>https://raw.githubusercontent.com/rachid598/xtream-m3u-local/main/unraid-template.xml</TemplateURL>
+  <Icon>https://raw.githubusercontent.com/rachid598/xtream-m3u-local/main/app/static/favicon.svg</Icon>
+  <ExtraParams></ExtraParams>
+  <PostArgs></PostArgs>
+  <Config Name="Port playlists (lecteurs)" Target="7777" Default="7777" Mode="tcp" Description="URL des lecteurs : http://IP:7777/p/nom.m3u" Type="Port" Display="always" Required="true" Mask="false">7777</Config>
+  <Config Name="Port interface Web" Target="7778" Default="7778" Mode="tcp" Description="Gestion des playlists : http://IP:7778/" Type="Port" Display="always" Required="true" Mask="false">7778</Config>
+  <Config Name="Données" Target="/data" Default="/mnt/user/appdata/xtream-m3u-local" Mode="rw" Description="playlists.json + cache EPG (appdata, par ex. sur le pool NVMe)" Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/xtream-m3u-local</Config>
+  <Config Name="URL Xtream" Target="XTREAM_URL" Default="" Mode="" Description="Adresse de base du fournisseur, ex. http://serveur:8080 (sans /get.php ni identifiants)" Type="Variable" Display="always" Required="true" Mask="false"></Config>
+  <Config Name="Utilisateur Xtream" Target="XTREAM_USERNAME" Default="" Mode="" Description="Identifiant fournisseur" Type="Variable" Display="always" Required="true" Mask="false"></Config>
   <Config Name="Mot de passe Xtream" Target="XTREAM_PASSWORD" Default="" Mode="" Description="Mot de passe fournisseur" Type="Variable" Display="always" Required="true" Mask="true"></Config>
-  <Config Name="URL locale facultative" Target="PUBLIC_BASE_URL" Default="" Mode="" Description="Ex : http://192.168.1.10:7777 ; vide = automatique" Type="Variable" Display="advanced" Required="false" Mask="false"></Config>
-  <Config Name="Token facultatif" Target="ACCESS_TOKEN" Default="" Mode="" Description="Restreindre l'acces avec un token sur l'URL" Type="Variable" Display="advanced" Required="false" Mask="true"></Config>
-  <Config Name="Utilisateur Web" Target="WEB_USERNAME" Default="admin" Mode="" Description="Utilisateur de l’interface Web" Type="Variable" Display="advanced" Required="false" Mask="false">admin</Config>
-  <Config Name="Mot de passe Web" Target="WEB_PASSWORD" Default="" Mode="" Description="Si defini, protege le port 7778 par HTTP Basic" Type="Variable" Display="advanced" Required="false" Mask="true"></Config>
-  <Config Name="EPG (true/false)" Target="ENABLE_EPG" Default="false" Mode="" Description="Relayer le XMLTV fournisseur" Type="Variable" Display="advanced" Required="false" Mask="false">false</Config>
+  <Config Name="Mot de passe interface Web" Target="WEB_PASSWORD" Default="" Mode="" Description="Facultatif : protège le port 7778 (utilisateur admin)" Type="Variable" Display="always" Required="false" Mask="true"></Config>
+  <Config Name="Utilisateur interface Web" Target="WEB_USERNAME" Default="admin" Mode="" Description="Utilisateur de l'interface Web" Type="Variable" Display="advanced" Required="false" Mask="false">admin</Config>
+  <Config Name="Token lecteurs" Target="ACCESS_TOKEN" Default="" Mode="" Description="Facultatif : exige ?token=... sur le port 7777" Type="Variable" Display="advanced" Required="false" Mask="true"></Config>
+  <Config Name="URL publique locale" Target="PUBLIC_BASE_URL" Default="" Mode="" Description="Facultatif, ex. http://192.168.1.10:7777 (vide = automatique)" Type="Variable" Display="advanced" Required="false" Mask="false"></Config>
+  <Config Name="EPG" Target="ENABLE_EPG" Default="true" Mode="" Description="Guide des programmes du fournisseur (true/false)" Type="Variable" Display="advanced" Required="false" Mask="false">true</Config>
+  <Config Name="Cache catalogue (s)" Target="CACHE_SECONDS" Default="1800" Mode="" Description="Durée de cache de la liste des chaînes" Type="Variable" Display="advanced" Required="false" Mask="false">1800</Config>
+  <Config Name="PUID" Target="PUID" Default="99" Mode="" Description="Utilisateur propriétaire de /data (nobody sur Unraid)" Type="Variable" Display="advanced" Required="false" Mask="false">99</Config>
+  <Config Name="PGID" Target="PGID" Default="100" Mode="" Description="Groupe propriétaire de /data (users sur Unraid)" Type="Variable" Display="advanced" Required="false" Mask="false">100</Config>
+  <Config Name="Fuseau horaire" Target="TZ" Default="Europe/Paris" Mode="" Description="Fuseau horaire des journaux" Type="Variable" Display="advanced" Required="false" Mask="false">Europe/Paris</Config>
 </Container>

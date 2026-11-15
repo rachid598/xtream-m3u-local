@@ -1,9 +1,13 @@
 .env
 .env.*
 !.env.example
+compose.single.yaml
+data/
+demo-data/
 __pycache__/
 *.py[cod]
 .pytest_cache/
 .coverage
 .DS_Store
-compose.single.yaml
+node_modules/
+*.zip

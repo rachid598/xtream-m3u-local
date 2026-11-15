@@ -1,5 +1,7 @@
-# MODE SIMPLE : 1 seul fichier à modifier, sans .env.
-# Copier ce fichier en compose.single.yaml (ignoré par Git), puis saisir tes identifiants.
+# MODE SIMPLE : un seul fichier à modifier, sans .env.
+#   cp compose.single.example.yaml compose.single.yaml   (compose.single.yaml est ignoré par Git)
+#   -> remplace les 3 valeurs XTREAM_* ci-dessous
+#   docker compose -f compose.single.yaml up -d --build
 services:
   xtream-m3u-local:
     build: .
@@ -13,18 +15,10 @@ services:
       XTREAM_URL: "http://ADRESSE_DU_SERVEUR:80"
       XTREAM_USERNAME: "MON_UTILISATEUR"
       XTREAM_PASSWORD: "MON_MOT_DE_PASSE"
-      PORT: "7777"
-      WEB_PORT: "7778"
-      DATA_DIR: "/data"
-      CACHE_SECONDS: "1800"
-      PUBLIC_BASE_URL: ""
-      ACCESS_TOKEN: ""
-      ENABLE_EPG: "false"
-      WEB_USERNAME: "admin"
-      WEB_PASSWORD: "" # Recommandé : mot de passe pour protéger la WebUI
-
+      # Facultatif :
+      # WEB_PASSWORD: "mot-de-passe-interface"   # protège le port 7778 (utilisateur : admin)
+      # ACCESS_TOKEN: "jeton-lecteurs"           # exige ?token=... sur le port 7777
+      # PUBLIC_BASE_URL: "http://192.168.1.10:7777"
+      TZ: "Europe/Paris"
     volumes:
-      - xtream-m3u-data:/data
-
-volumes:
-  xtream-m3u-data:
+      - ./data:/data

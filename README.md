@@ -1,127 +1,128 @@
 # Xtream M3U Local
 
-Microservice Docker pour Unraid : **une API Xtream fonctionnelle suffit**, même si le fournisseur ne renvoie rien sur `/get.php`.
-Le service lit `player_api.php?action=get_live_streams` et `get_live_categories`, crée des playlists M3U complètes ou personnalisées et les rend disponibles **en permanence sur ton réseau local**.
+Conteneur Docker pour Unraid : **une API Xtream fonctionnelle suffit**, même si le fournisseur ne renvoie rien sur `get.php`.
+Le service lit `player_api.php` (`get_live_categories`, `get_live_streams`), conserve le catalogue d'origine du fournisseur et publie sur ton réseau local des **playlists M3U personnalisées à URL permanente**, compatibles VLC, TiviMate et lecteurs Android TV.
 
-- **Playlist complète :** `http://IP_UNRAID:7777/playlist.m3u`
-- **Interface de gestion :** `http://IP_UNRAID:7778/`
-- **Playlist personnalisée :** `http://IP_UNRAID:7777/p/salon.m3u`
-- **Flux locaux :** `http://IP_UNRAID:7777/stream/12345.ts` (relayés en temps réel vers le fournisseur)
-- **Santé :** `http://IP_UNRAID:7777/health`
-- **Mise à jour forcée :** `http://IP_UNRAID:7777/playlist.m3u?refresh=1`
-- **EPG optionnel :** `http://IP_UNRAID:7777/epg.xml` (nécessite `ENABLE_EPG=true`)
+| Port | Rôle | Exemples |
+|---|---|---|
+| **7777** | Lecteurs IPTV | `http://IP_UNRAID:7777/p/salon.m3u` · `/playlist.m3u` · `/stream/<id>.ts` · `/p/salon.xml` (EPG) |
+| **7778** | Interface Web de gestion | `http://IP_UNRAID:7778/` |
 
-Aucun abonnement n'est fourni : utilise uniquement les flux pour lesquels tu disposes des droits.
+Aucun abonnement n'est fourni : utilise uniquement des flux pour lesquels tu disposes des droits.
 
-## Démarrage rapide (Unraid / Docker Compose)
+## Démarrage rapide
 
-1. Télécharge le dépôt (ou le ZIP), place-le dans un dossier de ton serveur.
-2. Copie `.env.example` en `.env` et renseigne `XTREAM_URL`, `XTREAM_USERNAME` et `XTREAM_PASSWORD` **dans `.env` uniquement**.
-3. Lance `docker compose up -d --build` dans le dossier.
-4. Ouvre `http://IP_UNRAID:7778/` dans un navigateur, crée une playlist « Salon », coche les catégories/chaînes, puis enregistre.
-5. Copie l’URL `http://IP_UNRAID:7777/p/salon.m3u` dans VLC, TiviMate ou ton lecteur Android TV.
-
-**Deux ports sur un seul conteneur :** `7777` pour les playlists et flux TS ; `7778` pour le tableau de bord.
-Les playlists créées sont sauvegardées en JSON dans **`/data/playlists.json`**, sur le volume Docker `xtream-m3u-data`. Elles survivent aux redémarrages et aux recréations du conteneur tant que le volume persiste.
-La page Web fonctionne sans services externes ; le navigateur n’a jamais besoin de se connecter directement au serveur Xtream.
-
-Les ports **7777 et 7778** doivent être disponibles sur Unraid. Le fichier `.env` est ignoré par Git et exclu de l'image Docker.
-
-### Variante facile : un seul fichier Compose à modifier
-
-Si tu préfères mettre les trois identifiants **directement dans le YAML**, sans fichier `.env` :
-
-```sh
-cp compose.single.example.yaml compose.single.yaml
+```bash
+git clone https://github.com/rachid598/xtream-m3u-local.git
+cd xtream-m3u-local
+cp .env.example .env      # puis renseigner XTREAM_URL, XTREAM_USERNAME, XTREAM_PASSWORD
+docker compose up -d --build
 ```
 
-Ouvre **`compose.single.yaml`**, remplis `XTREAM_URL`, `XTREAM_USERNAME`, `XTREAM_PASSWORD`, puis :
+1. Ouvre `http://IP_UNRAID:7778/`.
+2. **+ Nouvelle** → nomme la playlist (« Salon »), coche des catégories, affine chaîne par chaîne si besoin, **Créer la playlist**.
+3. Copie l'URL affichée (`http://IP_UNRAID:7777/p/salon.m3u`) dans VLC, TiviMate ou ton lecteur Android TV.
+4. Pour modifier la playlist : reviens sur l'interface, change la sélection, **Enregistrer**. L'URL ne change pas ; actualise simplement la playlist dans le lecteur.
 
-```sh
-docker compose -f compose.single.yaml up -d --build
-```
+Les données (`playlists.json` + cache EPG) sont écrites dans `./data` (ou `DATA_PATH`), monté sur `/data` dans le conteneur. Elles survivent aux redémarrages, mises à jour et recréations du conteneur.
 
-Le fichier `compose.single.yaml` est ignoré par Git pour éviter de publier tes identifiants. **Ne publie pas ton fichier modifié.**
+### Variantes d'installation
 
-### Variante Docker Create (sans Compose)
+- **Un seul fichier à modifier** : `cp compose.single.example.yaml compose.single.yaml`, remplir les 3 valeurs `XTREAM_*`, puis `docker compose -f compose.single.yaml up -d --build` (fichier ignoré par Git).
+- **Sans Compose** : `sh docker-create.sh` (build local), `sh docker-create.sh --ghcr` (image GHCR), `--replace` pour recréer en gardant les données.
+- **Image GHCR** (une fois publiée par GitHub Actions) : `docker compose -f compose.ghcr.yaml up -d`. Si le package est privé, faire d'abord `docker login ghcr.io` avec un jeton GitHub `read:packages`, ou rendre le package public dans GitHub → Packages → Package settings.
+- **Template Unraid** : copier `unraid-template.xml` dans `/boot/config/plugins/dockerMan/templates-user/my-xtream-m3u-local.xml`, puis Docker → Add Container → choisir le template.
 
-Créer `.env` à partir de `.env.example`, puis lancer `sh docker-create.sh` pour construire l'image et lancer un conteneur `docker run` sur le port 7777.
+## Interface Web (port 7778)
 
-### Variante : image GHCR (après publication du dépôt)
+Deux vues, entièrement en français, responsives (téléphone, tablette, ordinateur), thème clair/sombre automatique :
 
-Le dépôt contient un workflow GitHub Actions qui publie l'image `ghcr.io/rachid598/xtream-m3u-local:latest` lorsque le dépôt `rachid598/xtream-m3u-local` existe et que le workflow a réussi. Pour déployer cette image sans compiler sur Unraid :
+**Mes playlists**
+- plusieurs playlists nommées (« Salon », « Chambre », « TV française »…) : créer, modifier, dupliquer, supprimer ;
+- toutes les catégories avec leur nombre de chaînes (y compris les vides et les sous-groupes), filtre, tout cocher / décocher ;
+- recherche de chaînes (sans accents, plusieurs mots), filtre par catégorie et par état, ajout ou exclusion individuelle, actions groupées sur les résultats ;
+- onglet **Résumé** : ordre des groupes (↑ ↓) et noms de groupes propres à chaque playlist, liste des ajouts et exclusions ;
+- URL permanente avec boutons Copier / Ouvrir, alerte en cas de modifications non enregistrées, raccourci Ctrl+S.
 
-```sh
-docker compose -f compose.ghcr.yaml up -d
-```
+**Catalogue fournisseur** (lecture seule)
+- catégories dans l'**ordre exact** de `get_live_categories`, avec identifiants, `parent_id` (sous-groupes imbriqués), nombre de chaînes et chaînes associées ;
+- signale les groupes absents de `get_live_categories` et l'échec éventuel de cet appel ;
+- **Exporter le catalogue fournisseur (JSON)** : réponses brutes de `player_api.php`, identifiants remplacés par `***`, pour archiver ou comparer la structure.
 
-Cela suppose que l'image GHCR soit accessible à ton serveur (visibilité du package ou authentification Docker).
+> L'API Xtream n'expose que les catégories et chaînes autorisées pour ton compte, pas la configuration administrative du fournisseur.
 
-## Comment ça marche ?
+## Contenu des playlists
 
-1. `get_live_streams` renvoie les `stream_id`, noms, logos et identifiants EPG.
-2. `get_live_categories` fournit les groupes (si indisponible, groupe `TV`).
-3. La playlist M3U associe chaque chaîne à une adresse locale `/stream/ID.ts`. Les playlists personnalisées filtrent selon les catégories sélectionnées, les inclusions manuelles et les exclusions.
-4. Le conteneur relaie les octets TS **sans conversion vidéo ni transcodage**.
+- `#EXTM3U url-tvg="…" x-tvg-url="…"` : guide EPG (complet pour `/playlist.m3u`, **filtré** pour `/p/<nom>.m3u` → `/p/<nom>.xml`) ;
+- chaque chaîne : `tvg-id` (EPG), `tvg-name`, `tvg-logo`, `tvg-chno`, `group-title` ;
+- groupes dans l'ordre du fournisseur (ou l'ordre personnalisé de la playlist), chaînes dans l'ordre du fournisseur ;
+- règle de sélection : (catégorie cochée **ou** chaîne ajoutée) **et** chaîne non exclue. Une chaîne présente dans plusieurs catégories est rangée dans la première catégorie cochée ;
+- les nouvelles chaînes ajoutées par le fournisseur dans une catégorie cochée apparaissent automatiquement.
 
-Les flux sont ouverts **seulement lors de la lecture**. Le catalogue est conservé 30 minutes en mémoire par défaut. Aucun fichier M3U n'est créé sur disque : l'URL produit le M3U à chaque consultation, depuis les données en cache.
-
-## Modes et formats
+## Adresses du port 7777
 
 | Adresse | Comportement |
 |---|---|
-| `/playlist.m3u` | **Recommandé** : liens TS locaux, identifiants Xtream absents du M3U |
-| `/playlist.m3u?mode=direct&format=ts` | Liens `.ts` directs chez le fournisseur ; **identifiants présents dans le M3U** |
-| `/playlist.m3u?mode=direct&format=m3u8` | Liens HLS directs ; **identifiants présents dans le M3U** |
-| `/playlist.m3u?refresh=1` | Tente d'actualiser immédiatement les chaînes |
-| `/get.php` | Alias de `/playlist.m3u` (pas une API Xtream complète) |
-| `/p/salon.m3u` | Playlist personnelle « salon », URL stable et dynamique |
-| `http://IP_UNRAID:7778/` | Interface de création, édition et suppression des playlists |
+| `/p/<nom>.m3u` | Playlist personnalisée, URL stable et dynamique (**recommandé**) |
+| `/p/<nom>.xml` | Guide EPG limité aux chaînes de la playlist |
+| `/playlist.m3u` | Toutes les chaînes, liens TS locaux, aucun identifiant fournisseur |
+| `/playlist.m3u?mode=direct&format=ts\|m3u8` | Liens directs fournisseur — **contient tes identifiants** |
+| `/get.php` | Alias de `/playlist.m3u` (ce n'est pas une API Xtream complète) |
+| `/stream/<id>.ts` | Relais MPEG-TS sans transcodage |
+| `/epg.xml` | Guide XMLTV complet (mis en cache sur disque) |
+| `/health` | Sonde de santé (utilisée par le `HEALTHCHECK` Docker) |
+| `…?refresh=1` | Force la relecture du catalogue fournisseur |
 
-> Le relais HLS local et les liens RTMP ne sont **pas** implémentés : le projet fournit un proxy MPEG-TS et un générateur M3U. Pour le format HLS, utilise le mode direct. Ne pointe pas un client *Xtream Codes* vers ce serveur : utilise l'URL M3U.
+## Variables d'environnement
 
-## Options d'environnement
-
-| Variable | Obligatoire | Description |
+| Variable | Défaut | Description |
 |---|---|---|
-| `XTREAM_URL` | oui | URL de base de ton serveur Xtream (`http://serveur:80`) |
-| `XTREAM_USERNAME` | oui | Identifiant fournisseur |
-| `XTREAM_PASSWORD` | oui | Mot de passe fournisseur |
-| `PORT` | non | Port du service dans le conteneur (`7777`) |
-| `WEB_PORT` | non | Port interface Web (`7778`) |
-| `DATA_DIR` | non | Dossier de stockage, par défaut `/data` |
-| `WEB_USERNAME` | non | Identifiant de l’interface Web, `admin` par défaut |
-| `WEB_PASSWORD` | non | Si renseigné, active HTTP Basic pour toute l’interface Web et son API |
-| `PUBLIC_BASE_URL` | non | URL publique locale à écrire dans la playlist, par ex. `http://192.168.1.10:7777`; défaut : URL de la requête |
-| `CACHE_SECONDS` | non | Durée de cache de la liste des chaînes (`1800`) |
-| `ACCESS_TOKEN` | non | Si défini, exige `?token=VALEUR` sur la playlist et les flux ; le token est repris dans les liens générés |
-| `ENABLE_EPG` | non | `true` active `/epg.xml` (proxy du XMLTV fournisseur), si disponible |
+| `XTREAM_URL` | **obligatoire** | Adresse de base du fournisseur, ex. `http://serveur:8080` (un `…/player_api.php` collé est accepté) |
+| `XTREAM_USERNAME` | **obligatoire** | Identifiant fournisseur |
+| `XTREAM_PASSWORD` | **obligatoire** | Mot de passe fournisseur |
+| `DATA_PATH` | `./data` | (Compose) dossier hôte monté sur `/data` |
+| `WEB_PASSWORD` | vide | Active l'authentification HTTP Basic sur le port 7778 |
+| `WEB_USERNAME` | `admin` | Utilisateur de l'interface Web |
+| `ACCESS_TOKEN` | vide | Exige `?token=…` sur le port 7777 (ajouté automatiquement aux liens générés) |
+| `PUBLIC_BASE_URL` | auto | Adresse écrite dans les playlists, ex. `http://192.168.1.10:7777` |
+| `ENABLE_EPG` | `true` | Guide XMLTV (`xmltv.php` du fournisseur) |
+| `EPG_CACHE_HOURS` | `12` | Durée de cache du guide sur disque |
+| `CACHE_SECONDS` | `1800` | Durée de cache du catalogue en mémoire |
+| `XTREAM_USER_AGENT` | `XtreamM3ULocal/2.x` | User-Agent envoyé au fournisseur (si celui-ci filtre les applications) |
+| `PUID` / `PGID` | `99` / `100` | Propriétaire des fichiers de `/data` (nobody/users sur Unraid) |
+| `TZ` | `Europe/Paris` | Fuseau horaire des journaux |
+| `PORT` / `WEB_PORT` / `DATA_DIR` | `7777` / `7778` / `/data` | Ports et dossier **dans** le conteneur (à ne pas changer en général) |
 
 ## Vérification
 
-```sh
+```bash
 curl -i http://IP_UNRAID:7777/health
-curl -s http://IP_UNRAID:7777/playlist.m3u | head -n 8
-curl --range 0-1023 --max-time 5 -o /dev/null http://IP_UNRAID:7777/stream/12345.ts
+curl -s http://IP_UNRAID:7777/p/salon.m3u | head -n 5
+curl -s http://IP_UNRAID:7778/api/catalog?refresh=1 | head -c 600
+curl --max-time 5 -o /dev/null -w '%{http_code} %{size_download}\n' http://IP_UNRAID:7777/stream/12345.ts
 ```
 
-Si les liens dans la playlist utilisent une IP incorrecte, fixe `PUBLIC_BASE_URL=http://IP_UNRAID:7777` dans `.env` puis redémarre le conteneur.
+Si les liens d'une playlist utilisent une mauvaise adresse, définir `PUBLIC_BASE_URL=http://IP_UNRAID:7777` puis recréer le conteneur.
 
 ## Sécurité et limites
 
-- **Réseau local seulement.** Par défaut, pas d'authentification sur les playlists ou flux : ne redirige pas le port 7777 vers Internet. Pour un réseau partagé, active `ACCESS_TOKEN` (et HTTPS via un proxy inverse si exposition contrôlée).
-- Les identifiants sont présents dans les requêtes sortantes envoyées au fournisseur, **pas dans le M3U du mode proxy**. Le mode direct les contient.
-- Les en-têtes HTTP Range sont transmis au fournisseur, utile pour certaines applications.
-- **Pas de transcodage** : chaque lecture consomme une connexion amont. Si l'abonnement autorise une seule connexion, ne lis pas plusieurs chaînes simultanément.
-- L'EPG dépend de `/xmltv.php`, qui peut être indisponible même si l'API Xtream fonctionne.
-- Tester les flux **.ts** avant d'utiliser le mode proxy. Un lecteur compatible TS est nécessaire.
-- Python standard library, sans dépendances Python externes.
+- **Réseau local uniquement.** Ne redirige pas 7777/7778 vers Internet. Sur un réseau partagé : `WEB_PASSWORD` (gestion) et `ACCESS_TOKEN` (lecteurs).
+- Les identifiants Xtream restent dans le conteneur : absents des playlists (mode proxy), de l'API Web, de l'export JSON et des journaux.
+- Protection CSRF de l'API (en-tête dédié + contrôle d'`Origin`), CSP stricte sans script inline, validation de toutes les entrées, écritures atomiques avec copie `playlists.json.bak`.
+- Le conteneur démarre en root uniquement pour corriger les droits de `/data`, puis tourne en UID 99 / GID 100.
+- **Pas de transcodage** : chaque lecture ouvre une connexion chez le fournisseur ; la limite de connexions simultanées de l'abonnement s'applique (erreur 502 explicite si atteinte).
+- Le relais local est MPEG-TS uniquement ; le HLS n'est disponible qu'en mode direct (identifiants visibles dans le M3U).
 
-## Tests
+## Développement
 
-```sh
-python3 -m unittest discover -s tests -v
+```bash
+python -m unittest discover -s tests -t . -v      # 65 tests, faux fournisseur Xtream local
+python -m tools.demo                               # démo sans abonnement : 7777 + 7778, 1500 chaînes fictives
+node tests/e2e_browser.mjs http://127.0.0.1:7778   # scénario navigateur (Playwright pour Node)
 ```
+
+Python 3.13, bibliothèque standard uniquement ; interface HTML/CSS/JS sans framework ni CDN.
+Voir `PASSATION_IA.md` pour l'architecture détaillée, les décisions et l'état du projet.
 
 ## Licence
 

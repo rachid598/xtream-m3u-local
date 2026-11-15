@@ -2,8 +2,14 @@
 .github
 .env
 .env.*
-!*.example
-__pycache__
+*.md
 tests
+tools
+data
+demo-data
+compose*.yaml
+docker-create.sh
+unraid-template.xml
+**/__pycache__
 *.zip
-README.md
+node_modules

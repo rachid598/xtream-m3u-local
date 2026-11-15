@@ -1,32 +1,27 @@
-# Prompt à transmettre à l'autre IA
+# Prompt à transmettre à l'IA suivante
 
-Tu reprends un projet existant nommé **Xtream M3U Local**. **Commence par lire `PASSATION_IA.md`, `README.md` et le code livré dans le ZIP. Ne repars pas de zéro.**
+Tu reprends le projet existant **Xtream M3U Local** (version 2.1.0). **Commence par lire `PASSATION_IA.md`, puis `README.md` et le code (`app/`, `tests/`). Ne repars pas de zéro.**
 
-## Contexte réel
+## Contexte
 
-Je dispose d’un serveur Unraid et d’identifiants Xtream Codes valides. `player_api.php?action=get_live_streams` renvoie mes chaînes et la lecture directe `/live/USER/PASS/STREAM_ID.ts` fonctionne, mais les playlists du fournisseur via `get.php` restent vides. Le projet existant reconstruit donc les playlists directement depuis l'API Xtream.
+Serveur Unraid « Tower » (appdata sur pool NVMe), abonnement Xtream Codes valide : `player_api.php` fonctionne et la lecture directe `/live/USER/PASS/ID.ts` aussi, mais `get.php` ne donne pas de playlist. Le projet reconstruit les playlists depuis l'API Xtream :
 
-Le projet actuel comporte déjà deux services HTTP dans **un seul conteneur Docker** :
+- **un seul conteneur Docker**, Python 3.13 bibliothèque standard, interface HTML/CSS/JS sans framework ;
+- **port 7777** : `/p/<nom>.m3u` (playlists personnalisées à URL permanente), `/p/<nom>.xml` (EPG filtré), `/playlist.m3u`, `/stream/<id>.ts`, `/epg.xml` ;
+- **port 7778** : interface Web en français, responsive — vue « Mes playlists » (catégories, chaînes, inclusions/exclusions, ordre et noms de groupes, plusieurs playlists) et vue « Catalogue fournisseur » (lecture seule, ordre/IDs/`parent_id` d'origine, export JSON) ;
+- données dans `/data/playlists.json` ; configuration Xtream uniquement par variables d'environnement (Compose / `.env` / template Unraid).
 
-- **7777** : playlist complète `/playlist.m3u`, playlist personnalisée `/p/<slug>.m3u`, relais TS `/stream/<id>.ts`, option EPG ;
-- **7778** : gestion Web accessible sur `http://IP_UNRAID:7778/`, choix des catégories et de chaînes, gestion de plusieurs playlists nommées.
+## Règles
 
-Les sélections persistent dans `/data/playlists.json` (volume Docker), et les identifiants fournisseur restent côté conteneur. Le projet est en Python standard library + HTML/JS, sans framework ; Compose, Dockerfile, script docker-create, template Unraid, tests et workflow GHCR existent. Les tests locaux passent mais Docker/Unraid/lecteur Android n’ont pas encore été vérifiés en réel.
+1. Ne jamais écrire d'identifiant Xtream réel dans le code, les tests, les journaux, la documentation ou GitHub.
+2. Ne pas casser : génération M3U, relais TS, URL permanentes, persistance, préservation du catalogue fournisseur.
+3. Garder les ports 7777/7778, un seul conteneur, aucune dépendance externe sans raison forte.
+4. Toute modification = tests (`python -m unittest discover -s tests -t .`) + si l'interface change, `node --check app/static/app.js` et le scénario `node tests/e2e_browser.mjs` contre `python -m tools.demo`.
+5. Ne pas annoncer qu'un dépôt, une image GHCR ou un déploiement fonctionne sans l'avoir vérifié.
+6. Mettre à jour `PASSATION_IA.md` à chaque étape importante (modifications, décisions, tests, problèmes, prochaines étapes).
 
-## Ce que je veux que tu fasses
+## Prochaines tâches probables
 
-1. **Audite le code existant et corrige les bugs.** Ne casse pas la génération M3U ni le relais TS. Ne recopie aucun identifiant réel dans les fichiers ou les logs.
-2. **Teste et améliore l'interface Web sur 7778** : interface élégante, responsive, simple et en français ; affichage des catégories et du nombre de chaînes ; sélection de catégories entières ; recherche par nom ; possibilité d'ajouter/retirer ponctuellement certaines chaînes ; aperçu du nombre de chaînes choisies.
-3. **Gère plusieurs playlists personnalisées** : création, modification, suppression, nom et slug ; sélections persistantes après redémarrage ; possibilité de garder les mêmes adresses après modification. Exemple de playlist « salon » : `http://IP_UNRAID:7777/p/salon.m3u`.
-4. **URL M3U pour Android TV** : au moment de l'enregistrement, afficher un lien directement copiable et utilisable dans VLC / TiviMate / un lecteur Android TV. Seules les chaînes et catégories retenues doivent figurer dans ce M3U ; conserver leurs noms, logos, groupes et identifiants EPG. Les flux doivent utiliser l'IP Unraid sur 7777, pas le fournisseur.
-5. **Qualité et sécurité** : ne pas exposer les credentials Xtream dans les playlists en mode proxy, filtrer/valider les entrées, ne pas renvoyer de secrets dans l'API Web, prévoir protection optionnelle de la WebUI et des flux, éviter les dépendances cloud, préserver la restriction fournisseur sur les connexions simultanées.
-6. **Docker/Unraid** : le `docker compose` ne doit demander à l'utilisateur que l'URL Xtream, le login et le mot de passe pour fonctionner en LAN (les autres paramètres ont de bonnes valeurs par défaut) ; ouvrir les ports 7777 et 7778 ; sauvegarder le JSON des playlists sur un volume ; fournir `Dockerfile`, Compose, `docker-create.sh` et template Unraid maintenus à jour.
-7. **Vérification de bout en bout** : lancer les tests unitaires et en ajouter, vérifier l'interface et les API, tester autant que possible le build Docker, documenter les essais réels restant à faire sur mon Unraid et avec Android TV.
-8. **GitHub et GHCR** : si autorisé, publier le code dans mon dépôt personnel `rachid598/xtream-m3u-local` une fois créé, sans aucun secret ; construire/publier l'image `ghcr.io/rachid598/xtream-m3u-local:latest` et vérifier qu'elle est exploitable. Ne prétends pas que le dépôt/l'image sont créés tant qu'ils ne le sont pas.
-9. **Passation** : à chaque étape importante, mets à jour `PASSATION_IA.md` en précisant état, architecture, décisions, fichiers modifiés, commandes, tests, TODO, obstacles. Je veux pouvoir reprendre le projet avec n’importe quelle autre IA. À la fin, fournis le ZIP complet et les liens réels si publiés.
+Voir la section 8 de `PASSATION_IA.md` : retours des essais réels sur Unraid et Android TV, comparaison catalogue fournisseur / application TV, publication GHCR, évolutions (ordre et renommage des chaînes, favoris, VOD/séries, HLS).
 
-## Critères d'acceptation concrets
-
-En déployant sur Unraid, j'ouvre `http://IP_UNRAID:7778`, sélectionne par exemple « Informations » et « Sport », puis enregistre « salon ». Quand je colle `http://IP_UNRAID:7777/p/salon.m3u` dans mon lecteur Android TV, **je ne vois que les chaînes autorisées par mes choix**, groupées dans ces catégories ; une modification dans la WebUI est reflétée à cette même URL au rechargement du lecteur. Les données survivent à une recréation du conteneur. Tous les tests sont verts et aucun secret n'est publié.
-
-**Important :** pose des questions seulement si elles bloquent une opération irréversible. Sinon, continue les améliorations et livre les fichiers utilisables.
+Pose des questions seulement si elles bloquent une opération irréversible ; sinon avance et livre des fichiers utilisables.
