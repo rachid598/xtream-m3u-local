@@ -9,11 +9,11 @@
   // ------------------------------------------------------- types de contenu
   const KINDS = ['live', 'vod', 'series'];
   const KIND = {
-    live: { label: 'TV en direct', one: 'chaîne', many: 'chaînes', title: 'Chaînes', kept: 'retenues', added: 'Ajoutée', excludedLabel: 'Exclue',
+    live: { icon: '📺', selectedUnit: 'sélectionnées', label: 'TV en direct', one: 'chaîne', many: 'chaînes', title: 'Chaînes', kept: 'retenues', added: 'Ajoutée', excludedLabel: 'Exclue',
       prefix: '', fields: ['category_ids', 'included_stream_ids', 'excluded_stream_ids'], actions: 'get_live_categories et get_live_streams', categoriesAction: 'get_live_categories' },
-    vod: { label: 'Films', one: 'film', many: 'films', title: 'Films', kept: 'retenus', added: 'Ajouté', excludedLabel: 'Exclu',
+    vod: { icon: '🎬', selectedUnit: 'sélectionnés', label: 'Films', one: 'film', many: 'films', title: 'Films', kept: 'retenus', added: 'Ajouté', excludedLabel: 'Exclu',
       prefix: 'vod:', fields: ['vod_category_ids', 'included_vod_ids', 'excluded_vod_ids'], actions: 'get_vod_categories et get_vod_streams', categoriesAction: 'get_vod_categories' },
-    series: { label: 'Séries', one: 'série', many: 'séries', title: 'Séries', kept: 'retenues', added: 'Ajoutée', excludedLabel: 'Exclue',
+    series: { icon: '🎞️', selectedUnit: 'sélectionnées', label: 'Séries', one: 'série', many: 'séries', title: 'Séries', kept: 'retenues', added: 'Ajoutée', excludedLabel: 'Exclue',
       prefix: 'series:', fields: ['series_category_ids', 'included_series_ids', 'excluded_series_ids'], actions: 'get_series_categories et get_series', categoriesAction: 'get_series_categories' },
   };
   const emptyCatalog = () => ({ categories: [], categoryNames: new Map(), channels: [], channelById: new Map(),
@@ -36,6 +36,7 @@
     catFilter: 'all',
     limit: PAGE,
     tab: 'categories',
+    summary: null,           // {live|vod|series: {items, categories, error}} (/api/catalog/summary)
   };
   // Raccourcis vers le catalogue et la sélection du type affiché (state.categories, state.selected…).
   for (const key of ['categories', 'categoryNames', 'channels', 'channelById', 'channelsByCat', 'catalogLoaded', 'categoriesError']) {
@@ -266,8 +267,8 @@
       const sel = state.sel[kind];
       const loaded = state.cat[kind].catalogLoaded;
       // Catalogue pas encore chargé : on affiche le nombre de sélections plutôt que 0.
-      counts[kind] = loaded ? selectionCount(kind) : null;
       const pending = !loaded && (sel.selected.size || sel.included.size);
+      counts[kind] = loaded ? selectionCount(kind) : (pending ? null : 0);
       document.querySelectorAll(`[data-kind-count="${kind}"]`).forEach((node) => {
         node.textContent = counts[kind] ? counts[kind].toLocaleString('fr-FR') : (pending ? '…' : '');
       });
@@ -287,6 +288,59 @@
     const dirty = isDirty();
     $('dirty').hidden = !dirty || (!state.editing && !name && !hasSelection());
     $('revert').hidden = !(dirty && state.editing);
+    renderTiles();
+  }
+
+  /** Tuiles « Contenu de la playlist » : disponible chez le fournisseur / sélectionné dans la playlist. */
+  function renderTiles() {
+    for (const kind of KINDS) {
+      const meta = document.querySelector(`[data-kind-meta="${kind}"]`);
+      if (!meta) continue;
+      const cat = state.cat[kind];
+      const info = state.summary && state.summary[kind];
+      const items = cat.catalogLoaded ? cat.channels.length : info ? info.items : null;
+      const categories = cat.catalogLoaded ? cat.categories.length : info ? info.categories : null;
+      meta.classList.toggle('error', Boolean(info && info.error && !cat.catalogLoaded));
+      if (info && info.error && !cat.catalogLoaded) {
+        meta.textContent = 'Indisponible chez le fournisseur';
+        meta.title = info.error;
+      } else if (items === null || items === undefined) {
+        meta.textContent = 'Chargement…';
+      } else if (!items) {
+        meta.textContent = `Aucun${KIND[kind].one === 'film' ? '' : 'e'} ${KIND[kind].one} dans ton abonnement`;
+      } else {
+        meta.textContent = `${noun(items, kind)} disponibles · ${plural(categories, 'catégorie', 'catégories')}`;
+        meta.removeAttribute('title');
+      }
+      const unit = meta.closest('.kind-tile')?.querySelector('.kt-unit');
+      if (unit) unit.textContent = KIND[kind].selectedUnit;
+    }
+    // Aide : l'abonnement contient des films / séries qui ne sont pas encore dans la playlist.
+    const hint = $('vod-hint');
+    const available = (kind) => {
+      const cat = state.cat[kind];
+      return cat.catalogLoaded ? cat.channels.length : (state.summary && state.summary[kind] && state.summary[kind].items) || 0;
+    };
+    const missing = ['vod', 'series'].filter((kind) => available(kind) > 0 && !state.sel[kind].selected.size && !state.sel[kind].included.size);
+    if (!missing.length || state.kind !== 'live') {
+      hint.hidden = true;
+      return;
+    }
+    const text = missing.map((kind) => noun(available(kind), kind)).join(' et ');
+    hint.replaceChildren(
+      h('span', null, `Ton abonnement contient ${text}, pas encore ajouté${missing.length > 1 ? 's' : ''} à cette playlist.`),
+      h('span', { class: 'btn-row' }, missing.map((kind) => h('button', {
+        type: 'button', class: 'btn small primary', text: `Ajouter des ${KIND[kind].many}`,
+        onclick: () => { switchKind(kind); $('kind-title').scrollIntoView({ behavior: 'smooth', block: 'start' }); },
+      }))));
+    hint.hidden = false;
+  }
+
+  async function loadSummary(force = false) {
+    try {
+      state.summary = await request(`/api/catalog/summary${force ? '?refresh=1' : ''}`);
+    } catch (_) { /* facultatif : les tuiles restent sur « Chargement… » */ }
+    renderTiles();
   }
 
   function renderUrl() {
@@ -910,6 +964,7 @@
     $('ch-state').value = 'all';
     document.querySelectorAll('[data-kind]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.kind === kind)));
     $('tab-items-label').textContent = K().title;
+    $('kind-title').textContent = `${K().icon} ${K().label} : choisis les catégories et les ${K().many}`;
     $('search').placeholder = `Rechercher ${state.kind === 'live' ? 'une chaîne' : state.kind === 'vod' ? 'un film' : 'une série'}…`;
     renderCategorySelect();
     refresh();
@@ -952,6 +1007,7 @@
     load(state.playlists.length ? [...state.playlists].sort((a, b) => collator.compare(a.name, b.name))[0] : null);
     if (location.hash === '#catalogue') switchView('catalog');
     if (await loadCatalog(false, 'live')) refresh();
+    loadSummary();
     loadAccount();
   }
 
@@ -986,6 +1042,7 @@
     clearError();
     setConnection('', 'Actualisation…');
     if (await loadCatalog(true, state.kind)) { refresh(); if (state.view === 'catalog') renderProvider(); }
+    loadSummary();
     $('refresh').disabled = false;
   });
   $('name').addEventListener('input', () => {

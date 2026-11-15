@@ -136,6 +136,8 @@ class WebHandler(BaseHTTPRequestHandler):
         refresh = qs.get("refresh", [""])[0] == "1"
         if path in ("/api/catalog", "/api/catalog/export") and kind not in KINDS:
             return self.json(400, {"error": "kind doit valoir live, vod ou series"})
+        if path == "/api/catalog/summary":
+            return self.json(200, self.catalog_summary(refresh=refresh))
         if path == "/api/catalog/export":
             return self.export_catalog(refresh=refresh, kind=kind)
         if path == "/api/catalog":
@@ -151,6 +153,17 @@ class WebHandler(BaseHTTPRequestHandler):
                 return self.json(502, {"error": "Épisodes indisponibles (get_series_info)"})
             return self.json(200, {"series_id": series_match.group(1), "episodes": episodes})
         return self.json(404, {"error": "Route introuvable"})
+
+    def catalog_summary(self, *, refresh: bool) -> dict:
+        """Nombre d'éléments et de catégories par type (léger : ne renvoie pas les listes)."""
+        result = {}
+        for kind in KINDS:
+            try:
+                items, categories = self.api.catalog(refresh=refresh, kind=kind)
+                result[kind] = {"items": len(items), "categories": len(categories), "error": None}
+            except UpstreamError as exc:
+                result[kind] = {"items": None, "categories": None, "error": str(exc)}
+        return result
 
     def export_catalog(self, *, refresh: bool, kind: str = "live") -> None:
         """Copie de la structure d'origine (réponses brutes ``player_api.php``), identifiants masqués."""

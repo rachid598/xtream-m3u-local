@@ -62,6 +62,17 @@ class VodTests(StackTestCase):
         self.assertEqual(live["kind"], "live")
         self.assertEqual(live["categories"][0]["name"], "Actualités")
 
+    def test_catalog_summary(self):
+        data = json.loads(self.get(self.stack.web_base + "/api/catalog/summary")[1])
+        self.assertEqual(data["live"], {"items": 6, "categories": 7, "error": None})
+        self.assertEqual(data["vod"], {"items": 3, "categories": 3, "error": None})
+        self.assertEqual(data["series"], {"items": 3, "categories": 2, "error": None})
+        FakeXtream.fail_api = True
+        stack = self.make_stack()
+        data = json.loads(self.get(stack.web_base + "/api/catalog/summary")[1])
+        self.assertIsNone(data["vod"]["items"])
+        self.assertIn("indisponible", data["vod"]["error"])
+
     def test_series_episodes_api(self):
         data = json.loads(self.get(self.stack.web_base + "/api/series/900")[1])
         self.assertEqual([e["id"] for e in data["episodes"]], ["9000", "9001", "9002"])

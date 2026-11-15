@@ -38,7 +38,8 @@ Les données (`playlists.json` + cache EPG) sont écrites dans `./data` (ou `DAT
 Deux vues, entièrement en français, responsives (téléphone, tablette, ordinateur), thème clair/sombre automatique :
 
 **Mes playlists**
-- sélecteur **TV en direct / Films / Séries** : chaque type a ses catégories, sa recherche, ses ajouts et exclusions ; une même playlist peut mélanger les trois ;
+- bloc **« Contenu de la playlist »** avec trois grandes tuiles **TV en direct / Films / Séries** (nombre disponible chez le fournisseur et nombre sélectionné) : clique sur une tuile pour éditer ce type ; un bandeau signale les films et séries de l'abonnement pas encore ajoutés (« Ajouter des films », « Ajouter des séries ») ;
+- chaque type a ses catégories, sa recherche, ses ajouts et exclusions ; une même playlist peut mélanger les trois ;
 - plusieurs playlists nommées (« Salon », « Chambre », « TV française »…) : créer, modifier, dupliquer, supprimer ;
 - toutes les catégories avec leur nombre de chaînes (y compris les vides et les sous-groupes), filtre, tout cocher / décocher ;
 - recherche (sans accents, plusieurs mots, année pour les films), filtre par catégorie et par état, ajout ou exclusion individuelle, actions groupées sur les résultats ; affiches, année et note des films/séries, bouton « Voir les épisodes » ;
@@ -127,7 +128,7 @@ Si les liens d'une playlist utilisent une mauvaise adresse, définir `PUBLIC_BAS
 ## Développement
 
 ```bash
-python -m unittest discover -s tests -t . -v      # 80 tests, faux fournisseur Xtream local
+python -m unittest discover -s tests -t . -v      # 81 tests, faux fournisseur Xtream local
 python -m tools.demo                               # démo sans abonnement : chaînes, films et séries fictifs
 node tests/e2e_browser.mjs http://127.0.0.1:7778   # scénario navigateur (Playwright pour Node)
 ```

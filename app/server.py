@@ -873,10 +873,12 @@ def _on_sigterm(*_args: object) -> None:
 
 
 def _warmup(api: XtreamAPI) -> None:
-    try:
-        api.catalog()
-    except UpstreamError as exc:
-        LOG.warning("Catalogue non chargé au démarrage : %s", exc)
+    """Précharge les catalogues (direct d'abord, puis films et séries) pour une interface rapide."""
+    for kind in KINDS:
+        try:
+            api.catalog(kind=kind)
+        except UpstreamError as exc:
+            LOG.warning("Catalogue %s non chargé au démarrage : %s", kind, exc)
 
 
 if __name__ == "__main__":

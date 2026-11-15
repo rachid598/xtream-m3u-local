@@ -225,6 +225,28 @@ label { display: block; font-size: 12.5px; font-weight: 600; color: var(--text-s
 .link-btn:disabled { color: var(--text-faint); cursor: default; text-decoration: none; }
 .ok-text { color: var(--ok); }
 
+/* -------------------------------------------------------------- kind tiles */
+.kind-tiles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+.kind-tile {
+  display: flex; align-items: center; gap: 12px; text-align: left; font: inherit; color: var(--text); cursor: pointer;
+  padding: 14px; border-radius: var(--radius); border: 2px solid var(--border); background: var(--bg-soft); min-width: 0;
+  transition: border-color .15s, background .15s;
+}
+.kind-tile:hover { background: var(--bg-hover); }
+.kind-tile[aria-pressed=true] { border-color: var(--accent); background: var(--accent-soft); box-shadow: 0 0 0 3px var(--accent-soft); }
+.kind-tile:focus-visible { outline: 2px solid var(--accent-strong); outline-offset: 2px; }
+.kt-icon { font-size: 26px; line-height: 1; flex: none; }
+.kt-text { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
+.kt-text strong { font-size: 15px; }
+.kt-meta { font-size: 12px; color: var(--text-faint); overflow-wrap: anywhere; }
+.kt-meta.error { color: var(--danger); }
+.kt-badge { display: flex; flex-direction: column; align-items: flex-end; flex: none; }
+.kt-badge .kind-count { font-size: 18px; font-weight: 750; color: var(--accent-strong); }
+.kt-badge .kt-unit { font-size: 10.5px; color: var(--text-faint); }
+.kt-badge:has(.kind-count:empty) { display: none; }
+.callout { margin-top: 12px; padding: 12px 14px; border-radius: var(--radius-sm); background: var(--accent-soft); border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent); font-size: 13.5px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; justify-content: space-between; }
+.kind-title { font-size: 16px; margin: -2px 0 12px; }
+
 /* --------------------------------------------------------------------- tabs */
 .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin: -4px 0 14px; overflow-x: auto; scrollbar-width: none; }
 [role=tab] {
@@ -370,6 +392,9 @@ dialog .field { margin-bottom: 16px; }
   [role=tab] { flex: 1; padding: 10px 6px; font-size: 13px; }
   [role=tab] .count { display: none; }
   .kind-btn { flex: 1; justify-content: center; padding: 8px 6px; font-size: 12.5px; }
+  .kind-tiles { grid-template-columns: 1fr; gap: 8px; }
+  .kind-tile { padding: 10px 12px; }
+  .kt-icon { font-size: 22px; }
   .subtitle, .hide-sm { display: none; }
   .layout { padding: 12px 12px; gap: 12px; }
   .card { padding: 14px; }

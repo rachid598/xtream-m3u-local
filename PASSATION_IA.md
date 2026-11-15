@@ -1,6 +1,6 @@
 # Passation — Xtream M3U Local
 
-> **État au 15 novembre 2026 — version 2.2.0 (TV en direct + films + séries).** Document à transmettre tel quel à l'IA suivante avec le dépôt.
+> **État au 15 novembre 2026 — version 2.2.1 (TV en direct + films + séries, éditeur films/séries visible).** Document à transmettre tel quel à l'IA suivante avec le dépôt.
 > Aucun mot de passe, token ni URL fournisseur réelle ne doit être copié ici ni commité sur GitHub.
 
 ## 1. Objectif utilisateur
@@ -99,6 +99,21 @@ Chaque chaîne : `{stream_id, name, logo, epg_id, num, category_id, category_ids
 - Le `slug` est figé après création (URL permanente) ; le nom est modifiable. Les anciens fichiers V2 (sans `group_order`/`group_names`) restent compatibles.
 - Limites : 100 playlists, 100 000 identifiants par liste, slug `^[a-z0-9][a-z0-9_-]{0,59}$`, nom 1–100 caractères.
 
+## 4 ter. Session 3 — éditeur films/séries visible (2.2.0 → 2.2.1)
+
+**Retour utilisateur** : « Possible d'ajouter un éditeur films séries ? Car là on ne les voit pas. » En 2.2.0 le choix du type était une petite rangée de pastilles au-dessus des onglets, facile à manquer (et absente si le conteneur tournait encore en 2.1.0 : vérifier la version en bas de page de l'interface).
+
+**Modifications**
+- Nouveau bloc **« Contenu de la playlist »** dans l'éditeur : 3 grandes tuiles (📺 TV en direct, 🎬 Films, 🎞️ Séries) avec le nombre disponible chez le fournisseur (`N films disponibles · M catégories`, « Aucun film dans ton abonnement » ou « Indisponible chez le fournisseur » avec l'erreur en info-bulle) et le nombre sélectionné.
+- Titre d'édition explicite au-dessus des onglets (« 🎬 Films : choisis les catégories et les films »).
+- Bandeau d'aide quand l'abonnement contient des films/séries non encore sélectionnés dans la playlist, avec boutons « Ajouter des films » / « Ajouter des séries ».
+- `GET /api/catalog/summary` : `{live|vod|series: {items, categories, error}}` sans transférer les listes (léger pour mobile) ; préchargement au démarrage des 3 catalogues (direct, puis films, puis séries).
+- Compteurs « films/séries retenus » à 0 (au lieu de « … ») quand rien n'est sélectionné.
+- La vue « Catalogue fournisseur » garde son sélecteur compact.
+
+**Tests** : `test_catalog_summary` (81 tests) ; scénario navigateur : tuiles « films/séries disponibles », bandeau, ajout via « Ajouter des films », titre d'édition, compteur de la tuile. Contrôle visuel bureau et mobile (tuiles empilées).
+**Instabilité observée** : un échec unitaire isolé lors d'un passage complet (détail non capturé), non reproduit sur les passages suivants (voir section 6). À surveiller dans GitHub Actions.
+
 ## 4 bis. Session 2 — films (VOD) et séries (2.1.0 → 2.2.0)
 
 **Besoin** : l'abonnement contient des films et des séries, mais seules les chaînes du direct apparaissaient dans les URL M3U.
@@ -180,7 +195,7 @@ Chaque chaîne : `{stream_id, name, logo, epg_id, num, category_id, category_ids
 
 | Vérification | Résultat |
 |---|---|
-| `python -m unittest discover -s tests -t .` | **80 tests OK** en 2.2.0 (65 en 2.1.0) — faux fournisseur local avec direct, films, séries, épisodes |
+| `python -m unittest discover -s tests -t .` | **81 tests OK** en 2.2.1 (80 en 2.2.0, 65 en 2.1.0) — faux fournisseur local avec direct, films, séries, épisodes |
 | `node --check app/static/app.js` | OK |
 | Scénario Chromium `tests/e2e_browser.mjs` sur la démo (1 500 chaînes, sous-groupes) | **OK** : création, exclusion, ajout manuel, réordonnancement/renommage de groupe, M3U conforme à l'URL affichée, modification à URL constante, duplication, suppression, vue catalogue, recherche, export JSON, aucun défilement horizontal à 390 / 768 / 1366 / 1920 px, aucune erreur console |
 | `docker build` (python:3.13-alpine) | OK |

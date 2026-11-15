@@ -111,12 +111,33 @@
       </div>
     </section>
 
+    <section class="card content-card" aria-labelledby="content-title">
+      <div class="card-head">
+        <h2 id="content-title">Contenu de la playlist</h2>
+        <span class="hint">Choisis ce que tu veux éditer : chaque type a ses propres catégories et sélections.</span>
+      </div>
+      <div class="kind-tiles" role="group" aria-label="Type de contenu à éditer">
+        <button type="button" class="kind-tile" data-kind="live" aria-pressed="true">
+          <span class="kt-icon" aria-hidden="true">📺</span>
+          <span class="kt-text"><strong>TV en direct</strong><span class="kt-meta" data-kind-meta="live">Chargement…</span></span>
+          <span class="kt-badge"><span class="kind-count" data-kind-count="live"></span><span class="kt-unit">sélectionnés</span></span>
+        </button>
+        <button type="button" class="kind-tile" data-kind="vod" aria-pressed="false">
+          <span class="kt-icon" aria-hidden="true">🎬</span>
+          <span class="kt-text"><strong>Films</strong><span class="kt-meta" data-kind-meta="vod">Chargement…</span></span>
+          <span class="kt-badge"><span class="kind-count" data-kind-count="vod"></span><span class="kt-unit">sélectionnés</span></span>
+        </button>
+        <button type="button" class="kind-tile" data-kind="series" aria-pressed="false">
+          <span class="kt-icon" aria-hidden="true">🎞️</span>
+          <span class="kt-text"><strong>Séries</strong><span class="kt-meta" data-kind-meta="series">Chargement…</span></span>
+          <span class="kt-badge"><span class="kind-count" data-kind-count="series"></span><span class="kt-unit">sélectionnés</span></span>
+        </button>
+      </div>
+      <div id="vod-hint" class="callout" role="note" hidden></div>
+    </section>
+
     <section class="card">
-      <div class="kinds" role="group" aria-label="Type de contenu">
-          <button type="button" class="kind-btn" data-kind="live" aria-pressed="true"><span aria-hidden="true">📺</span> TV en direct <span class="kind-count" data-kind-count="live"></span></button>
-          <button type="button" class="kind-btn" data-kind="vod" aria-pressed="false"><span aria-hidden="true">🎬</span> Films <span class="kind-count" data-kind-count="vod"></span></button>
-          <button type="button" class="kind-btn" data-kind="series" aria-pressed="false"><span aria-hidden="true">🎞️</span> Séries <span class="kind-count" data-kind-count="series"></span></button>
-        </div>
+      <h2 class="kind-title" id="kind-title">📺 TV en direct : choisis les catégories et les chaînes</h2>
       <div class="tabs" role="tablist" aria-label="Étapes">
         <button type="button" role="tab" id="tab-categories" aria-controls="panel-categories" aria-selected="true">1. Catégories <span class="count" id="tab-cat-count"></span></button>
         <button type="button" role="tab" id="tab-channels" aria-controls="panel-channels" aria-selected="false" tabindex="-1">2. <span id="tab-items-label">Chaînes</span> <span class="count" id="tab-ch-count"></span></button>

@@ -118,9 +118,15 @@ try {
 
   // Films et séries dans la même playlist (même URL)
   const kindBtn = (kind) => page.locator(`#view-playlists [data-kind="${kind}"]`);
-  await kindBtn('vod').click();
+  await waitFor(async () => /films disponibles/.test(await page.innerText('[data-kind-meta="vod"]')), 'tuile Films : films disponibles');
+  assert(/séries disponibles/.test(await page.innerText('[data-kind-meta="series"]')), 'tuile Séries');
+  assert(await page.isVisible('#vod-hint'), 'message : films et séries pas encore ajoutés');
+  if (shots) await page.screenshot({ path: join(shots, 'desktop-tiles.png') });
+  await page.locator('#vod-hint button', { hasText: 'Ajouter des films' }).click();
+  assert((await page.innerText('#kind-title')).startsWith('🎬 Films'), 'titre de l\'éditeur Films');
   await catBox(page, 'VOD | Action').waitFor({ timeout: 10000 });
   await catBox(page, 'VOD | Action').check();
+  assert(num(await page.innerText('#view-playlists [data-kind-count="vod"]')) > 0, 'tuile Films : sélection');
   await kindBtn('series').click();
   await catBox(page, 'Séries | Drame').waitFor({ timeout: 10000 });
   await catBox(page, 'Séries | Drame').check();
