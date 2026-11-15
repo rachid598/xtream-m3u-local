@@ -134,7 +134,7 @@ class PlaylistServerTests(StackTestCase):
 
     def test_invalid_host_header(self):
         status, _, _ = self.get(self.stack.proxy_base + "/playlist.m3u", {"Host": "evil\"host"})
-        self.assertEqual(status, 502)
+        self.assertEqual(status, 400)
 
     def test_access_token(self):
         stack = self.make_stack(access_token="mysecret")

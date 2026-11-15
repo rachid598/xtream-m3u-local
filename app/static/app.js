@@ -6,29 +6,57 @@
   const PAGE = 200;
   const collator = new Intl.Collator('fr', { sensitivity: 'base', numeric: true });
 
+  // ------------------------------------------------------- types de contenu
+  const KINDS = ['live', 'vod', 'series'];
+  const KIND = {
+    live: { label: 'TV en direct', one: 'chaîne', many: 'chaînes', title: 'Chaînes', kept: 'retenues', added: 'Ajoutée', excludedLabel: 'Exclue',
+      prefix: '', fields: ['category_ids', 'included_stream_ids', 'excluded_stream_ids'], actions: 'get_live_categories et get_live_streams', categoriesAction: 'get_live_categories' },
+    vod: { label: 'Films', one: 'film', many: 'films', title: 'Films', kept: 'retenus', added: 'Ajouté', excludedLabel: 'Exclu',
+      prefix: 'vod:', fields: ['vod_category_ids', 'included_vod_ids', 'excluded_vod_ids'], actions: 'get_vod_categories et get_vod_streams', categoriesAction: 'get_vod_categories' },
+    series: { label: 'Séries', one: 'série', many: 'séries', title: 'Séries', kept: 'retenues', added: 'Ajoutée', excludedLabel: 'Exclue',
+      prefix: 'series:', fields: ['series_category_ids', 'included_series_ids', 'excluded_series_ids'], actions: 'get_series_categories et get_series', categoriesAction: 'get_series_categories' },
+  };
+  const emptyCatalog = () => ({ categories: [], categoryNames: new Map(), channels: [], channelById: new Map(),
+    channelsByCat: new Map(), catalogLoaded: false, categoriesError: null, loading: null });
+  const emptySelection = () => ({ selected: new Set(), included: new Set(), excluded: new Set() });
+
   // ------------------------------------------------------------------ état
   const state = {
     status: null,
-    categories: [],          // [{category_id, name, count}]
-    categoryNames: new Map(),
-    channels: [],            // [{stream_id, name, category_id, category_ids, logo, epg, num, _search}]
-    channelById: new Map(),
+    kind: 'live',            // type affiché : live | vod | series
+    cat: { live: emptyCatalog(), vod: emptyCatalog(), series: emptyCatalog() },
+    sel: { live: emptySelection(), vod: emptySelection(), series: emptySelection() },
     playlists: [],
     editing: null,           // slug de la playlist ouverte (null = nouvelle)
-    selected: new Set(),     // catégories cochées
-    included: new Set(),     // chaînes ajoutées manuellement
-    excluded: new Set(),     // chaînes exclues
-    groupOrder: [],          // ordre personnalisé des groupes (ids de catégories)
-    groupNames: {},          // noms de groupes personnalisés {category_id: nom}
-    channelsByCat: new Map(),
+    groupOrder: [],          // ordre personnalisé des groupes (clés : "12", "vod:3", "series:7")
+    groupNames: {},          // noms de groupes personnalisés {clé: nom}
     view: 'playlists',
     slugTouched: false,
     snapshot: '',            // pour détecter les modifications non enregistrées
     catFilter: 'all',
     limit: PAGE,
     tab: 'categories',
-    catalogLoaded: false,
   };
+  // Raccourcis vers le catalogue et la sélection du type affiché (state.categories, state.selected…).
+  for (const key of ['categories', 'categoryNames', 'channels', 'channelById', 'channelsByCat', 'catalogLoaded', 'categoriesError']) {
+    Object.defineProperty(state, key, { get() { return this.cat[this.kind][key]; }, set(v) { this.cat[this.kind][key] = v; } });
+  }
+  for (const key of ['selected', 'included', 'excluded']) {
+    Object.defineProperty(state, key, { get() { return this.sel[this.kind][key]; }, set(v) { this.sel[this.kind][key] = v; } });
+  }
+  const K = () => KIND[state.kind];
+  const noun = (n, kind = state.kind) => plural(n, KIND[kind].one, KIND[kind].many);
+
+  /** Libellé d'origine d'un groupe de playlist ("12", "vod:3", "series:7"). */
+  function groupInfo(key) {
+    for (const kind of ['vod', 'series']) {
+      if (key.startsWith(KIND[kind].prefix)) {
+        const id = key.slice(KIND[kind].prefix.length);
+        return { kind, id, name: state.cat[kind].categoryNames.get(id) || (id === 'none' ? 'Sans catégorie' : `Catégorie ${id}`) };
+      }
+    }
+    return { kind: 'live', id: key, name: state.cat.live.categoryNames.get(key) || (key === 'none' ? 'Sans catégorie' : `Catégorie ${key}`) };
+  }
 
   // --------------------------------------------------------------- outils
   function h(tag, props, ...children) {
@@ -159,48 +187,59 @@
     }
   }
 
-  function payload() {
-    // Nettoyage : une exclusion n'a de sens que pour une chaîne d'une catégorie cochée.
-    const excluded = [...state.excluded].filter((id) => {
-      const c = state.channelById.get(id);
-      return !c || inCategory(c);
-    });
-    return {
-      name: $('name').value.trim(),
-      slug: $('slug').value.trim(),
-      category_ids: [...state.selected],
-      included_stream_ids: [...state.included],
-      excluded_stream_ids: excluded,
-      group_order: [...state.groupOrder],
-      group_names: cleanGroupNames(),
-    };
+  function payload({ sorted = false } = {}) {
+    const data = { name: $('name').value.trim(), slug: $('slug').value.trim() };
+    for (const kind of KINDS) {
+      const sel = state.sel[kind];
+      const byId = state.cat[kind].channelById;
+      const [catField, incField, excField] = KIND[kind].fields;
+      // Nettoyage : une exclusion n'a de sens que pour un élément d'une catégorie cochée.
+      let excluded = [...sel.excluded];
+      if (!sorted) excluded = excluded.filter((id) => { const c = byId.get(id); return !c || c.category_ids.some((cid) => sel.selected.has(cid)); });
+      const list = (set) => (sorted ? [...set].sort() : [...set]);
+      data[catField] = list(sel.selected);
+      data[incField] = list(sel.included);
+      data[excField] = sorted ? excluded.sort() : excluded;
+    }
+    data.group_order = [...state.groupOrder];
+    data.group_names = cleanGroupNames();
+    return data;
   }
 
   function cleanGroupNames() {
     const result = {};
     for (const id of Object.keys(state.groupNames).sort()) {
       const name = String(state.groupNames[id] || '').trim();
-      if (name && name !== state.categoryNames.get(id)) result[id] = name.slice(0, 100);
+      if (name && name !== groupInfo(id).name) result[id] = name.slice(0, 100);
     }
     return result;
   }
 
-  const signature = () => JSON.stringify({
-    ...payload(),
-    category_ids: [...state.selected].sort(),
-    included_stream_ids: [...state.included].sort(),
-    excluded_stream_ids: [...state.excluded].sort(),
-  });
+  const signature = () => JSON.stringify(payload({ sorted: true }));
+  const hasSelection = () => KINDS.some((k) => state.sel[k].selected.size || state.sel[k].included.size);
   const isDirty = () => signature() !== state.snapshot;
 
-  function countFor(p) {
-    const cats = new Set(p.category_ids), inc = new Set(p.included_stream_ids), exc = new Set(p.excluded_stream_ids);
+  function countFor(p, kind = 'live') {
+    const [catField, incField, excField] = KIND[kind].fields;
+    const cats = new Set(p[catField] || []), inc = new Set(p[incField] || []), exc = new Set(p[excField] || []);
     let n = 0;
-    for (const c of state.channels) {
+    for (const c of state.cat[kind].channels) {
       if (!exc.has(c.stream_id) && (c.category_ids.some((id) => cats.has(id)) || inc.has(c.stream_id))) n += 1;
     }
     return n;
   }
+
+  /** Nombre d'éléments retenus pour la sélection en cours, par type. */
+  function selectionCount(kind) {
+    const sel = state.sel[kind];
+    let n = 0;
+    for (const c of state.cat[kind].channels) {
+      if (!sel.excluded.has(c.stream_id) && (c.category_ids.some((id) => sel.selected.has(id)) || sel.included.has(c.stream_id))) n += 1;
+    }
+    return n;
+  }
+
+  const usesKind = (p, kind) => Boolean((p[KIND[kind].fields[0]] || []).length || (p[KIND[kind].fields[1]] || []).length);
 
   // -------------------------------------------------------------- URLs
   function baseUrl() {
@@ -222,19 +261,31 @@
 
   // ---------------------------------------------------------- rendu
   function renderStats() {
-    let n = 0;
-    for (const c of state.channels) if (isOn(c)) n += 1;
-    $('stat-channels').textContent = n.toLocaleString('fr-FR');
-    $('stat-categories').textContent = state.selected.size.toLocaleString('fr-FR');
-    $('stat-included').textContent = state.included.size.toLocaleString('fr-FR');
-    $('stat-excluded').textContent = state.excluded.size.toLocaleString('fr-FR');
+    const counts = {};
+    for (const kind of KINDS) {
+      const sel = state.sel[kind];
+      const loaded = state.cat[kind].catalogLoaded;
+      // Catalogue pas encore chargé : on affiche le nombre de sélections plutôt que 0.
+      counts[kind] = loaded ? selectionCount(kind) : null;
+      const pending = !loaded && (sel.selected.size || sel.included.size);
+      document.querySelectorAll(`[data-kind-count="${kind}"]`).forEach((node) => {
+        node.textContent = counts[kind] ? counts[kind].toLocaleString('fr-FR') : (pending ? '…' : '');
+      });
+    }
+    const show = (id, kind) => { $(id).textContent = counts[kind] === null ? '…' : counts[kind].toLocaleString('fr-FR'); };
+    show('stat-channels', 'live');
+    show('stat-vod', 'vod');
+    show('stat-series', 'series');
+    $('stat-categories').textContent = KINDS.reduce((n, k) => n + state.sel[k].selected.size, 0).toLocaleString('fr-FR');
+    const n = counts[state.kind] || 0;
     $('tab-cat-count').textContent = state.categories.length ? `(${state.selected.size}/${state.categories.length})` : '';
     $('tab-ch-count').textContent = state.channels.length ? `(${n.toLocaleString('fr-FR')})` : '';
-    $('bar-count').textContent = plural(n, 'chaîne retenue', 'chaînes retenues');
+    const parts = KINDS.filter((k) => counts[k]).map((k) => noun(counts[k], k));
+    $('bar-count').textContent = parts.length ? parts.join(' · ') : 'Playlist vide';
     const name = $('name').value.trim();
     $('bar-name').textContent = name ? `· ${name}` : '';
     const dirty = isDirty();
-    $('dirty').hidden = !dirty || (!state.editing && !name && !state.selected.size && !state.included.size);
+    $('dirty').hidden = !dirty || (!state.editing && !name && !hasSelection());
     $('revert').hidden = !(dirty && state.editing);
   }
 
@@ -267,7 +318,8 @@
     }
     const sorted = [...state.playlists].sort((a, b) => collator.compare(a.name, b.name));
     for (const p of sorted) {
-      const count = state.catalogLoaded ? ` · ${plural(countFor(p), 'chaîne', 'chaînes')}` : '';
+      const parts = KINDS.filter((k) => state.cat[k].catalogLoaded && usesKind(p, k)).map((k) => noun(countFor(p, k), k));
+      const count = parts.length ? ` · ${parts.join(' · ')}` : '';
       list.append(h('li', null, h('button', {
         type: 'button', class: 'playlist-item', 'aria-current': p.slug === state.editing ? 'true' : 'false',
         onclick: () => openPlaylist(p.slug),
@@ -288,11 +340,13 @@
     const grid = $('categories');
     grid.replaceChildren();
     if (!state.catalogLoaded) {
-      grid.append(h('p', { class: 'empty', text: 'Chargement du catalogue…' }));
+      grid.append(h('p', { class: 'empty', text: `Chargement du catalogue ${K().label.toLowerCase()}…` }));
       return;
     }
     if (!state.categories.length) {
-      grid.append(h('p', { class: 'empty', text: 'Aucune catégorie disponible. Vérifie la connexion Xtream puis « Actualiser le catalogue ».' }));
+      grid.append(h('p', { class: 'empty', text: state.kind === 'live'
+        ? 'Aucune catégorie disponible. Vérifie la connexion Xtream puis « Actualiser le catalogue ».'
+        : `Aucune catégorie de ${K().many} pour ton compte (${K().categoriesAction} vide).` }));
       $('cat-info').textContent = '';
       return;
     }
@@ -308,11 +362,11 @@
     for (const cat of visible) {
       const on = state.selected.has(cat.category_id);
       const kept = retained.get(cat.category_id) || 0;
-      let metaText = plural(cat.count, 'chaîne', 'chaînes');
+      let metaText = noun(cat.count);
       let partial = false;
       const parent = cat.parent_id && state.categoryNames.get(cat.parent_id);
-      if (on && kept !== cat.count) { metaText = `${kept} / ${cat.count} chaînes retenues`; partial = true; }
-      else if (!on && kept) { metaText = `${plural(cat.count, 'chaîne', 'chaînes')} · ${kept} ajoutée${kept > 1 ? 's' : ''}`; partial = true; }
+      if (on && kept !== cat.count) { metaText = `${kept} / ${cat.count} ${K().many} ${K().kept}`; partial = true; }
+      else if (!on && kept) { metaText = `${noun(cat.count)} · ${kept} ${K().added.toLowerCase()}${kept > 1 ? 's' : ''}`; partial = true; }
       const box = h('input', { type: 'checkbox', checked: on, 'aria-label': `Inclure la catégorie ${cat.name}` });
       box.addEventListener('change', () => {
         if (box.checked) state.selected.add(cat.category_id); else state.selected.delete(cat.category_id);
@@ -324,15 +378,14 @@
           parent ? h('span', { class: 'meta', text: `Sous-groupe de ${parent}` }) : null,
           h('span', { class: `meta${partial ? ' partial' : ''}`, text: metaText })),
         cat.count ? h('button', {
-          type: 'button', class: 'view', text: 'Voir', title: `Voir les chaînes de ${cat.name}`,
+          type: 'button', class: 'view', text: 'Voir', title: `Voir les ${K().many} de ${cat.name}`,
           onclick: (event) => { event.preventDefault(); showCategoryChannels(cat.category_id); },
         }) : null,
       ));
     }
     grid.append(fragment);
     if (!visible.length) grid.append(h('p', { class: 'empty', text: 'Aucune catégorie ne correspond au filtre.' }));
-    const totalChannels = state.channels.length.toLocaleString('fr-FR');
-    $('cat-info').textContent = `${plural(state.categories.length, 'catégorie', 'catégories')} · ${totalChannels} chaînes au total · ${visible.length} affichée${visible.length > 1 ? 's' : ''}`;
+    $('cat-info').textContent = `${plural(state.categories.length, 'catégorie', 'catégories')} · ${noun(state.channels.length)} au total · ${visible.length} affichée${visible.length > 1 ? 's' : ''}`;
   }
 
   function filteredChannels() {
@@ -354,7 +407,7 @@
   }
 
   function thumb(c) {
-    const box = h('span', { class: 'thumb', 'aria-hidden': 'true', text: c.name.replace(/[^\p{L}\p{N}]/gu, '').slice(0, 2).toUpperCase() || 'TV' });
+    const box = h('span', { class: `thumb${state.kind === 'live' ? '' : ' poster'}`, 'aria-hidden': 'true', text: c.name.replace(/[^\p{L}\p{N}]/gu, '').slice(0, 2).toUpperCase() || 'TV' });
     if (c.logo) {
       const img = h('img', { alt: '', loading: 'lazy', decoding: 'async', referrerpolicy: 'no-referrer' });
       img.addEventListener('load', () => { box.textContent = ''; box.append(img); }, { once: true });
@@ -368,7 +421,7 @@
     const list = $('channels');
     list.replaceChildren();
     if (!state.catalogLoaded) {
-      list.append(h('li', { class: 'empty', text: 'Chargement du catalogue…' }));
+      list.append(h('li', { class: 'empty', text: `Chargement du catalogue ${K().label.toLowerCase()}…` }));
       return;
     }
     const found = filteredChannels();
@@ -381,53 +434,87 @@
         setChannel(c, box.checked);
         refresh({ channels: $('ch-state').value !== 'all' ? true : 'row', row: box.closest('label'), channel: c });
       });
-      const catNames = c.category_ids.map((id) => state.categoryNames.get(id) || 'Sans catégorie').join(' · ');
-      const badges = [];
-      if (state.included.has(c.stream_id)) badges.push(h('span', { class: 'badge ok', text: 'Ajoutée' }));
-      if (state.excluded.has(c.stream_id)) badges.push(h('span', { class: 'badge danger', text: 'Exclue' }));
-      if (c.epg) badges.push(h('span', { class: 'badge opt', text: 'EPG', title: 'Identifiant EPG disponible' }));
       fragment.append(h('li', null, h('label', { class: `channel${on ? ' on' : ''}` },
         box,
         thumb(c),
         h('span', { class: 'grow' },
           h('span', { class: 'ch-name', text: c.name }),
-          h('span', { class: 'ch-meta', text: (c.num ? `N° ${c.num} · ` : '') + catNames })),
-        h('span', { class: 'badges' }, badges),
+          h('span', { class: 'ch-meta', text: itemMeta(c) }),
+          state.kind === 'series' ? episodesButton(c) : null),
+        h('span', { class: 'badges' }, badgesFor(c)),
       )));
     }
     list.append(fragment);
-    if (!visible.length) list.append(h('li', { class: 'empty', text: 'Aucune chaîne ne correspond à ces critères.' }));
+    if (!visible.length) list.append(h('li', { class: 'empty', text: `Aucun résultat parmi les ${K().many} avec ces critères.` }));
     $('shown').textContent = found.length > visible.length
-      ? `${visible.length.toLocaleString('fr-FR')} chaînes affichées sur ${found.length.toLocaleString('fr-FR')} résultats`
+      ? `${visible.length.toLocaleString('fr-FR')} ${K().many} affichés sur ${found.length.toLocaleString('fr-FR')} résultats`
       : plural(found.length, 'résultat', 'résultats');
     $('more').hidden = found.length <= visible.length;
-    $('more').textContent = `Afficher ${Math.min(PAGE, found.length - visible.length)} chaînes de plus`;
+    $('more').textContent = `Afficher ${Math.min(PAGE, found.length - visible.length)} ${K().many} de plus`;
     $('ch-check').disabled = $('ch-uncheck').disabled = !found.length;
+  }
+
+  function itemMeta(c) {
+    const cats = c.category_ids.map((id) => state.categoryNames.get(id) || 'Sans catégorie').join(' · ');
+    if (state.kind === 'live') return (c.num ? `N° ${c.num} · ` : '') + cats;
+    return [c.year, c.rating ? `★ ${c.rating}` : '', cats, c.ext ? c.ext.toUpperCase() : ''].filter(Boolean).join(' · ');
+  }
+
+  function badgesFor(c) {
+    const badges = [];
+    if (state.included.has(c.stream_id)) badges.push(h('span', { class: 'badge ok', text: K().added }));
+    if (state.excluded.has(c.stream_id)) badges.push(h('span', { class: 'badge danger', text: K().excludedLabel }));
+    if (c.epg) badges.push(h('span', { class: 'badge opt', text: 'EPG', title: 'Identifiant EPG disponible' }));
+    return badges;
+  }
+
+  /** Bouton « Épisodes » : appelle get_series_info (via /api/series/<id>) à la demande. */
+  function episodesButton(c) {
+    const btn = h('button', { type: 'button', class: 'link-btn', text: 'Voir les épisodes' });
+    btn.addEventListener('click', async (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      btn.disabled = true;
+      btn.textContent = 'Chargement des épisodes…';
+      try {
+        const data = await request(`/api/series/${encodeURIComponent(c.stream_id)}`);
+        const seasons = new Set(data.episodes.map((e) => e.season));
+        btn.replaceWith(h('span', { class: 'ch-meta ok-text', text: data.episodes.length
+          ? `${plural(seasons.size, 'saison', 'saisons')} · ${plural(data.episodes.length, 'épisode', 'épisodes')}`
+          : 'Aucun épisode renvoyé par le fournisseur' }));
+      } catch (error) {
+        btn.disabled = false;
+        btn.textContent = `Épisodes indisponibles (${error.message}) – réessayer`;
+      }
+    });
+    return btn;
   }
 
   function updateRow(label, c) {
     if (!label) return;
-    const on = isOn(c);
-    label.classList.toggle('on', on);
-    const badges = label.querySelector('.badges');
-    badges.replaceChildren();
-    if (state.included.has(c.stream_id)) badges.append(h('span', { class: 'badge ok', text: 'Ajoutée' }));
-    if (state.excluded.has(c.stream_id)) badges.append(h('span', { class: 'badge danger', text: 'Exclue' }));
-    if (c.epg) badges.append(h('span', { class: 'badge opt', text: 'EPG' }));
+    label.classList.toggle('on', isOn(c));
+    label.querySelector('.badges').replaceChildren(...badgesFor(c));
   }
 
   function groupCounts() {
     const groups = new Map();
-    for (const c of state.channels) {
-      if (!isOn(c)) continue;
-      const group = c.category_ids.find((id) => state.selected.has(id)) || c.category_id;
-      groups.set(group, (groups.get(group) || 0) + 1);
+    for (const kind of KINDS) {
+      const sel = state.sel[kind];
+      for (const c of state.cat[kind].channels) {
+        if (sel.excluded.has(c.stream_id)) continue;
+        const inCat = c.category_ids.find((id) => sel.selected.has(id));
+        if (!inCat && !sel.included.has(c.stream_id)) continue;
+        const key = KIND[kind].prefix + (inCat || c.category_id);
+        groups.set(key, (groups.get(key) || 0) + 1);
+      }
     }
     return groups;
   }
 
   function orderedGroups(groups) {
-    const provider = new Map(state.categories.map((cat, i) => [cat.category_id, i]));
+    // Ordre par défaut : direct, puis films, puis séries, chacun dans l'ordre du fournisseur.
+    const provider = new Map();
+    KINDS.forEach((kind, k) => state.cat[kind].categories.forEach((cat, i) => provider.set(KIND[kind].prefix + cat.category_id, k * 1e6 + i)));
     const custom = new Map(state.groupOrder.map((id, i) => [id, i]));
     const rank = (id) => (custom.has(id) ? [0, custom.get(id)] : [custom.size ? 1 : 0, provider.get(id) ?? 1e9]);
     return [...groups.keys()].sort((a, b) => {
@@ -453,7 +540,8 @@
     const gl = $('sum-groups');
     gl.replaceChildren();
     order.forEach((id, index) => {
-      const original = state.categoryNames.get(id) || 'Sans catégorie';
+      const info = groupInfo(id);
+      const original = info.name;
       const input = h('input', { type: 'text', maxlength: '100', value: state.groupNames[id] || '', placeholder: original,
         'aria-label': `Nom du groupe ${original} dans cette playlist`, class: state.groupNames[id] ? 'renamed' : null });
       input.addEventListener('input', () => {
@@ -463,8 +551,9 @@
       });
       gl.append(h('li', { class: 'group-row' },
         h('span', { class: 'pos', text: String(index + 1) }),
+        h('span', { class: `kind-tag ${info.kind}`, text: KIND[info.kind].label, title: `Groupe de ${KIND[info.kind].many}` }),
         input,
-        h('span', { class: 'num', text: groups.get(id).toLocaleString('fr-FR'), title: 'Chaînes' }),
+        h('span', { class: 'num', text: groups.get(id).toLocaleString('fr-FR'), title: KIND[info.kind].title }),
         h('button', { type: 'button', class: 'icon-btn', text: '↑', title: 'Monter', 'aria-label': `Monter ${original}`, disabled: index === 0, onclick: () => moveGroup(order, index, -1) }),
         h('button', { type: 'button', class: 'icon-btn', text: '↓', title: 'Descendre', 'aria-label': `Descendre ${original}`, disabled: index === order.length - 1, onclick: () => moveGroup(order, index, 1) }),
       ));
@@ -472,18 +561,24 @@
     if (!order.length) gl.append(h('li', { class: 'empty', text: 'La playlist est vide pour le moment.' }));
     $('reset-groups').disabled = !state.groupOrder.length && !Object.keys(cleanGroupNames()).length;
 
-    const fill = (node, ids, set, emptyText) => {
+    const fill = (node, field, emptyText) => {
       node.replaceChildren();
-      for (const id of ids) {
-        const c = state.channelById.get(id);
-        node.append(h('li', null,
-          h('span', { text: c ? c.name : `Chaîne ${id} (absente du catalogue actuel)` }),
-          h('button', { type: 'button', class: 'x', title: 'Retirer', 'aria-label': 'Retirer', text: '×', onclick: () => { set.delete(id); refresh(); } })));
+      let total = 0;
+      for (const kind of KINDS) {
+        const set = state.sel[kind][field];
+        for (const id of set) {
+          total += 1;
+          const c = state.cat[kind].channelById.get(id);
+          const label = c ? c.name : (state.cat[kind].catalogLoaded ? `${KIND[kind].one} ${id} (absent du catalogue actuel)` : `${KIND[kind].one} ${id}`);
+          node.append(h('li', null,
+            h('span', null, h('span', { class: `kind-tag ${kind}`, text: KIND[kind].label }), ' ', label),
+            h('button', { type: 'button', class: 'x', title: 'Retirer', 'aria-label': `Retirer ${label}`, text: '×', onclick: () => { set.delete(id); refresh(); } })));
+        }
       }
-      if (!ids.length) node.append(h('li', { class: 'empty', text: emptyText }));
+      if (!total) node.append(h('li', { class: 'empty', text: emptyText }));
     };
-    fill($('sum-included'), [...state.included], state.included, 'Aucune chaîne ajoutée hors catégories.');
-    fill($('sum-excluded'), [...state.excluded], state.excluded, 'Aucune chaîne exclue.');
+    fill($('sum-included'), 'included', 'Aucun ajout hors catégories.');
+    fill($('sum-excluded'), 'excluded', 'Aucune exclusion.');
   }
 
   function renderCategorySelect() {
@@ -533,9 +628,14 @@
   // ------------------------------------------------------- playlists
   function load(p) {
     state.editing = p ? p.slug : null;
-    state.selected = new Set(p ? p.category_ids : []);
-    state.included = new Set(p ? p.included_stream_ids : []);
-    state.excluded = new Set(p ? p.excluded_stream_ids : []);
+    for (const kind of KINDS) {
+      const [catField, incField, excField] = KIND[kind].fields;
+      state.sel[kind] = {
+        selected: new Set(p ? p[catField] || [] : []),
+        included: new Set(p ? p[incField] || [] : []),
+        excluded: new Set(p ? p[excField] || [] : []),
+      };
+    }
     state.groupOrder = p && p.group_order ? [...p.group_order] : [];
     state.groupNames = p && p.group_names ? { ...p.group_names } : {};
     state.slugTouched = Boolean(p);
@@ -549,6 +649,8 @@
     state.limit = PAGE;
     clearError();
     refresh();
+    // Charger en arrière-plan les catalogues films / séries utilisés par cette playlist (compteurs, résumé).
+    if (p) for (const kind of ['vod', 'series']) if (usesKind(p, kind)) ensureCatalog(kind);
   }
 
   async function confirmLeave() {
@@ -577,8 +679,7 @@
       $('slug').focus();
       return;
     }
-    const empty = !data.category_ids.length && !data.included_stream_ids.length;
-    if (empty && !(await ask({ title: 'Playlist vide', text: 'Aucune catégorie ni chaîne n\'est sélectionnée. Enregistrer quand même ?', okLabel: 'Enregistrer' }))) return;
+    if (!hasSelection() && !(await ask({ title: 'Playlist vide', text: 'Aucune catégorie, chaîne, film ou série n\'est sélectionné. Enregistrer quand même ?', okLabel: 'Enregistrer' }))) return;
     $('save').disabled = true;
     try {
       const saved = state.editing
@@ -645,16 +746,18 @@
     const render = (max) => {
       ul.replaceChildren();
       for (const c of list.slice(0, max)) {
+        const extra = state.kind === 'live' ? null : [c.year, c.rating ? `★ ${c.rating}` : ''].filter(Boolean).join(' · ');
         ul.append(h('li', null,
           h('span', { class: 'c-num', text: c.num ? `N° ${c.num}` : '—' }),
-          h('span', { class: 'c-name' }, c.name, withCategories
+          h('span', { class: 'c-name' }, c.name, extra ? h('span', { class: 'ch-meta', text: ` (${extra})` }) : null, withCategories
             ? h('span', { class: 'ch-meta', text: ` — ${c.category_ids.map((id) => state.categoryNames.get(id) || id).join(' · ')}` })
-            : null),
+            : null, state.kind === 'series' ? h('span', null, ' ', episodesButton(c)) : null),
           c.epg ? h('span', { class: 'badge', text: 'EPG' }) : null,
+          c.ext ? h('span', { class: 'badge', text: c.ext.toUpperCase() }) : null,
           h('span', { class: 'c-id', text: `id ${c.stream_id}` })));
       }
       if (list.length > max) {
-        ul.append(h('li', null, h('button', { type: 'button', class: 'btn small ghost', text: `Afficher les ${list.length - max} autres chaînes`, onclick: () => render(list.length) })));
+        ul.append(h('li', null, h('button', { type: 'button', class: 'btn small ghost', text: `Afficher les ${list.length - max} autres ${K().many}`, onclick: () => render(list.length) })));
       }
     };
     render(limit);
@@ -666,8 +769,8 @@
     const meta = h('span', { class: 't-meta' },
       h('span', { class: 'badge', text: `ID ${cat.category_id}` }),
       cat.parent_id ? h('span', { class: 'badge', text: `parent ${cat.parent_id}`, title: `parent_id = ${cat.parent_id}` }) : null,
-      h('span', { class: `badge${count ? '' : ' warn'}`, text: plural(count, 'chaîne', 'chaînes') }),
-      cat.source === 'derived' ? h('span', { class: 'badge danger', text: 'absente de get_live_categories', title: 'Groupe déduit des chaînes : la catégorie n\'est pas renvoyée par get_live_categories' }) : null);
+      h('span', { class: `badge${count ? '' : ' warn'}`, text: noun(count) }),
+      cat.source === 'derived' ? h('span', { class: 'badge danger', text: `absente de ${K().categoriesAction}`, title: `Groupe déduit des contenus : la catégorie n'est pas renvoyée par ${K().categoriesAction}` }) : null);
     const body = h('div', { class: 'tree-body' });
     const node = h('details', { class: 'tree-node', 'data-depth': String(depth) },
       h('summary', null, h('span', { class: 't-pos', text: `#${cat.position + 1}` }), h('span', { class: 't-name', text: cat.name }), meta),
@@ -678,7 +781,7 @@
       rendered = true;
       const list = state.channelsByCat.get(cat.category_id) || [];
       if (list.length) body.append(providerChannelList(list));
-      else if (!(children.get(cat.category_id) || []).length) body.append(h('p', { class: 'empty', text: 'Aucune chaîne dans cette catégorie pour ton compte.' }));
+      else if (!(children.get(cat.category_id) || []).length) body.append(h('p', { class: 'empty', text: `Aucun contenu dans cette catégorie pour ton compte.` }));
       for (const child of children.get(cat.category_id) || []) body.append(providerNode(child, children, depth + 1));
     });
     return node;
@@ -689,14 +792,18 @@
     const results = $('prov-results');
     tree.replaceChildren();
     results.replaceChildren();
+    $('prov-actions').textContent = K().actions;
+    $('export').href = `/api/catalog/export?kind=${state.kind}`;
+    $('export-raw').href = `/api/catalog?kind=${state.kind}&refresh=1`;
     if (!state.catalogLoaded) {
-      tree.append(h('p', { class: 'empty', text: 'Chargement du catalogue…' }));
+      $('catalog-stats').replaceChildren();
+      tree.append(h('p', { class: 'empty', text: `Chargement du catalogue ${K().label.toLowerCase()}…` }));
       return;
     }
     const warning = $('catalog-warning');
     warning.hidden = !state.categoriesError;
     warning.textContent = state.categoriesError
-      ? `${state.categoriesError}. Les groupes affichés sont déduits des chaînes : ils peuvent différer de ceux de ton application TV. Réessaie avec « Actualiser le catalogue ».`
+      ? `${state.categoriesError}. Les groupes affichés sont déduits des contenus : ils peuvent différer de ceux de ton application TV. Réessaie avec « Actualiser le catalogue ».`
       : '';
     const known = new Set(state.categories.map((c) => c.category_id));
     const children = new Map();
@@ -715,7 +822,7 @@
       stat(state.categories.length - derived, 'catégories fournisseur'),
       stat(subgroups, 'sous-groupes (parent_id)'),
       stat(empty, 'catégories vides'),
-      stat(state.channels.length, 'chaînes valides'));
+      stat(state.channels.length, `${K().many} valides`));
 
     const query = norm($('prov-search').value.trim());
     if (query) {
@@ -726,14 +833,14 @@
       const box = h('div', { class: 'tree' });
       for (const cat of cats.slice(0, 100)) box.append(providerNode(cat, children, 0));
       results.append(box);
-      results.append(h('h3', { text: `${plural(chans.length, 'chaîne trouvée', 'chaînes trouvées')}` }));
+      results.append(h('h3', { text: `${noun(chans.length)} trouvé${state.kind === 'vod' ? '' : 'e'}${chans.length > 1 ? 's' : ''}` }));
       if (chans.length) {
         results.append(providerChannelList(chans, 200, true));
       }
       $('prov-info').textContent = 'Résultats de recherche. Efface la recherche pour revoir l\'arborescence complète.';
       return;
     }
-    $('prov-info').textContent = `Ordre exact du fournisseur · ${plural(roots.length, 'groupe racine', 'groupes racines')}. Clique sur une catégorie pour voir ses chaînes et sous-groupes.`;
+    $('prov-info').textContent = `${K().label} · ordre exact du fournisseur · ${plural(roots.length, 'groupe racine', 'groupes racines')}. Clique sur une catégorie pour voir son contenu et ses sous-groupes.`;
     const fragment = document.createDocumentFragment();
     for (const cat of roots) fragment.append(providerNode(cat, children, 0));
     tree.append(fragment);
@@ -746,35 +853,69 @@
   }
 
   function applyCatalog(catalog) {
-    state.categories = catalog.categories.map((cat) => ({ ...cat, _search: `${norm(cat.name)} #${cat.category_id}` }));
-    state.categoryNames = new Map(state.categories.map((cat) => [cat.category_id, cat.name]));
-    state.channels = catalog.channels.map((c) => ({ ...c, _search: norm(c.name) }));
-    state.channelById = new Map(state.channels.map((c) => [c.stream_id, c]));
-    state.channelsByCat = new Map();
-    for (const c of state.channels) {
+    const kind = catalog.kind || 'live';
+    const target = state.cat[kind];
+    target.categories = catalog.categories.map((cat) => ({ ...cat, _search: `${norm(cat.name)} #${cat.category_id}` }));
+    target.categoryNames = new Map(target.categories.map((cat) => [cat.category_id, cat.name]));
+    target.channels = catalog.channels.map((c) => ({ ...c, _search: norm(`${c.name} ${c.year || ''}`) }));
+    target.channelById = new Map(target.channels.map((c) => [c.stream_id, c]));
+    target.channelsByCat = new Map();
+    for (const c of target.channels) {
       for (const id of c.category_ids) {
-        if (!state.channelsByCat.has(id)) state.channelsByCat.set(id, []);
-        state.channelsByCat.get(id).push(c);
+        if (!target.channelsByCat.has(id)) target.channelsByCat.set(id, []);
+        target.channelsByCat.get(id).push(c);
       }
     }
-    state.catalogLoaded = true;
-    state.categoriesError = catalog.categories_error || null;
-    if (state.view === 'catalog') renderProvider();
-    renderCategorySelect();
-    const when = catalog.updated_at ? new Date(catalog.updated_at * 1000).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }) : '';
-    setConnection('ok', `Connecté · ${state.channels.length.toLocaleString('fr-FR')} chaînes${when ? ` · ${when}` : ''}`);
+    target.catalogLoaded = true;
+    target.categoriesError = catalog.categories_error || null;
+    if (kind === state.kind) {
+      if (state.view === 'catalog') renderProvider();
+      renderCategorySelect();
+    }
+    if (kind === 'live') {
+      const when = catalog.updated_at ? new Date(catalog.updated_at * 1000).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }) : '';
+      setConnection('ok', `Connecté · ${noun(target.channels.length, 'live')}${when ? ` · ${when}` : ''}`);
+    }
   }
 
-  async function loadCatalog(force = false) {
+  async function loadCatalog(force = false, kind = state.kind) {
     try {
-      applyCatalog(await request(`/api/catalog${force ? '?refresh=1' : ''}`));
-      if (force) toast('Catalogue actualisé');
+      applyCatalog(await request(`/api/catalog?kind=${kind}${force ? '&refresh=1' : ''}`));
+      if (force) toast(`Catalogue ${KIND[kind].label.toLowerCase()} actualisé`);
       return true;
     } catch (error) {
-      setConnection('error', 'Fournisseur injoignable');
-      showError(`Catalogue indisponible : ${error.message}`);
+      if (kind === 'live') setConnection('error', 'Fournisseur injoignable');
+      showError(`Catalogue ${KIND[kind].label.toLowerCase()} indisponible : ${error.message}`);
       return false;
     }
+  }
+
+  /** Charge un catalogue une seule fois (requêtes simultanées partagées), puis rafraîchit l'affichage. */
+  function ensureCatalog(kind) {
+    const target = state.cat[kind];
+    if (target.catalogLoaded) return Promise.resolve(true);
+    if (!target.loading) {
+      target.loading = loadCatalog(false, kind).then((ok) => { target.loading = null; refresh(); return ok; });
+    }
+    return target.loading;
+  }
+
+  async function switchKind(kind) {
+    if (!KIND[kind] || kind === state.kind) return;
+    state.kind = kind;
+    state.limit = PAGE;
+    $('search').value = '';
+    $('cat-search').value = '';
+    $('prov-search').value = '';
+    $('ch-state').value = 'all';
+    document.querySelectorAll('[data-kind]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.kind === kind)));
+    $('tab-items-label').textContent = K().title;
+    $('search').placeholder = `Rechercher ${state.kind === 'live' ? 'une chaîne' : state.kind === 'vod' ? 'un film' : 'une série'}…`;
+    renderCategorySelect();
+    refresh();
+    if (state.view === 'catalog') renderProvider();
+    await ensureCatalog(kind);
+    if (state.view === 'catalog') renderProvider();
   }
 
   async function loadAccount() {
@@ -810,7 +951,7 @@
     else showError(playlists.reason.message);
     load(state.playlists.length ? [...state.playlists].sort((a, b) => collator.compare(a.name, b.name))[0] : null);
     if (location.hash === '#catalogue') switchView('catalog');
-    if (await loadCatalog()) refresh();
+    if (await loadCatalog(false, 'live')) refresh();
     loadAccount();
   }
 
@@ -821,6 +962,7 @@
     $('name').focus();
   });
   $('save').addEventListener('click', save);
+  document.querySelectorAll('[data-kind]').forEach((btn) => btn.addEventListener('click', () => switchKind(btn.dataset.kind)));
   $('view-btn-playlists').addEventListener('click', () => switchView('playlists'));
   $('view-btn-catalog').addEventListener('click', () => switchView('catalog'));
   $('prov-search').addEventListener('input', debounce(renderProvider, 200));
@@ -843,7 +985,7 @@
     $('refresh').disabled = true;
     clearError();
     setConnection('', 'Actualisation…');
-    if (await loadCatalog(true)) { refresh(); if (state.view === 'catalog') renderProvider(); }
+    if (await loadCatalog(true, state.kind)) { refresh(); if (state.view === 'catalog') renderProvider(); }
     $('refresh').disabled = false;
   });
   $('name').addEventListener('input', () => {
@@ -894,7 +1036,7 @@
     const found = filteredChannels();
     if (found.length > 50 && !(await ask({
       title: on ? 'Retenir les résultats' : 'Écarter les résultats',
-      text: `${on ? 'Retenir' : 'Écarter'} ${found.length.toLocaleString('fr-FR')} chaînes correspondant aux filtres actuels ?`,
+      text: `${on ? 'Retenir' : 'Écarter'} ${noun(found.length)} correspondant aux filtres actuels ?`,
       okLabel: on ? 'Retenir' : 'Écarter',
     }))) return;
     found.forEach((c) => setChannel(c, on));
@@ -902,8 +1044,8 @@
   };
   $('ch-check').addEventListener('click', () => bulk(true));
   $('ch-uncheck').addEventListener('click', () => bulk(false));
-  $('clear-included').addEventListener('click', () => { state.included.clear(); refresh(); });
-  $('clear-excluded').addEventListener('click', () => { state.excluded.clear(); refresh(); });
+  $('clear-included').addEventListener('click', () => { KINDS.forEach((k) => state.sel[k].included.clear()); refresh(); });
+  $('clear-excluded').addEventListener('click', () => { KINDS.forEach((k) => state.sel[k].excluded.clear()); refresh(); });
 
   document.addEventListener('keydown', (event) => {
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') { event.preventDefault(); save(); }

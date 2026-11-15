@@ -1,14 +1,14 @@
 # Prompt à transmettre à l'IA suivante
 
-Tu reprends le projet existant **Xtream M3U Local** (version 2.1.0). **Commence par lire `PASSATION_IA.md`, puis `README.md` et le code (`app/`, `tests/`). Ne repars pas de zéro.**
+Tu reprends le projet existant **Xtream M3U Local** (version 2.2.0). **Commence par lire `PASSATION_IA.md`, puis `README.md` et le code (`app/`, `tests/`). Ne repars pas de zéro.**
 
 ## Contexte
 
 Serveur Unraid « Tower » (appdata sur pool NVMe), abonnement Xtream Codes valide : `player_api.php` fonctionne et la lecture directe `/live/USER/PASS/ID.ts` aussi, mais `get.php` ne donne pas de playlist. Le projet reconstruit les playlists depuis l'API Xtream :
 
 - **un seul conteneur Docker**, Python 3.13 bibliothèque standard, interface HTML/CSS/JS sans framework ;
-- **port 7777** : `/p/<nom>.m3u` (playlists personnalisées à URL permanente), `/p/<nom>.xml` (EPG filtré), `/playlist.m3u`, `/stream/<id>.ts`, `/epg.xml` ;
-- **port 7778** : interface Web en français, responsive — vue « Mes playlists » (catégories, chaînes, inclusions/exclusions, ordre et noms de groupes, plusieurs playlists) et vue « Catalogue fournisseur » (lecture seule, ordre/IDs/`parent_id` d'origine, export JSON) ;
+- **port 7777** : `/p/<nom>.m3u` (playlists personnalisées à URL permanente : TV en direct, films et séries), `/p/<nom>.xml` (EPG filtré), `/playlist.m3u`, `/stream/<id>.ts`, `/movie/<id>.<ext>`, `/series/<id>.<ext>`, `/epg.xml` ;
+- **port 7778** : interface Web en français, responsive — vue « Mes playlists » (sélecteur direct/films/séries, catégories, éléments, inclusions/exclusions, ordre et noms de groupes, plusieurs playlists) et vue « Catalogue fournisseur » (lecture seule, ordre/IDs/`parent_id` d'origine, export JSON) ;
 - données dans `/data/playlists.json` ; configuration Xtream uniquement par variables d'environnement (Compose / `.env` / template Unraid).
 
 ## Règles

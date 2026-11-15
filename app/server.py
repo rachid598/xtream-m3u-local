@@ -24,12 +24,14 @@ from urllib.parse import parse_qs, quote, urlencode, urlsplit
 from urllib.request import Request, urlopen
 
 from . import __version__
-from .custom import CATEGORY_RE, UNCATEGORIZED, PlaylistStore, filter_channels
+from .custom import CATEGORY_RE, UNCATEGORIZED, PlaylistStore, filter_channels, filter_kind, uses
 from .epg import EpgCache, EpgUnavailable
+from .vod import SeriesCache, episode_name, mime_for, normalize_movie, normalize_series
 
 LOG = logging.getLogger("xtream-m3u-local")
 DEFAULT_USER_AGENT = f"XtreamM3ULocal/{__version__}"
 STREAM_RE = re.compile(r"^/stream/([0-9]{1,12})\.ts$")
+VOD_RE = re.compile(r"^/(movie|series)/([0-9]{1,12})\.([A-Za-z0-9]{1,5})$")
 CUSTOM_RE = re.compile(r"^/p/([a-z0-9][a-z0-9_-]{0,59})\.(m3u|xml)$")
 HOST_RE = re.compile(r"^[a-zA-Z0-9.\-:\[\]]+$")
 TRUE_VALUES = ("1", "true", "yes", "on", "oui")
@@ -93,6 +95,8 @@ class Config:
     web_password: str = ""
     user_agent: str = DEFAULT_USER_AGENT
     epg_cache_hours: int = 12
+    series_cache_hours: int = 24
+    series_fetch_seconds: int = 20
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -130,6 +134,8 @@ class Config:
             web_password=os.environ.get("WEB_PASSWORD", ""),
             user_agent=os.environ.get("XTREAM_USER_AGENT", "").strip() or DEFAULT_USER_AGENT,
             epg_cache_hours=max(1, _env_int("EPG_CACHE_HOURS", 12)),
+            series_cache_hours=max(1, _env_int("SERIES_CACHE_HOURS", 24)),
+            series_fetch_seconds=max(0, _env_int("SERIES_FETCH_SECONDS", 20)),
         )
 
 
@@ -177,41 +183,72 @@ def normalize_channel(entry: object) -> dict | None:
     }
 
 
+KINDS = {
+    # type : (action catégories, action contenus, normalisation, libellé)
+    "live": ("get_live_categories", "get_live_streams", normalize_channel, "chaînes"),
+    "vod": ("get_vod_categories", "get_vod_streams", normalize_movie, "films"),
+    "series": ("get_series_categories", "get_series", normalize_series, "séries"),
+}
+# Préfixe des groupes dans les playlists : les identifiants de catégories des films et séries
+# peuvent coïncider avec ceux du direct ; le direct reste sans préfixe (compatibilité V2).
+GROUP_PREFIX = {"live": "", "vod": "vod:", "series": "series:"}
+
+
+class _KindState:
+    def __init__(self) -> None:
+        self.items: list[dict] | None = None
+        self.categories: dict[str, str] = {}
+        self.category_meta: dict[str, dict] = {}
+        self.raw_categories: list = []
+        self.raw_streams: list = []
+        self.categories_error: str | None = None
+        self.expires_at = 0.0
+        self.retry_at = 0.0
+        self.updated_at: float | None = None
+        self.last_error: str | None = None
+        self.lock = threading.Lock()
+
+
 class XtreamAPI:
-    """Client Xtream avec cache mémoire du catalogue et repli sur cache périmé."""
+    """Client Xtream : catalogues direct / films / séries en cache mémoire, repli sur cache périmé."""
 
     RETRY_AFTER_FAILURE = 60
 
     def __init__(self, config: Config):
         self.config = config
-        self._lock = threading.Lock()
-        self._channels: list[dict] | None = None
-        self._categories: dict[str, str] = {}
-        # Organisation d'origine du fournisseur (ordre, parent_id, provenance) + réponses brutes.
-        self.category_meta: dict[str, dict] = {}
-        self.raw_categories: list = []
-        self.raw_streams: list = []
-        self.categories_error: str | None = None
-        self._expires_at = 0.0
-        self._retry_at = 0.0
-        self.updated_at: float | None = None
-        self.last_error: str | None = None
+        self._kinds = {kind: _KindState() for kind in KINDS}
         self._account: dict | None = None
         self._account_expires = 0.0
 
-    def api_url(self, action: str | None = None) -> str:
+    # Attributs historiques (catalogue du direct), utilisés par l'interface et les tests.
+    def kind_state(self, kind: str = "live") -> _KindState:
+        return self._kinds[kind]
+
+    category_meta = property(lambda self: self._kinds["live"].category_meta)
+    raw_categories = property(lambda self: self._kinds["live"].raw_categories)
+    raw_streams = property(lambda self: self._kinds["live"].raw_streams)
+    categories_error = property(lambda self: self._kinds["live"].categories_error)
+    updated_at = property(lambda self: self._kinds["live"].updated_at)
+    last_error = property(lambda self: self._kinds["live"].last_error)
+
+    def api_url(self, action: str | None = None, **extra: str) -> str:
         params = {"username": self.config.username, "password": self.config.password}
         if action:
             params["action"] = action
+        params.update(extra)
         return f"{self.config.xtream_url}/player_api.php?" + urlencode(params)
 
-    def direct_stream(self, stream_id: str, extension: str = "ts") -> str:
+    def direct_url(self, kind: str, item_id: str, extension: str) -> str:
+        """URL fournisseur d'un flux : ``live`` (chaîne), ``movie`` (film) ou ``series`` (épisode)."""
         return (
-            f"{self.config.xtream_url}/live/"
+            f"{self.config.xtream_url}/{kind}/"
             f"{quote(self.config.username, safe='')}/"
             f"{quote(self.config.password, safe='')}/"
-            f"{stream_id}.{extension}"
+            f"{item_id}.{extension}"
         )
+
+    def direct_stream(self, stream_id: str, extension: str = "ts") -> str:
+        return self.direct_url("live", stream_id, extension)
 
     def epg_url(self) -> str:
         return (
@@ -222,11 +259,11 @@ class XtreamAPI:
     def _fetch(self, url: str, label: str):
         req = Request(url, headers={"User-Agent": self.config.user_agent, "Accept": "application/json"})
         try:
-            with urlopen(req, timeout=30) as response:
-                # Refuser les réponses démesurées.
-                raw = response.read(80 * 1024 * 1024 + 1)
-                if len(raw) > 80 * 1024 * 1024:
-                    raise UpstreamError("Réponse API trop volumineuse (> 80 Mo)")
+            with urlopen(req, timeout=60) as response:
+                # Refuser les réponses démesurées (les catalogues VOD peuvent dépasser 50 Mo).
+                raw = response.read(200 * 1024 * 1024 + 1)
+                if len(raw) > 200 * 1024 * 1024:
+                    raise UpstreamError("Réponse API trop volumineuse (> 200 Mo)")
         except UpstreamError:
             raise
         except (HTTPError, URLError, TimeoutError, OSError, HTTPException, ValueError) as exc:
@@ -244,28 +281,37 @@ class XtreamAPI:
         decoded = self._fetch(self.api_url(action), f"action={action}")
         if isinstance(decoded, dict) and not decoded:
             return []
+        if isinstance(decoded, dict) and all(isinstance(v, dict) for v in decoded.values()):
+            # Certains panneaux renvoient un objet indexé au lieu d'une liste.
+            return list(decoded.values())
         if not isinstance(decoded, list):
             raise UpstreamError("Réponse API inattendue : liste absente (identifiants ou abonnement ?)")
         return decoded
 
-    def catalog(self, *, refresh: bool = False) -> tuple[list[dict], dict[str, str]]:
-        with self._lock:
+    def series_info(self, series_id: str) -> object:
+        return self._fetch(self.api_url("get_series_info", series_id=series_id), "action=get_series_info")
+
+    def catalog(self, *, refresh: bool = False, kind: str = "live") -> tuple[list[dict], dict[str, str]]:
+        """``(éléments normalisés, {category_id: nom})`` dans l'ordre du fournisseur."""
+        categories_action, items_action, normalize, label = KINDS[kind]
+        st = self._kinds[kind]
+        with st.lock:
             now = time.monotonic()
-            if self._channels is not None and not refresh and now < self._expires_at:
-                return self._channels, self._categories
-            if self._channels is not None and now < self._retry_at:
-                return self._channels, self._categories
+            if st.items is not None and not refresh and now < st.expires_at:
+                return st.items, st.categories
+            if st.items is not None and now < st.retry_at:
+                return st.items, st.categories
             try:
-                streams = self.get_json("get_live_streams")
+                streams = self.get_json(items_action)
                 if not streams:
-                    LOG.warning("Upstream returned an empty channels list")
+                    LOG.warning("Upstream returned an empty %s list", kind)
                 categories_error = None
                 try:
-                    categories_raw = self.get_json("get_live_categories")
+                    categories_raw = self.get_json(categories_action)
                 except UpstreamError as exc:
                     categories_raw = []
-                    categories_error = f"get_live_categories a échoué : {exc}"
-                    LOG.warning("Categories unavailable; using derived groups")
+                    categories_error = f"{categories_action} a échoué : {exc}"
+                    LOG.warning("Categories unavailable for %s; using derived groups", kind)
                 categories: dict[str, str] = {}
                 meta: dict[str, dict] = {}
                 for item in categories_raw:
@@ -278,30 +324,30 @@ class XtreamAPI:
                     parent = str(item.get("parent_id") if item.get("parent_id") is not None else "").strip()
                     meta[cid] = {"parent_id": parent if parent not in ("", "0") else "",
                                  "source": "provider", "position": len(meta)}
-                channels = [c for c in (normalize_channel(e) for e in streams) if c is not None]
-                for channel in channels:
-                    for cid in channel["category_ids"]:
+                items = [c for c in (normalize(e) for e in streams) if c is not None]
+                for element in items:
+                    for cid in element["category_ids"]:
                         if cid not in categories:
                             categories[cid] = "Sans catégorie" if cid == UNCATEGORIZED else f"Catégorie {cid}"
                             meta[cid] = {"parent_id": "", "source": "derived", "position": len(meta)}
-                self.category_meta = meta
-                self.raw_categories = categories_raw if isinstance(categories_raw, list) else []
-                self.raw_streams = streams
-                self.categories_error = categories_error
-                self._channels = channels
-                self._categories = categories
-                self._expires_at = now + self.config.cache_seconds
-                self._retry_at = 0.0
-                self.updated_at = time.time()
-                self.last_error = None
-                LOG.info("Catalogue chargé : %d chaînes, %d catégories", len(channels), len(categories))
+                st.category_meta = meta
+                st.raw_categories = categories_raw if isinstance(categories_raw, list) else []
+                st.raw_streams = streams
+                st.categories_error = categories_error
+                st.items = items
+                st.categories = categories
+                st.expires_at = now + self.config.cache_seconds
+                st.retry_at = 0.0
+                st.updated_at = time.time()
+                st.last_error = None
+                LOG.info("Catalogue %s chargé : %d %s, %d catégories", kind, len(items), label, len(categories))
             except UpstreamError as exc:
-                self.last_error = str(exc)
-                if self._channels is None:
+                st.last_error = str(exc)
+                if st.items is None:
                     raise
-                self._retry_at = now + self.RETRY_AFTER_FAILURE
-                LOG.warning("Using stale catalog because upstream refresh failed")
-            return self._channels, self._categories
+                st.retry_at = now + self.RETRY_AFTER_FAILURE
+                LOG.warning("Using stale %s catalog because upstream refresh failed", kind)
+            return st.items, st.categories
 
     def account(self) -> dict | None:
         """Résumé de l'abonnement (sans identifiants) ; ``None`` si indisponible."""
@@ -386,7 +432,8 @@ def playlist(config: Config, entries: list[tuple[dict, str]], categories: dict[s
              group_names: dict[str, str] | None = None) -> bytes:
     """Build an M3U (extended) document.
 
-    ``entries`` = ``[(channel, group_category_id), ...]`` ; ``epg_path`` = chemin local du guide XMLTV.
+    ``entries`` = ``[(élément, clé_de_groupe), ...]`` où l'élément est une chaîne (``kind`` absent ou ``live``),
+    un film (``movie``) ou un épisode (``episode``) ; ``epg_path`` = chemin local du guide XMLTV.
     """
     header = "#EXTM3U"
     if config.enable_epg and epg_path:
@@ -404,20 +451,80 @@ def playlist(config: Config, entries: list[tuple[dict, str]], categories: dict[s
         attrs.append(f'tvg-name="{escape_attribute(name)}"')
         if channel.get("logo"):
             attrs.append(f'tvg-logo="{escape_attribute(channel["logo"])}"')
-        if channel.get("num"):
+        kind = channel.get("kind", "live")
+        if channel.get("num") and kind == "live":
             attrs.append(f'tvg-chno="{channel["num"]}"')
         attrs.append(f'group-title="{escape_attribute(group)}"')
         lines.append("#EXTINF:-1 " + " ".join(attrs) + "," + name)
+        path, ext = {"movie": ("movie", channel.get("ext", "mp4")),
+                     "episode": ("series", channel.get("ext", "mp4"))}.get(kind, ("live", fmt))
         if mode == "proxy":
-            target = with_token(f"{base}/stream/{stream_id}.ts", config)
+            local = "stream" if path == "live" else path
+            target = with_token(f"{base}/{local}/{stream_id}.{'ts' if path == 'live' else ext}", config)
         else:
             target = (
-                f"{config.xtream_url}/live/"
+                f"{config.xtream_url}/{path}/"
                 f"{quote(config.username, safe='')}/{quote(config.password, safe='')}/"
-                f"{stream_id}.{fmt}"
+                f"{stream_id}.{ext}"
             )
         lines.append(target)
     return ("\n".join(lines) + "\n").encode("utf-8")
+
+
+def parse_content(raw: str | None, default: tuple[str, ...]) -> tuple[str, ...]:
+    """``?content=live,vod,series`` (ou ``all``) -> tuple ordonnée de types ; ValueError si inconnu."""
+    if not raw:
+        return default
+    if raw == "all":
+        return ("live", "vod", "series")
+    wanted = {part.strip() for part in raw.split(",") if part.strip()}
+    if not wanted or not wanted <= set(KINDS):
+        raise ValueError("content doit valoir live, vod, series (séparés par des virgules) ou all")
+    return tuple(kind for kind in KINDS if kind in wanted)
+
+
+def collect_entries(api: XtreamAPI, series: "SeriesCache", saved: dict, kinds: tuple[str, ...], *,
+                    refresh: bool = False, budget: float = 20) -> tuple[list[tuple[dict, str]], dict[str, str], int]:
+    """Éléments d'une playlist personnalisée, tous types confondus.
+
+    Retourne ``(entrées, {clé_de_groupe: nom}, séries_incomplètes)``. Un type dont le catalogue est
+    indisponible est ignoré (journalisé) tant qu'au moins un autre type a pu être chargé.
+    """
+    entries: list[tuple[dict, str]] = []
+    groups: dict[str, str] = {}
+    incomplete = 0
+    errors: list[UpstreamError] = []
+    attempted = 0
+    for kind in kinds:
+        if not uses(saved, kind):
+            continue
+        attempted += 1
+        prefix = GROUP_PREFIX[kind]
+        try:
+            items, categories = api.catalog(refresh=refresh, kind=kind)
+        except UpstreamError as exc:
+            LOG.warning("Catalogue %s indisponible pour la playlist %s", kind, saved.get("slug"))
+            errors.append(exc)
+            if kind == "series":
+                incomplete += len(saved.get("series_category_ids", [])) + len(saved.get("included_series_ids", []))
+            continue
+        for cid, name in categories.items():
+            groups[prefix + cid] = name
+        selected = filter_kind(items, saved, kind, prefix)
+        if kind != "series":
+            entries.extend(selected)
+            continue
+        episodes, missing = series.episodes_for([item["stream_id"] for item, _ in selected], budget=budget)
+        incomplete += len(missing)
+        for show, group in selected:
+            for ep in episodes.get(show["stream_id"], []):
+                entries.append(({
+                    "kind": "episode", "stream_id": ep["id"], "name": episode_name(show["name"], ep),
+                    "logo": show["logo"] or ep["logo"], "ext": ep["ext"], "epg_id": "", "num": "",
+                }, group))
+    if attempted and len(errors) == attempted:
+        raise errors[-1]
+    return entries, groups, incomplete
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -430,6 +537,7 @@ class Handler(BaseHTTPRequestHandler):
     store: PlaylistStore
     config: Config
     epg: EpgCache
+    series: SeriesCache
 
     def log_message(self, format: str, *args: object) -> None:
         # Ne jamais journaliser la query string (ACCESS_TOKEN).
@@ -445,8 +553,10 @@ class Handler(BaseHTTPRequestHandler):
         self.handle_request(head_only=False)
 
     def response(self, status: int, content: bytes, content_type: str, *, head_only: bool,
-                 filename: str | None = None) -> None:
+                 filename: str | None = None, extra: dict[str, str] | None = None) -> None:
         self.send_response(status)
+        for key, value in (extra or {}).items():
+            self.send_header(key, value)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(content)))
         self.send_header("Cache-Control", "no-store")
@@ -495,7 +605,7 @@ class Handler(BaseHTTPRequestHandler):
             raise ValueError("En-tête Host invalide : définir PUBLIC_BASE_URL")
         return "http://" + host
 
-    def relay(self, upstream_url: str, *, head_only: bool) -> None:
+    def relay(self, upstream_url: str, *, head_only: bool, default_type: str = "video/mp2t") -> None:
         headers = {"User-Agent": self.config.user_agent, "Accept": "*/*"}
         for h in ("Range", "If-Range"):
             if self.headers.get(h):
@@ -505,15 +615,18 @@ class Handler(BaseHTTPRequestHandler):
         try:
             with urlopen(request, timeout=45) as upstream:
                 self.send_response(upstream.status)
-                for key in ("Content-Type", "Content-Length", "Content-Range", "Accept-Ranges"):
+                for key in ("Content-Type", "Content-Length", "Content-Range", "Accept-Ranges",
+                            "Last-Modified", "ETag"):
                     value = upstream.headers.get(key)
                     if value:
                         self.send_header(key, value)
                 if not upstream.headers.get("Content-Type"):
-                    self.send_header("Content-Type", "video/mp2t")
+                    self.send_header("Content-Type", default_type)
                 self.send_header("Cache-Control", "no-store")
                 self.end_headers()
                 headers_sent = True
+                if head_only:
+                    return
                 reader = getattr(upstream, "read1", upstream.read)
                 while True:
                     chunk = reader(64 * 1024)
@@ -567,11 +680,24 @@ class Handler(BaseHTTPRequestHandler):
             if mode == "proxy" and fmt != "ts":
                 return self._error(400, "Le proxy prend en charge TS ; utiliser mode=direct pour HLS", head_only=head_only)
             try:
+                kinds = parse_content(qs.get("content", [""])[0], ("live",))
+                if "series" in kinds:
+                    raise ValueError("Les séries ne sont pas proposées dans la playlist complète "
+                                     "(un appel par série) : crée une playlist personnalisée")
                 base = self.public_base()
-                channels, categories = self.api.catalog(refresh=refresh)
-                entries = order_entries([(c, c["category_id"]) for c in channels], categories)
-                content = playlist(self.config, entries, categories, base, mode=mode, fmt=fmt)
-            except (ValueError, UpstreamError) as exc:
+                entries = []
+                groups: dict[str, str] = {}
+                for kind in kinds:
+                    items, categories = self.api.catalog(refresh=refresh, kind=kind)
+                    prefix = GROUP_PREFIX[kind]
+                    groups.update({prefix + cid: name for cid, name in categories.items()})
+                    entries.extend((c, prefix + c["category_id"]) for c in items)
+                entries = order_entries(entries, groups)
+                content = playlist(self.config, entries, groups, base, mode=mode, fmt=fmt,
+                                   epg_path="/epg.xml" if "live" in kinds else None)
+            except ValueError as exc:
+                return self._error(400, str(exc), head_only=head_only)
+            except UpstreamError as exc:
                 LOG.warning("Cannot build playlist: %s", str(exc))
                 return self._error(502, str(exc), head_only=head_only)
             return self.response(HTTPStatus.OK, content, "audio/x-mpegurl; charset=utf-8",
@@ -587,23 +713,41 @@ class Handler(BaseHTTPRequestHandler):
                 return self._error(500, "Sauvegarde des playlists illisible", head_only=head_only)
             if saved is None:
                 return self._error(404, "Playlist introuvable", head_only=head_only)
+            incomplete = 0
             try:
-                channels, categories = self.api.catalog(refresh=refresh)
-                entries = order_entries(filter_channels(channels, saved), categories, saved.get("group_order"))
                 if ext == "xml":
-                    ids = {c["epg_id"] for c, _ in entries if c.get("epg_id")}
+                    channels, _ = self.api.catalog(refresh=refresh)
+                    ids = {c["epg_id"] for c, _ in filter_channels(channels, saved) if c.get("epg_id")}
                     path_out = self.epg.filtered(slug, ids)
                     return self.send_file(path_out, "application/xml; charset=utf-8",
                                           head_only=head_only, filename=f"{slug}.xml")
-                content = playlist(self.config, entries, categories, self.public_base(),
-                                   epg_path=f"/p/{slug}.xml", group_names=saved.get("group_names"))
+                kinds = parse_content(qs.get("content", [""])[0], tuple(KINDS))
+                entries, groups, incomplete = collect_entries(
+                    self.api, self.series, saved, kinds, refresh=refresh,
+                    budget=0 if head_only else self.config.series_fetch_seconds)
+                entries = order_entries(entries, groups, saved.get("group_order"))
+                has_live = "live" in kinds and uses(saved, "live")
+                content = playlist(self.config, entries, groups, self.public_base(),
+                                   epg_path=f"/p/{slug}.xml" if has_live else None,
+                                   group_names=saved.get("group_names"))
             except EpgUnavailable as exc:
                 return self._error(502, str(exc), head_only=head_only)
-            except (ValueError, UpstreamError) as exc:
+            except ValueError as exc:
+                return self._error(400, str(exc), head_only=head_only)
+            except UpstreamError as exc:
                 LOG.warning("Cannot build custom playlist: %s", str(exc))
                 return self._error(502, f"Impossible de générer la playlist : {exc}", head_only=head_only)
-            return self.response(200, content, "audio/x-mpegurl; charset=utf-8",
-                                 head_only=head_only, filename=f"{slug}.m3u")
+            if incomplete:
+                LOG.info("Playlist %s : épisodes de %d série(s) encore en chargement", slug, incomplete)
+            return self.response(200, content, "audio/x-mpegurl; charset=utf-8", head_only=head_only,
+                                 filename=f"{slug}.m3u",
+                                 extra={"X-Series-Pending": str(incomplete)} if incomplete else None)
+        vod = VOD_RE.fullmatch(path)
+        if vod:
+            kind, item_id, ext = vod.group(1), vod.group(2), vod.group(3).lower()
+            # Films et épisodes : Range transmis (avance rapide) ; HEAD relayé pour la taille du fichier.
+            return self.relay(self.api.direct_url(kind, item_id, ext), head_only=head_only,
+                              default_type=mime_for(ext))
         match = STREAM_RE.fullmatch(path)
         if match:
             if head_only:
@@ -636,13 +780,19 @@ def make_epg(config: Config, api: XtreamAPI) -> EpgCache:
                     user_agent=config.user_agent)
 
 
+def make_series(config: Config, api: XtreamAPI) -> SeriesCache:
+    return SeriesCache(api.series_info, config.data_dir, max_age=config.series_cache_hours * 3600)
+
+
 def make_server(config: Config, *, host: str = "0.0.0.0", port: int | None = None,
                 api: XtreamAPI | None = None, store: PlaylistStore | None = None,
-                epg: EpgCache | None = None) -> ThreadingHTTPServer:
+                epg: EpgCache | None = None, series: SeriesCache | None = None) -> ThreadingHTTPServer:
     api = api or XtreamAPI(config)
     store = store or PlaylistStore(config.data_dir)
     epg = epg or make_epg(config, api)
-    handler = type("ConfiguredHandler", (Handler,), {"api": api, "config": config, "store": store, "epg": epg})
+    series = series or make_series(config, api)
+    handler = type("ConfiguredHandler", (Handler,),
+                   {"api": api, "config": config, "store": store, "epg": epg, "series": series})
     server = ThreadingHTTPServer((host, config.port if port is None else port), handler)
     server.daemon_threads = True
     return server
@@ -695,8 +845,9 @@ def main() -> None:
     api = XtreamAPI(config)
     store = PlaylistStore(config.data_dir)
     epg = make_epg(config, api)
-    server = make_server(config, api=api, store=store, epg=epg)
-    web = make_web_server(config, api, store, epg=epg)
+    series = make_series(config, api)
+    server = make_server(config, api=api, store=store, epg=epg, series=series)
+    web = make_web_server(config, api, store, epg=epg, series=series)
     worker = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.5}, daemon=True)
     worker.start()
     LOG.info("Xtream M3U Local %s : playlists sur le port %d, interface Web sur le port %d",

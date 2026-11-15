@@ -203,6 +203,28 @@ label { display: block; font-size: 12.5px; font-weight: 600; color: var(--text-s
 .playlist-item .pl-meta { font-size: 12px; color: var(--text-faint); font-family: var(--mono); }
 .empty { color: var(--text-faint); font-size: 13px; padding: 10px 2px; }
 
+/* ------------------------------------------------------------ content kinds */
+.kinds { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; }
+.kind-btn {
+  display: inline-flex; align-items: center; gap: 6px; font: inherit; font-size: 13px; font-weight: 650;
+  padding: 8px 14px; min-height: 38px; border-radius: 99px; cursor: pointer;
+  border: 1px solid var(--border-strong); background: var(--bg-soft); color: var(--text-soft);
+}
+.kind-btn:hover { background: var(--bg-hover); }
+.kind-btn[aria-pressed=true] { background: var(--accent-soft); border-color: var(--accent); color: var(--text); }
+.kind-btn:focus-visible { outline: 2px solid var(--accent-strong); outline-offset: 2px; }
+.kind-count { font-size: 11.5px; font-weight: 700; color: var(--accent-strong); font-variant-numeric: tabular-nums; }
+.kind-count:empty { display: none; }
+.kind-tag { display: inline-block; font-size: 10.5px; font-weight: 700; letter-spacing: .02em; text-transform: uppercase; border-radius: 6px; padding: 2px 6px; flex: none; background: var(--bg-elev); color: var(--text-faint); border: 1px solid var(--border); }
+.kind-tag.vod { color: #c084fc; border-color: color-mix(in srgb, #c084fc 40%, transparent); }
+.kind-tag.series { color: #38bdf8; border-color: color-mix(in srgb, #38bdf8 40%, transparent); }
+.thumb.poster { width: 36px; height: 52px; }
+.thumb.poster img { object-fit: cover; }
+.link-btn { font: inherit; font-size: 12px; font-weight: 600; background: none; border: 0; padding: 2px 0; color: var(--accent-strong); cursor: pointer; text-align: left; align-self: flex-start; }
+.link-btn:hover { text-decoration: underline; }
+.link-btn:disabled { color: var(--text-faint); cursor: default; text-decoration: none; }
+.ok-text { color: var(--ok); }
+
 /* --------------------------------------------------------------------- tabs */
 .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin: -4px 0 14px; overflow-x: auto; scrollbar-width: none; }
 [role=tab] {
@@ -347,6 +369,7 @@ dialog .field { margin-bottom: 16px; }
   .group-row { flex-wrap: wrap; }
   [role=tab] { flex: 1; padding: 10px 6px; font-size: 13px; }
   [role=tab] .count { display: none; }
+  .kind-btn { flex: 1; justify-content: center; padding: 8px 6px; font-size: 12.5px; }
   .subtitle, .hide-sm { display: none; }
   .layout { padding: 12px 12px; gap: 12px; }
   .card { padding: 14px; }
@@ -365,3 +388,5 @@ dialog .field { margin-bottom: 16px; }
 @media (prefers-reduced-motion: reduce) {
   * { animation: none !important; transition: none !important; }
 }
+
+#save { gap: .3em; }

@@ -116,6 +116,35 @@ try {
   const { text: m3u2 } = await fetchText(url);
   assert(!m3u2.includes('group-title="FR | Sport"') && (m3u2.match(/#EXTINF/g) || []).length < entries, 'contenu mis à jour');
 
+  // Films et séries dans la même playlist (même URL)
+  const kindBtn = (kind) => page.locator(`#view-playlists [data-kind="${kind}"]`);
+  await kindBtn('vod').click();
+  await catBox(page, 'VOD | Action').waitFor({ timeout: 10000 });
+  await catBox(page, 'VOD | Action').check();
+  await kindBtn('series').click();
+  await catBox(page, 'Séries | Drame').waitFor({ timeout: 10000 });
+  await catBox(page, 'Séries | Drame').check();
+  assert(num(await page.innerText('#stat-vod')) > 0 && num(await page.innerText('#stat-series')) > 0, 'compteurs films/séries');
+  await page.click('#tab-channels');
+  assert((await page.innerText('#tab-items-label')) === 'Séries', 'onglet Séries');
+  await page.locator('#channels .link-btn').first().click();
+  await waitFor(async () => /épisode/.test(await page.locator('#channels .ok-text').first().innerText()), 'épisodes affichés');
+  if (shots) await page.screenshot({ path: join(shots, 'desktop-series.png') });
+  await page.click('#tab-summary');
+  assert(await page.locator('#sum-groups .kind-tag.vod').count() >= 1, 'groupe films dans le résumé');
+  assert(await page.locator('#sum-groups .kind-tag.series').count() >= 1, 'groupe séries dans le résumé');
+  await page.click('#save');
+  await waitFor(async () => !(await page.isVisible('#dirty')), 'enregistrement films/séries');
+  const { text: m3u3 } = await fetchText(url);
+  assert(/\/movie\/\d+\.(mkv|mp4)\n/.test(m3u3), 'liens films dans le M3U');
+  assert(/\/series\/\d+\.mkv\n/.test(m3u3), 'liens épisodes dans le M3U');
+  assert(m3u3.includes('group-title="VOD | Action"') && m3u3.includes('group-title="Séries | Drame"'), 'groupes films/séries');
+  assert(/ S01 E01 - Épisode 1\n/.test(m3u3), 'nommage des épisodes');
+  const { text: onlyMovies } = await fetchText(`${url}?content=vod`);
+  assert(!onlyMovies.includes('/stream/') && onlyMovies.includes('/movie/'), 'filtre content=vod');
+  await page.click('#tab-categories');
+  await kindBtn('live').click();
+
   // Vue « Catalogue fournisseur » (lecture seule) + export JSON
   await page.click('#view-btn-catalog');
   assert(await page.isHidden('#view-playlists') && await page.isVisible('#view-catalog'), 'bascule de vue');
@@ -129,6 +158,12 @@ try {
   await page.click('#prov-expand');
   await page.fill('#prov-search', 'football');
   await waitFor(async () => (await page.locator('#prov-results h3').count()) === 2, 'résultats de recherche');
+  await page.locator('#view-catalog [data-kind="vod"]').click();
+  await waitFor(async () => (await page.innerText('#prov-actions')).includes('get_vod_streams'), 'catalogue films');
+  assert((await page.getAttribute('#export', 'href')).includes('kind=vod'), 'export films');
+  await page.locator('#view-catalog [data-kind="live"]').click();
+  await page.fill('#prov-search', 'football');
+  await waitFor(async () => (await page.locator('#prov-results h3').count()) === 2, 'résultats de recherche (direct)');
   const exportHref = await page.getAttribute('#export', 'href');
   const exported = JSON.parse((await fetchText(`${base}${exportHref}`)).text);
   assert(Array.isArray(exported.get_live_categories) && exported.get_live_categories.some((c) => String(c.parent_id) === '3'), 'export JSON');

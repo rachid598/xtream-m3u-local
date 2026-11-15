@@ -14,9 +14,12 @@ from urllib.parse import parse_qs, urlsplit
 from . import __version__
 from .custom import InvalidPlaylist, PlaylistStore
 from .epg import EpgCache
+import threading
 import time
 
-from .server import Config, UpstreamError, XtreamAPI, redact
+from .custom import filter_kind, uses
+from .server import KINDS, Config, UpstreamError, XtreamAPI, redact
+from .vod import SeriesCache
 
 LOG = logging.getLogger("xtream-m3u-local.web")
 STATIC_DIR = Path(__file__).with_name("static")
@@ -28,6 +31,7 @@ STATIC_FILES = {
     "/static/favicon.svg": ("favicon.svg", "image/svg+xml"),
 }
 SLUG_API = re.compile(r"^/api/playlists/([a-z0-9][a-z0-9_-]{0,59})$")
+SERIES_API = re.compile(r"^/api/series/([0-9]{1,12})$")
 CSP = (
     "default-src 'none'; style-src 'self'; script-src 'self'; connect-src 'self'; "
     "img-src 'self' data: http: https:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
@@ -42,6 +46,7 @@ class WebHandler(BaseHTTPRequestHandler):
     api: XtreamAPI
     store: PlaylistStore
     epg: EpgCache | None = None
+    series: SeriesCache | None = None
 
     def log_message(self, format: str, *args: object) -> None:
         LOG.info("%s %s %s", self.client_address[0], self.command, urlsplit(self.path).path)
@@ -127,34 +132,47 @@ class WebHandler(BaseHTTPRequestHandler):
                 return self.json(200, self.store.list())
             except RuntimeError:
                 return self.json(500, {"error": "Sauvegarde illisible : vérifie /data/playlists.json"})
+        kind = qs.get("kind", ["live"])[0]
+        refresh = qs.get("refresh", [""])[0] == "1"
+        if path in ("/api/catalog", "/api/catalog/export") and kind not in KINDS:
+            return self.json(400, {"error": "kind doit valoir live, vod ou series"})
         if path == "/api/catalog/export":
-            return self.export_catalog(refresh=qs.get("refresh", [""])[0] == "1")
+            return self.export_catalog(refresh=refresh, kind=kind)
         if path == "/api/catalog":
             try:
-                channels, categories = self.api.catalog(refresh=qs.get("refresh", [""])[0] == "1")
+                items, categories = self.api.catalog(refresh=refresh, kind=kind)
             except UpstreamError as exc:
                 return self.json(502, {"error": str(exc)})
-            return self.json(200, catalog_payload(channels, categories, self.api))
+            return self.json(200, catalog_payload(items, categories, self.api, kind))
+        series_match = SERIES_API.fullmatch(path)
+        if series_match and self.series is not None:
+            episodes = self.series.episodes(series_match.group(1), refresh=refresh, timeout=30)
+            if episodes is None:
+                return self.json(502, {"error": "Épisodes indisponibles (get_series_info)"})
+            return self.json(200, {"series_id": series_match.group(1), "episodes": episodes})
         return self.json(404, {"error": "Route introuvable"})
 
-    def export_catalog(self, *, refresh: bool) -> None:
+    def export_catalog(self, *, refresh: bool, kind: str = "live") -> None:
         """Copie de la structure d'origine (réponses brutes ``player_api.php``), identifiants masqués."""
         try:
-            channels, categories = self.api.catalog(refresh=refresh)
+            items, categories = self.api.catalog(refresh=refresh, kind=kind)
         except UpstreamError as exc:
             return self.json(502, {"error": str(exc)})
-        stamp = time.strftime("%Y%m%d-%H%M%S", time.localtime(self.api.updated_at or time.time()))
+        st = self.api.kind_state(kind)
+        categories_action, items_action = KINDS[kind][0], KINDS[kind][1]
+        stamp = time.strftime("%Y%m%d-%H%M%S", time.localtime(st.updated_at or time.time()))
         document = {
             "generator": f"Xtream M3U Local {__version__}",
+            "kind": kind,
             "exported_at": int(time.time()),
-            "catalog_updated_at": int(self.api.updated_at) if self.api.updated_at else None,
-            "note": "Réponses brutes de player_api.php (get_live_categories, get_live_streams), "
+            "catalog_updated_at": int(st.updated_at) if st.updated_at else None,
+            "note": f"Réponses brutes de player_api.php ({categories_action}, {items_action}), "
                     "dans l'ordre du fournisseur. Identifiants remplacés par ***.",
-            "categories_error": self.api.categories_error,
-            "counts": {"categories": len(self.api.raw_categories), "streams": len(self.api.raw_streams),
-                       "valid_streams": len(channels), "groups": len(categories)},
-            "get_live_categories": redact(self.api.raw_categories, self.config),
-            "get_live_streams": redact(self.api.raw_streams, self.config),
+            "categories_error": st.categories_error,
+            "counts": {"categories": len(st.raw_categories), "streams": len(st.raw_streams),
+                       "valid_streams": len(items), "groups": len(categories)},
+            categories_action: redact(st.raw_categories, self.config),
+            items_action: redact(st.raw_streams, self.config),
         }
         data = json.dumps(document, ensure_ascii=False, indent=1).encode("utf-8")
         self.send_response(200)
@@ -162,7 +180,7 @@ class WebHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(data)))
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
-        self.send_header("Content-Disposition", f'attachment; filename="catalogue-xtream-{stamp}.json"')
+        self.send_header("Content-Disposition", f'attachment; filename="catalogue-xtream-{kind}-{stamp}.json"')
         self.end_headers()
         if self.command != "HEAD":
             self.wfile.write(data)
@@ -180,6 +198,7 @@ class WebHandler(BaseHTTPRequestHandler):
             "catalog_error": self.api.last_error,
             "categories_error": self.api.categories_error,
             "data_file": str(self.store.path),
+            "series_cache": self.series.stats() if self.series is not None else None,
         }
         # Le token des lecteurs n'est transmis que si l'interface est protégée par mot de passe.
         if self.config.access_token and self.config.web_password:
@@ -221,7 +240,9 @@ class WebHandler(BaseHTTPRequestHandler):
         if body is None:
             return
         try:
-            return self.json(201, self.store.save(body))
+            saved = self.store.save(body)
+            self.prefetch_series(saved)
+            return self.json(201, saved)
         except InvalidPlaylist as exc:
             return self.json(400, {"error": str(exc)})
         except RuntimeError:
@@ -237,13 +258,32 @@ class WebHandler(BaseHTTPRequestHandler):
         if body is None:
             return
         try:
-            return self.json(200, self.store.save(body, update_slug=match.group(1)))
+            saved = self.store.save(body, update_slug=match.group(1))
+            self.prefetch_series(saved)
+            return self.json(200, saved)
         except KeyError:
             return self.json(404, {"error": "Playlist introuvable"})
         except InvalidPlaylist as exc:
             return self.json(400, {"error": str(exc)})
         except RuntimeError:
             return self.json(500, {"error": "Échec de l'écriture des playlists dans /data (droits du dossier ?)"})
+
+    def prefetch_series(self, saved: dict) -> None:
+        """Après un enregistrement : charge en arrière-plan les épisodes des séries sélectionnées."""
+        if self.series is None or not uses(saved, "series"):
+            return
+
+        def job() -> None:
+            try:
+                items, _ = self.api.catalog(kind="series")
+            except UpstreamError:
+                return
+            ids = [item["stream_id"] for item, _ in filter_kind(items, saved, "series")]
+            count = self.series.prefetch(ids)
+            if count:
+                LOG.info("Playlist %s : préchargement des épisodes de %d série(s)", saved["slug"], count)
+
+        threading.Thread(target=job, daemon=True).start()
 
     def do_DELETE(self) -> None:
         if not self.check_auth():
@@ -263,40 +303,53 @@ class WebHandler(BaseHTTPRequestHandler):
             return self.json(500, {"error": "Impossible de modifier /data"})
 
 
-def catalog_payload(channels: list[dict], categories: dict[str, str], api: XtreamAPI | None = None) -> dict:
-    """Catalogue pour le navigateur : aucun identifiant fournisseur, toutes les catégories avec compteurs."""
+def catalog_payload(channels: list[dict], categories: dict[str, str], api: XtreamAPI | None = None,
+                    kind: str = "live") -> dict:
+    """Catalogue pour le navigateur : aucun identifiant fournisseur, toutes les catégories avec compteurs.
+
+    Même structure pour le direct, les films et les séries (clé ``channels`` = éléments).
+    """
+    st = api.kind_state(kind) if api else None
     counts: Counter[str] = Counter()
     for channel in channels:
         for cid in channel["category_ids"]:
             counts[cid] += 1
-    meta = api.category_meta if api else {}
+    meta = st.category_meta if st else {}
     category_list = []
     for position, (cid, name) in enumerate(categories.items()):
         info = meta.get(cid, {})
         category_list.append({"category_id": cid, "name": name, "count": counts.get(cid, 0),
                               "parent_id": info.get("parent_id", ""), "position": position,
                               "source": info.get("source", "provider")})
-    channel_list = [{
-        "stream_id": c["stream_id"],
-        "name": c["name"],
-        "category_id": c["category_id"],
-        "category_ids": c["category_ids"],
-        "logo": c["logo"],
-        "epg": bool(c["epg_id"]),
-        "num": c["num"],
-    } for c in channels]
+    channel_list = []
+    for c in channels:
+        entry = {
+            "stream_id": c["stream_id"],
+            "name": c["name"],
+            "category_id": c["category_id"],
+            "category_ids": c["category_ids"],
+            "logo": c["logo"],
+            "epg": bool(c["epg_id"]),
+            "num": c["num"],
+        }
+        for extra in ("ext", "year", "rating"):
+            if c.get(extra):
+                entry[extra] = c[extra]
+        channel_list.append(entry)
     return {
+        "kind": kind,
         "categories": category_list,
         "channels": channel_list,
-        "updated_at": int(api.updated_at) if api and api.updated_at else None,
-        "categories_error": api.categories_error if api else None,
+        "updated_at": int(st.updated_at) if st and st.updated_at else None,
+        "categories_error": st.categories_error if st else None,
     }
 
 
 def make_web_server(config: Config, api: XtreamAPI, store: PlaylistStore, *, host: str = "0.0.0.0",
-                    port: int | None = None, epg: EpgCache | None = None) -> ThreadingHTTPServer:
+                    port: int | None = None, epg: EpgCache | None = None,
+                    series: SeriesCache | None = None) -> ThreadingHTTPServer:
     handler = type("ConfiguredWebHandler", (WebHandler,),
-                   {"config": config, "api": api, "store": store, "epg": epg})
+                   {"config": config, "api": api, "store": store, "epg": epg, "series": series})
     server = ThreadingHTTPServer((host, config.web_port if port is None else port), handler)
     server.daemon_threads = True
     return server

@@ -21,6 +21,12 @@ UNCATEGORIZED = "none"
 MAX_PLAYLISTS = 100
 MAX_IDS = 100_000
 MAX_GROUPS = 5_000
+# Champs de sélection par type de contenu (le direct garde les noms de la V2).
+SELECTION_FIELDS = {
+    "live": ("category_ids", "included_stream_ids", "excluded_stream_ids"),
+    "vod": ("vod_category_ids", "included_vod_ids", "excluded_vod_ids"),
+    "series": ("series_category_ids", "included_series_ids", "excluded_series_ids"),
+}
 
 
 class InvalidPlaylist(ValueError):
@@ -81,13 +87,13 @@ def validate_playlist(payload: object, *, slug: str | None = None) -> dict:
         raise InvalidPlaylist("Nom obligatoire (1 à 100 caractères)")
     if any(ch in name for ch in "\r\n\t\x00"):
         raise InvalidPlaylist("Le nom ne doit pas contenir de retour à la ligne")
-    result = {
-        "slug": slug,
-        "name": name.strip(),
-        "category_ids": _ids(payload.get("category_ids"), pattern=CATEGORY_RE, label="catégorie"),
-        "included_stream_ids": _ids(payload.get("included_stream_ids")),
-        "excluded_stream_ids": _ids(payload.get("excluded_stream_ids")),
-    }
+    result: dict = {"slug": slug, "name": name.strip()}
+    for kind, (cats, included, excluded) in SELECTION_FIELDS.items():
+        result[cats] = _ids(payload.get(cats), pattern=CATEGORY_RE, label="catégorie")
+        result[included] = _ids(payload.get(included), label="film" if kind == "vod" else
+                                "série" if kind == "series" else "chaîne")
+        result[excluded] = _ids(payload.get(excluded), label="film" if kind == "vod" else
+                                "série" if kind == "series" else "chaîne")
     result["group_order"] = _ids(payload.get("group_order"), pattern=CATEGORY_RE, label="groupe")[:MAX_GROUPS]
     result["group_names"] = _group_names(payload.get("group_names"))
     updated = payload.get("updated_at")
@@ -96,27 +102,40 @@ def validate_playlist(payload: object, *, slug: str | None = None) -> dict:
     return result
 
 
-def filter_channels(channels: list[dict], saved: dict) -> list[tuple[dict, str]]:
-    """Return ``(channel, group_category_id)`` for each channel of a saved playlist.
+def uses(saved: dict, kind: str) -> bool:
+    """La playlist contient-elle des éléments de ce type (catégories cochées ou ajouts) ?"""
+    cats, included, _ = SELECTION_FIELDS[kind]
+    return bool(saved.get(cats) or saved.get(included))
 
-    Règle : (catégorie sélectionnée OU chaîne ajoutée manuellement) ET chaîne non exclue.
-    Une chaîne présente dans plusieurs catégories (``category_ids``) est rangée dans la
-    première catégorie sélectionnée qui la contient ; sinon dans sa catégorie principale.
+
+def filter_kind(items: list[dict], saved: dict, kind: str, prefix: str = "") -> list[tuple[dict, str]]:
+    """Return ``(item, group_key)`` for each selected item of one type (direct, films ou séries).
+
+    Règle : (catégorie sélectionnée OU élément ajouté manuellement) ET élément non exclu.
+    Un élément présent dans plusieurs catégories (``category_ids``) est rangé dans la
+    première catégorie sélectionnée qui le contient ; sinon dans sa catégorie principale.
+    ``group_key`` = ``prefix`` + identifiant de catégorie (``vod:12``, ``series:5``, ``3``).
     """
-    categories = set(saved["category_ids"])
-    included = set(saved["included_stream_ids"])
-    excluded = set(saved["excluded_stream_ids"])
+    cats_field, included_field, excluded_field = SELECTION_FIELDS[kind]
+    categories = set(saved.get(cats_field, []))
+    included = set(saved.get(included_field, []))
+    excluded = set(saved.get(excluded_field, []))
     result: list[tuple[dict, str]] = []
-    for channel in channels:
-        sid = channel["stream_id"]
+    for item in items:
+        sid = item["stream_id"]
         if sid in excluded:
             continue
-        group = next((cid for cid in channel["category_ids"] if cid in categories), None)
+        group = next((cid for cid in item["category_ids"] if cid in categories), None)
         if group is not None:
-            result.append((channel, group))
+            result.append((item, prefix + group))
         elif sid in included:
-            result.append((channel, channel["category_id"]))
+            result.append((item, prefix + item["category_id"]))
     return result
+
+
+def filter_channels(channels: list[dict], saved: dict) -> list[tuple[dict, str]]:
+    """Chaînes du direct d'une playlist (voir :func:`filter_kind`)."""
+    return filter_kind(channels, saved, "live")
 
 
 class PlaylistStore:

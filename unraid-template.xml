@@ -8,7 +8,7 @@
   <Privileged>false</Privileged>
   <Support>https://github.com/rachid598/xtream-m3u-local/issues</Support>
   <Project>https://github.com/rachid598/xtream-m3u-local</Project>
-  <Overview>Reconstruit des playlists M3U depuis l'API Xtream (player_api.php) quand get.php ne fonctionne pas. Port 7777 : playlists personnalisées permanentes (/p/salon.m3u), relais TS et EPG filtré. Port 7778 : interface Web (catalogue fournisseur, sélection de catégories et de chaînes, plusieurs playlists).</Overview>
+  <Overview>Reconstruit des playlists M3U depuis l'API Xtream (player_api.php) quand get.php ne fonctionne pas. Port 7777 : playlists personnalisées permanentes (/p/salon.m3u) avec TV en direct, films et séries, relais des flux et EPG filtré. Port 7778 : interface Web (catalogue fournisseur, sélection de catégories et de chaînes, plusieurs playlists).</Overview>
   <Category>MediaApp:Video MediaServer:Video</Category>
   <WebUI>http://[IP]:[PORT:7778]/</WebUI>
   <TemplateURL>https://raw.githubusercontent.com/rachid598/xtream-m3u-local/main/unraid-template.xml</TemplateURL>
@@ -27,6 +27,7 @@
   <Config Name="URL publique locale" Target="PUBLIC_BASE_URL" Default="" Mode="" Description="Facultatif, ex. http://192.168.1.10:7777 (vide = automatique)" Type="Variable" Display="advanced" Required="false" Mask="false"></Config>
   <Config Name="EPG" Target="ENABLE_EPG" Default="true" Mode="" Description="Guide des programmes du fournisseur (true/false)" Type="Variable" Display="advanced" Required="false" Mask="false">true</Config>
   <Config Name="Cache catalogue (s)" Target="CACHE_SECONDS" Default="1800" Mode="" Description="Durée de cache de la liste des chaînes" Type="Variable" Display="advanced" Required="false" Mask="false">1800</Config>
+  <Config Name="Cache épisodes (h)" Target="SERIES_CACHE_HOURS" Default="24" Mode="" Description="Durée de cache disque des épisodes de séries" Type="Variable" Display="advanced" Required="false" Mask="false">24</Config>
   <Config Name="PUID" Target="PUID" Default="99" Mode="" Description="Utilisateur propriétaire de /data (nobody sur Unraid)" Type="Variable" Display="advanced" Required="false" Mask="false">99</Config>
   <Config Name="PGID" Target="PGID" Default="100" Mode="" Description="Groupe propriétaire de /data (users sur Unraid)" Type="Variable" Display="advanced" Required="false" Mask="false">100</Config>
   <Config Name="Fuseau horaire" Target="TZ" Default="Europe/Paris" Mode="" Description="Fuseau horaire des journaux" Type="Variable" Display="advanced" Required="false" Mask="false">Europe/Paris</Config>

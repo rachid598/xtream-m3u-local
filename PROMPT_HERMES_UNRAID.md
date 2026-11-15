@@ -88,6 +88,16 @@ Puis attendre 20 s et vérifier :
    → 200 et quelques centaines de Ko. (Une seule lecture à la fois : l'abonnement peut limiter les connexions.)
 8. EPG : curl -s --max-time 120 http://IP:7777/p/test-hermes.xml | head -c 300 → XML <tv>…
    (si 502 : le fournisseur n'a pas d'EPG exploitable ; le noter, ce n'est pas bloquant).
+8b. Films et séries :
+   curl -s "http://IP:7778/api/catalog?kind=vod" | head -c 300      → catégories et films (ou listes vides si l'abonnement n'a pas de VOD)
+   curl -s "http://IP:7778/api/catalog?kind=series" | head -c 300   → catégories et séries
+   Créer une playlist de test VOD avec la première catégorie de films non vide et la première catégorie de séries non vide :
+   curl -s -X POST http://IP:7778/api/playlists -H 'X-Requested-With: XtreamM3ULocal' -H 'Content-Type: application/json' \
+     -d '{"slug":"test-vod","name":"Test VOD","vod_category_ids":["IDF"],"series_category_ids":["IDS"]}'
+   Attendre 30 s (préchargement des épisodes), puis :
+   curl -s http://IP:7777/p/test-vod.m3u | grep -E '/(movie|series)/' | head -n 4   → liens /movie/<id>.<ext> et /series/<id>.<ext>
+   Tester un film : curl -s -r 0-1048575 -o /dev/null -w '%{http_code} %{size_download}\n' "<URL /movie/...>"   → 206 (ou 200) et ~1 Mo
+   Supprimer ensuite la playlist test-vod (DELETE comme à l'étape 11).
 9. Persistance : `docker restart xtream-m3u-local` (ou `docker compose down && docker compose up -d`, SANS -v),
    attendre 15 s, puis vérifier que http://IP:7777/p/test-hermes.m3u répond toujours 200
    et que $DATA_DIR/playlists.json existe (propriétaire 99:100).
@@ -106,7 +116,7 @@ Puis attendre 20 s et vérifier :
 ## Rapport final attendu (sans aucun secret)
 - Pool NVMe utilisé, INSTALL_DIR, DATA_DIR, méthode (Compose ou docker run), image/commit utilisé (`git rev-parse --short HEAD`).
 - Résultat de chaque test de l'étape 5 (OK / échec + message exact).
-- Nombre de catégories et de chaînes, état categories_error, état de l'EPG.
+- Nombre de catégories et de chaînes, de films et de séries ; état categories_error ; état de l'EPG ; résultat du test d'un film et d'un épisode.
 - Les URL à utiliser :
     Interface Web : http://IP:7778/
     Exemple de playlist : http://IP:7777/p/salon.m3u (à créer dans l'interface)

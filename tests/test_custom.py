@@ -111,7 +111,9 @@ class StoreTests(unittest.TestCase):
         data = json.loads(Path(self.tmp.name, "playlists.json").read_text(encoding="utf-8"))
         self.assertEqual(data[0]["slug"], "salon")
         self.assertEqual(set(data[0]), {"slug", "name", "category_ids", "included_stream_ids",
-                                        "excluded_stream_ids", "group_order", "group_names", "updated_at"})
+                                        "excluded_stream_ids", "vod_category_ids", "included_vod_ids",
+                                        "excluded_vod_ids", "series_category_ids", "included_series_ids",
+                                        "excluded_series_ids", "group_order", "group_names", "updated_at"})
         self.assertEqual(list(Path(self.tmp.name).glob(".playlists-*")), [])
 
     def test_backup_used_when_main_file_corrupted(self):

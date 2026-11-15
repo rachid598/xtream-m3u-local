@@ -15,7 +15,7 @@ import random
 import threading
 
 from app.custom import PlaylistStore
-from app.server import Config, XtreamAPI, make_epg, make_server
+from app.server import Config, XtreamAPI, make_epg, make_series, make_server
 from app.web import make_web_server
 from tests import fake_xtream
 
@@ -52,6 +52,33 @@ def build_catalog(total: int) -> None:
         })
     fake_xtream.STREAMS[:] = streams
 
+    # Films et séries fictifs (catégories propres, identifiants indépendants du direct).
+    movie_groups = ["VOD | Nouveautés", "VOD | Action", "VOD | Comédie", "VOD | Animation", "VOD | Documentaires", "VOD | 4K"]
+    fake_xtream.VOD_CATEGORIES[:] = [{"category_id": str(i + 1), "category_name": n, "parent_id": 0}
+                                     for i, n in enumerate(movie_groups)]
+    titles = ["L'Ombre", "Le Retour", "La Mission", "Horizon", "Le Secret", "Minuit", "L'Évasion", "Tempête"]
+    fake_xtream.VOD_STREAMS[:] = [{
+        "num": n, "name": f"{rng.choice(titles)} {n}", "stream_type": "movie", "stream_id": 50000 + n,
+        "stream_icon": "", "rating": f"{rng.uniform(4, 9):.1f}", "category_id": str(rng.randrange(len(movie_groups)) + 1),
+        "container_extension": rng.choice(["mkv", "mp4"]), "year": str(rng.randrange(1990, 2027)),
+    } for n in range(1, max(50, total // 3) + 1)]
+    series_groups = ["Séries | Drame", "Séries | Policier", "Séries | Jeunesse", "Séries | Docu-séries"]
+    fake_xtream.SERIES_CATEGORIES[:] = [{"category_id": str(i + 1), "category_name": n, "parent_id": 0}
+                                        for i, n in enumerate(series_groups)]
+    fake_xtream.SERIES[:] = []
+    fake_xtream.SERIES_INFO.clear()
+    for n in range(1, 61):
+        sid = 70000 + n
+        fake_xtream.SERIES.append({"num": n, "name": f"Série {rng.choice(titles)} {n}", "series_id": sid, "cover": "",
+                                   "category_id": str(rng.randrange(len(series_groups)) + 1),
+                                   "releaseDate": f"{rng.randrange(2005, 2027)}-01-01", "rating": f"{rng.uniform(5, 9):.1f}"})
+        seasons = {}
+        for season in range(1, rng.randrange(1, 4) + 1):
+            seasons[str(season)] = [{"id": str(sid * 100 + season * 20 + e), "episode_num": e, "season": season,
+                                     "title": f"Épisode {e}", "container_extension": "mkv"}
+                                    for e in range(1, rng.randrange(4, 11))]
+        fake_xtream.SERIES_INFO[str(sid)] = {"info": {}, "episodes": seasons}
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -69,8 +96,9 @@ def main() -> None:
     api = XtreamAPI(config)
     store = PlaylistStore(args.data)
     epg = make_epg(config, api)
-    proxy = make_server(config, host=args.host, api=api, store=store, epg=epg)
-    web = make_web_server(config, api, store, host=args.host, epg=epg)
+    series = make_series(config, api)
+    proxy = make_server(config, host=args.host, api=api, store=store, epg=epg, series=series)
+    web = make_web_server(config, api, store, host=args.host, epg=epg, series=series)
     threading.Thread(target=proxy.serve_forever, daemon=True).start()
     print(f"Démo : interface http://{args.host}:{args.web_port}/  —  lecteurs http://{args.host}:{args.port}/")
     try:

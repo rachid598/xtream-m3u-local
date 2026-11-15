@@ -1,6 +1,6 @@
 # Passation — Xtream M3U Local
 
-> **État au 15 novembre 2026 — version 2.1.0.** Document à transmettre tel quel à l'IA suivante avec le dépôt.
+> **État au 15 novembre 2026 — version 2.2.0 (TV en direct + films + séries).** Document à transmettre tel quel à l'IA suivante avec le dépôt.
 > Aucun mot de passe, token ni URL fournisseur réelle ne doit être copié ici ni commité sur GitHub.
 
 ## 1. Objectif utilisateur
@@ -11,6 +11,8 @@ En revanche, `get.php?type=m3u_plus&output=ts|m3u8` ne produit **pas** de playli
 
 But : reconstruire les playlists à partir de l'API Xtream et les diffuser depuis Unraid sous forme d'**URL M3U permanentes**
 (VLC, TiviMate, lecteurs Android TV), avec une interface Web de gestion, en ne saisissant que `XTREAM_URL`, `XTREAM_USERNAME`, `XTREAM_PASSWORD`.
+
+**Retour de l'utilisateur après déploiement réel (2.1.0)** : « ça fonctionne », mais **il manquait la VOD (films et séries)**, absente des URL de lecture → ajoutée en **2.2.0** (section 4 bis).
 
 Demande complémentaire de l'utilisateur (prise en compte en 2.1.0) : **préserver à l'identique le catalogue d'origine du fournisseur**
 (ordre, identifiants, `parent_id`, catégories vides, chaînes associées) avant toute personnalisation, avec une vue
@@ -25,12 +27,16 @@ Demande complémentaire de l'utilisateur (prise en compte en 2.1.0) : **préserv
   - `/playlist.m3u` (toutes les chaînes) et alias `/get.php` ; `?mode=direct&format=ts|m3u8` (liens fournisseur, identifiants visibles) ;
   - `/p/<slug>.m3u` playlist personnalisée ; `/p/<slug>.xml` EPG filtré pour cette playlist ;
   - `/stream/<id>.ts` relais MPEG-TS sans transcodage (Range transmis ; `HEAD` répondu localement sans contacter le fournisseur) ;
+  - `/movie/<id>.<ext>` (film) et `/series/<episode_id>.<ext>` (épisode) : relais vers `/movie/U/P/…` et `/series/U/P/…` du fournisseur, Range/Content-Range/ETag transmis, `HEAD` relayé (taille du fichier) ;
+  - `?content=live|vod|series` (combinables par virgule, ou `all`) sur `/p/<slug>.m3u` ; `/playlist.m3u?content=vod` pour tous les films (séries refusées en playlist complète) ;
   - `/epg.xml` XMLTV complet (cache disque) ; `?refresh=1` force la relecture du catalogue ; `?token=` si `ACCESS_TOKEN`.
 - **Port 7778** (gestion, `app/web.py`) :
   - `/` + `/static/app.css`, `/static/app.js`, `/static/favicon.svg` (liste blanche, aucun accès fichier arbitraire) ;
-  - `GET /api/status[?account=1]`, `GET /api/catalog[?refresh=1]`, `GET /api/catalog/export[?refresh=1]` ;
+  - `GET /api/status[?account=1]`, `GET /api/catalog[?kind=live|vod|series][&refresh=1]`, `GET /api/catalog/export[?kind=…]` ;
+  - `GET /api/series/<series_id>` : épisodes (via `get_series_info`, cache) ;
   - `GET/POST /api/playlists`, `PUT/DELETE /api/playlists/<slug>`.
-- Catalogue : `XtreamAPI.catalog()` (cache mémoire `CACHE_SECONDS`=1800 s, repli sur cache périmé, pas de nouvel essai pendant 60 s après un échec).
+- Catalogues : `XtreamAPI.catalog(kind=…)` — un état indépendant par type (`live`, `vod`, `series`), cache mémoire `CACHE_SECONDS`=1800 s, repli sur cache périmé, pas de nouvel essai pendant 60 s après un échec. Les catalogues films/séries ne sont chargés qu'à la demande.
+- Épisodes : `app/vod.py` → `SeriesCache` (mémoire + `DATA_DIR/cache/series/<id>.json`, 24 h, 4 récupérations parallèles, pas de nouvel essai pendant 5 min après un échec, budget `SERIES_FETCH_SECONDS` par requête M3U, préchargement à l'enregistrement d'une playlist).
 - Données : `DATA_DIR` (`/data`) → `playlists.json` (+ `playlists.json.bak`) et `epg/` (cache XMLTV + EPG filtrés).
 - Démarrage (`python -m app`) : lecture de la config, correction des droits de `/data` puis abandon des privilèges root → `PUID:PGID` (99:100), lancement des deux serveurs, préchargement du catalogue en tâche de fond, arrêt propre sur SIGTERM.
 
@@ -38,10 +44,11 @@ Demande complémentaire de l'utilisateur (prise en compte en 2.1.0) : **préserv
 
 ```text
 app/
-  __init__.py        # __version__ = "2.1.0"
+  __init__.py        # __version__ = "2.2.0"
   __main__.py        # point d'entrée « python -m app » (évite le double import de app.server)
   server.py          # Config, XtreamAPI, normalisation, M3U, port 7777, droits /data, main()
   custom.py          # validation, filtrage, PlaylistStore (JSON atomique + .bak)
+  vod.py             # films/séries : normalisation, nommage des épisodes, SeriesCache
   epg.py             # EpgCache (téléchargement, gzip, cache disque) + filtrage XMLTV en flux
   web.py             # port 7778 : statiques, API REST, export catalogue, Basic Auth, CSRF
   static/index.html  # structure (aucun script/style inline)
@@ -51,7 +58,7 @@ app/
 tests/
   fake_xtream.py     # faux fournisseur Xtream (catégories, parent_id, chaînes multi-catégories, EPG, erreurs)
   helpers.py         # pile complète 7777+7778 sur ports éphémères
-  test_playlist_server.py  test_custom.py  test_web.py  test_epg.py  test_config.py
+  test_playlist_server.py  test_custom.py  test_web.py  test_epg.py  test_config.py  test_vod.py
   e2e_browser.mjs    # scénario navigateur Playwright (Node), lancé manuellement
 tools/demo.py        # démo sans abonnement (1500 chaînes fictives, sous-groupes)
 Dockerfile  compose.yaml  compose.single.example.yaml  compose.ghcr.yaml  docker-create.sh
@@ -92,7 +99,35 @@ Chaque chaîne : `{stream_id, name, logo, epg_id, num, category_id, category_ids
 - Le `slug` est figé après création (URL permanente) ; le nom est modifiable. Les anciens fichiers V2 (sans `group_order`/`group_names`) restent compatibles.
 - Limites : 100 playlists, 100 000 identifiants par liste, slug `^[a-z0-9][a-z0-9_-]{0,59}$`, nom 1–100 caractères.
 
-## 4. Modifications de cette session (V2 → 2.1.0)
+## 4 bis. Session 2 — films (VOD) et séries (2.1.0 → 2.2.0)
+
+**Besoin** : l'abonnement contient des films et des séries, mais seules les chaînes du direct apparaissaient dans les URL M3U.
+
+**API Xtream utilisée**
+| Type | Catégories | Contenus | Lecture fournisseur |
+|---|---|---|---|
+| Direct | `get_live_categories` | `get_live_streams` | `/live/U/P/<stream_id>.ts` |
+| Films | `get_vod_categories` | `get_vod_streams` (`container_extension`, `stream_icon`, `rating`, `year`/`releaseDate`) | `/movie/U/P/<stream_id>.<ext>` |
+| Séries | `get_series_categories` | `get_series` (`series_id`, `cover`) ; épisodes : `get_series_info&series_id=` (`episodes` = dict par saison **ou** liste) | `/series/U/P/<episode_id>.<ext>` |
+
+**Modèle** : nouveaux champs de playlist `vod_category_ids`, `included_vod_ids`, `excluded_vod_ids`, `series_category_ids`, `included_series_ids`, `excluded_series_ids` (mêmes règles que le direct ; anciens fichiers compatibles). Les clés de groupes sont préfixées pour éviter les collisions d'identifiants : direct `12`, films `vod:12`, séries `series:12` (utilisées par `group_order` / `group_names`).
+
+**M3U** : films → `#EXTINF:-1 tvg-name tvg-logo group-title,Titre` + `http://IP:7777/movie/<id>.<ext>` ; épisodes → nom `Série S01 E02 - Titre` (titre ajouté seulement s'il n'est pas une répétition « Série - S01E02 »), affiche de la série, groupe = catégorie de la série, `http://IP:7777/series/<id>.<ext>`. Ordre par défaut : groupes du direct, puis films, puis séries (ordre fournisseur), épisodes triés par saison/numéro. En-tête `url-tvg` seulement si la playlist contient du direct. En-tête HTTP `X-Series-Pending: N` si des épisodes sont encore en cours de récupération.
+
+**Interface** : sélecteur « TV en direct / Films / Séries » (avec compteurs) dans l'éditeur et dans la vue Catalogue fournisseur ; catégories, recherche (titre + année), filtres, ajouts/exclusions par type ; affiches, année, note, extension ; bouton « Voir les épisodes » ; statistiques chaînes/films/séries ; résumé multi-types (étiquette de type sur chaque groupe, ajouts/exclusions de tous types) ; export JSON par type.
+
+**Décisions**
+- Pas de transcodage ni de téléchargement : relais octet par octet avec `Range` (avance rapide dans les films).
+- Séries jamais incluses dans `/playlist.m3u` (des milliers d'appels `get_series_info`) ; uniquement dans les playlists personnalisées.
+- Une erreur sur le catalogue films ou séries n'empêche pas de servir le reste de la playlist (journalisé) ; erreur seulement si tous les types demandés échouent.
+- `get_json` accepte aussi un objet indexé (certains panneaux renvoient `{"1": {...}}` au lieu d'une liste) ; taille maximale d'une réponse API portée à 200 Mo (grosses VOD), délai 60 s.
+- `Host` invalide ou `?content=` inconnu → 400 (au lieu de 502).
+
+**Tests ajoutés** (`tests/test_vod.py`, 15 tests) : normalisation films/séries/épisodes (formes dict et liste), nommage, catalogues `kind=vod|series`, API épisodes, export par type, playlist mixte direct+films+séries (ordre exact des URL), clés de groupes préfixées, échec d'une série (`X-Series-Pending`), cache disque et redémarrage, budget nul, `/playlist.m3u?content=…`, relais film avec Range/HEAD/types MIME, token. Scénario navigateur étendu (films + séries + épisodes + filtre `content=vod` + vue catalogue films). Test conteneur Docker réel : M3U mixte, film 200/206, cache des épisodes dans `/data/cache/series`, aucun secret dans les journaux.
+
+**Points à vérifier en réel** : détection des films/séries par TiviMate en mode M3U (les liens finissent par `.mkv/.mp4` et contiennent `/movie/` ou `/series/` ; sinon déclarer `…/p/films.m3u?content=vod` séparément), poids du M3U avec une grosse VOD, temps de préchargement des séries chez le fournisseur.
+
+## 4. Modifications de la session 1 (V2 → 2.1.0)
 
 ### Bugs corrigés
 1. **Catégories vides et ordre** : l'API Web ne listait que les catégories ayant des chaînes, triées par identifiant texte (« 10 » avant « 2 ») → ordre fournisseur conservé, catégories vides incluses.
@@ -145,7 +180,7 @@ Chaque chaîne : `{stream_id, name, logo, epg_id, num, category_id, category_ids
 
 | Vérification | Résultat |
 |---|---|
-| `python -m unittest discover -s tests -t .` | **65 tests OK** (faux fournisseur local) |
+| `python -m unittest discover -s tests -t .` | **80 tests OK** en 2.2.0 (65 en 2.1.0) — faux fournisseur local avec direct, films, séries, épisodes |
 | `node --check app/static/app.js` | OK |
 | Scénario Chromium `tests/e2e_browser.mjs` sur la démo (1 500 chaînes, sous-groupes) | **OK** : création, exclusion, ajout manuel, réordonnancement/renommage de groupe, M3U conforme à l'URL affichée, modification à URL constante, duplication, suppression, vue catalogue, recherche, export JSON, aucun défilement horizontal à 390 / 768 / 1366 / 1920 px, aucune erreur console |
 | `docker build` (python:3.13-alpine) | OK |
@@ -164,7 +199,8 @@ Couverture des tests unitaires : M3U complet et personnalisé (métadonnées, in
 - **Publication GitHub/GHCR (vérifiée le 15/11/2026)** : code poussé sur `claude/wizardly-keller-bd38ld` de `rachid598/xtream-m3u-local`. Le dépôt étant vide, cette branche est devenue la **branche par défaut**. Le workflow Actions (run n° 1) a réussi : tests OK puis image amd64+arm64 publiée sous `ghcr.io/rachid598/xtream-m3u-local:latest` (+ `sha-279f857`). Le manifeste se résout sans authentification ; le `docker pull` complet n'a pas pu être testé depuis l'environnement de l'IA (réseau bloqué vers `pkg-containers.githubusercontent.com`) → **à confirmer sur Tower**. Si le pull demande une authentification : rendre le package public (GitHub → Packages → xtream-m3u-local → Package settings → Change visibility).
 - Les liens `TemplateURL` / `Icon` du template Unraid et la variable `BRANCH=main` du prompt Hermès supposent une branche `main` : renommer la branche par défaut en `main` (GitHub → Settings → Branches → renommer), ou adapter ces liens.
 - Le relais local est **TS uniquement** (pas de HLS proxifié ; le mode direct HLS expose les identifiants).
-- Pas de renommage/réordonnancement **chaîne par chaîne** (seulement les groupes) ; pas de favoris ; pas de VOD/séries (`get_vod_streams`, `get_series`).
+- Pas de renommage/réordonnancement **élément par élément** (seulement les groupes) ; pas de favoris.
+- Films/séries : non testés avec le vrai fournisseur ni dans TiviMate/VLC réels. Pas de sous-titres externes ni de métadonnées détaillées (synopsis, casting) dans le M3U (le format ne les porte pas). Pas de « catch-up » (replay) du direct.
 - Protection contre le *DNS rebinding* non implémentée (l'API ne contient aucun secret ; `WEB_PASSWORD` recommandé sur un réseau partagé).
 - L'EPG complet est servi tel quel (peut faire des centaines de Mo) ; les playlists personnalisées utilisent l'EPG filtré.
 
@@ -175,8 +211,9 @@ Couverture des tests unitaires : M3U complet et personnalisé (métadonnées, in
    - mêmes groupes que le JSON brut mais pas dans le projet → corriger l'importation ;
    - projet = JSON mais TV différente → filtres/cache de l'application TV.
 3. Tester 2–3 chaînes et une playlist filtrée dans VLC, TiviMate et le lecteur Android TV ; vérifier logos, groupes, EPG ; noter les erreurs exactes.
+3 bis. Tester la VOD : une playlist avec 1 catégorie de films et 1 catégorie de séries ; vérifier l'affichage dans les sections Films/Séries du lecteur (ou en groupes), la lecture, l'avance rapide ; si le lecteur ne range pas la VOD correctement, essayer des URL séparées `?content=live` et `?content=vod,series`.
 4. Renommer la branche par défaut en `main`, vérifier que le package GHCR est public (ou documenter `docker login`), puis tester `compose.ghcr.yaml` / le template Unraid.
-5. Évolutions possibles : renommage et ordre des chaînes, favoris, numérotation personnalisée (`tvg-chno`), VOD/séries, proxy HLS, option `ALLOWED_HOSTS` anti-rebinding, statistiques de lecture, sauvegarde/restauration des playlists depuis l'interface, historique des exports catalogue avec comparaison (diff).
+5. Évolutions possibles : renommage et ordre des chaînes, favoris, numérotation personnalisée (`tvg-chno`), catch-up/replay, filtres VOD (année, note, ajout récent via `added`), proxy HLS, option `ALLOWED_HOSTS` anti-rebinding, statistiques de lecture, sauvegarde/restauration des playlists depuis l'interface, historique des exports catalogue avec comparaison (diff).
 6. Mettre à jour CE fichier après chaque étape (commits, digest d'image, essais réels, TODO, blocages).
 
 ## 9. Sécurité et précautions
@@ -195,5 +232,7 @@ Couverture des tests unitaires : M3U complet et personnalisé (métadonnées, in
 - [x] M3U proxy sans identifiants fournisseur (tests).
 - [x] Catalogue fournisseur préservé (ordre, `parent_id`, catégories vides) consultable et exportable (tests + navigateur).
 - [x] Tests verts, documentation alignée sur le comportement.
-- [ ] Validation sur le vrai Unraid, le vrai fournisseur et les vrais lecteurs (à faire par l'utilisateur / Hermès).
+- [x] Films et séries sélectionnables et présents dans l'URL M3U permanente, relais `/movie/` et `/series/` avec Range (tests + navigateur + conteneur).
+- [x] Direct validé en réel par l'utilisateur sur Unraid (2.1.0).
+- [ ] Validation de la VOD sur le vrai fournisseur et les vrais lecteurs.
 - [x] Image GHCR publiée par le workflow (run n° 1 réussi) — [ ] `docker pull` à confirmer sur Tower.
