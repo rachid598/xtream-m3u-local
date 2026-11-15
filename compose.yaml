@@ -1,0 +1,35 @@
+services:
+  xtream-m3u-local:
+    build: .
+    image: xtream-m3u-local:latest
+    container_name: xtream-m3u-local
+    restart: unless-stopped
+    ports:
+      - "7777:7777"
+      - "7778:7778"
+    environment:
+      XTREAM_URL: "${XTREAM_URL:?Renseigner XTREAM_URL dans .env}"
+      XTREAM_USERNAME: "${XTREAM_USERNAME:?Renseigner XTREAM_USERNAME dans .env}"
+      XTREAM_PASSWORD: "${XTREAM_PASSWORD:?Renseigner XTREAM_PASSWORD dans .env}"
+      PORT: "7777"
+      WEB_PORT: "7778"
+      DATA_DIR: "/data"
+      CACHE_SECONDS: "1800"
+      # Optionnel : http://192.168.1.10:7777 (utile si l'adresse detectee est incorrecte)
+      PUBLIC_BASE_URL: "${PUBLIC_BASE_URL:-}"
+      # Optionnel : protège la playlist et les flux avec ?token=...
+      ACCESS_TOKEN: "${ACCESS_TOKEN:-}"
+      ENABLE_EPG: "${ENABLE_EPG:-false}"
+      WEB_USERNAME: "${WEB_USERNAME:-admin}"
+      WEB_PASSWORD: "${WEB_PASSWORD:-}"
+    volumes:
+      - xtream-m3u-data:/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:7777/health', timeout=3).read()"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  xtream-m3u-data:

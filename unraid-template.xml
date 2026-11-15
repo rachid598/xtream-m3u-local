@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Container version="2">
+  <Name>Xtream-M3U-Local</Name>
+  <Repository>ghcr.io/rachid598/xtream-m3u-local:latest</Repository>
+  <Registry>https://github.com/rachid598/xtream-m3u-local/pkgs/container/xtream-m3u-local</Registry>
+  <Network>bridge</Network>
+  <Shell>sh</Shell>
+  <WebUI>http://[IP]:[PORT:7778]/</WebUI>
+  <Privileged>false</Privileged>
+  <Support>https://github.com/rachid598/xtream-m3u-local</Support>
+  <Overview>Construit une playlist M3U locale depuis l'API Xtream lorsque get.php ne fonctionne pas. Port 7777 M3U et 7778 WebUI, selection de categories et playlists persistantes.</Overview>
+  <Category>MediaApp:Video</Category>
+  <Config Name="M3U / Port" Target="7777" Default="7777" Mode="tcp" Description="Port local du service" Type="Port" Display="always" Required="true" Mask="false">7777</Config>
+  <Config Name="Interface Web / Port" Target="7778" Default="7778" Mode="tcp" Description="Port de gestion Web" Type="Port" Display="always" Required="true" Mask="false">7778</Config>
+  <Config Name="Donnees persistantes" Target="/data" Default="/mnt/user/appdata/xtream-m3u-local" Mode="rw" Description="Sauvegarde des playlists personnalisées" Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/xtream-m3u-local</Config>
+  <Config Name="URL Xtream" Target="XTREAM_URL" Default="http://serveur:80" Mode="" Description="URL de base du fournisseur Xtream" Type="Variable" Display="always" Required="true" Mask="false">http://serveur:80</Config>
+  <Config Name="Utilisateur Xtream" Target="XTREAM_USERNAME" Default="" Mode="" Description="Utilisateur fournisseur" Type="Variable" Display="always" Required="true" Mask="false"></Config>
+  <Config Name="Mot de passe Xtream" Target="XTREAM_PASSWORD" Default="" Mode="" Description="Mot de passe fournisseur" Type="Variable" Display="always" Required="true" Mask="true"></Config>
+  <Config Name="URL locale facultative" Target="PUBLIC_BASE_URL" Default="" Mode="" Description="Ex : http://192.168.1.10:7777 ; vide = automatique" Type="Variable" Display="advanced" Required="false" Mask="false"></Config>
+  <Config Name="Token facultatif" Target="ACCESS_TOKEN" Default="" Mode="" Description="Restreindre l'acces avec un token sur l'URL" Type="Variable" Display="advanced" Required="false" Mask="true"></Config>
+  <Config Name="Utilisateur Web" Target="WEB_USERNAME" Default="admin" Mode="" Description="Utilisateur de l’interface Web" Type="Variable" Display="advanced" Required="false" Mask="false">admin</Config>
+  <Config Name="Mot de passe Web" Target="WEB_PASSWORD" Default="" Mode="" Description="Si defini, protege le port 7778 par HTTP Basic" Type="Variable" Display="advanced" Required="false" Mask="true"></Config>
+  <Config Name="EPG (true/false)" Target="ENABLE_EPG" Default="false" Mode="" Description="Relayer le XMLTV fournisseur" Type="Variable" Display="advanced" Required="false" Mask="false">false</Config>
+</Container>

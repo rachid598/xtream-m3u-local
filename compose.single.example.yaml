@@ -1,0 +1,30 @@
+# MODE SIMPLE : 1 seul fichier à modifier, sans .env.
+# Copier ce fichier en compose.single.yaml (ignoré par Git), puis saisir tes identifiants.
+services:
+  xtream-m3u-local:
+    build: .
+    image: xtream-m3u-local:latest
+    container_name: xtream-m3u-local
+    restart: unless-stopped
+    ports:
+      - "7777:7777"
+      - "7778:7778"
+    environment:
+      XTREAM_URL: "http://ADRESSE_DU_SERVEUR:80"
+      XTREAM_USERNAME: "MON_UTILISATEUR"
+      XTREAM_PASSWORD: "MON_MOT_DE_PASSE"
+      PORT: "7777"
+      WEB_PORT: "7778"
+      DATA_DIR: "/data"
+      CACHE_SECONDS: "1800"
+      PUBLIC_BASE_URL: ""
+      ACCESS_TOKEN: ""
+      ENABLE_EPG: "false"
+      WEB_USERNAME: "admin"
+      WEB_PASSWORD: "" # Recommandé : mot de passe pour protéger la WebUI
+
+    volumes:
+      - xtream-m3u-data:/data
+
+volumes:
+  xtream-m3u-data:

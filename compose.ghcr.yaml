@@ -1,0 +1,28 @@
+# Alternative sans compilation locale, utilisable APRES publication de l'image GitHub Actions.
+services:
+  xtream-m3u-local:
+    image: ghcr.io/rachid598/xtream-m3u-local:latest
+    container_name: xtream-m3u-local
+    restart: unless-stopped
+    ports:
+      - "7777:7777"
+      - "7778:7778"
+    environment:
+      XTREAM_URL: "${XTREAM_URL:?Renseigner XTREAM_URL dans .env}"
+      XTREAM_USERNAME: "${XTREAM_USERNAME:?Renseigner XTREAM_USERNAME dans .env}"
+      XTREAM_PASSWORD: "${XTREAM_PASSWORD:?Renseigner XTREAM_PASSWORD dans .env}"
+      PORT: "7777"
+      WEB_PORT: "7778"
+      DATA_DIR: "/data"
+      CACHE_SECONDS: "1800"
+      PUBLIC_BASE_URL: "${PUBLIC_BASE_URL:-}"
+      ACCESS_TOKEN: "${ACCESS_TOKEN:-}"
+      ENABLE_EPG: "${ENABLE_EPG:-false}"
+      WEB_USERNAME: "${WEB_USERNAME:-admin}"
+      WEB_PASSWORD: "${WEB_PASSWORD:-}"
+
+    volumes:
+      - xtream-m3u-data:/data
+
+volumes:
+  xtream-m3u-data:
