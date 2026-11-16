@@ -136,6 +136,56 @@ try {
   const { text: m3u2 } = await fetchText(url);
   assert(!m3u2.includes('group-title="FR | Sport"') && (m3u2.match(/#EXTINF/g) || []).length < entries, 'contenu mis à jour');
 
+  // Personnalisation : règle automatique, favori, renommage + numéro, numérotation, doublons
+  await page.click('#tab-categories');
+  await page.fill('#cat-search', '');
+  await page.waitForTimeout(250);
+  await page.click('#rules-box > summary');
+  await page.selectOption('#rule-match', 'prefix');
+  await page.fill('#rule-value', 'be |');
+  await waitFor(async () => /BE \| Belgique/.test(await page.innerText('#rule-preview')), 'aperçu de la règle');
+  await page.click('#rule-add');
+  await waitFor(async () => (await page.locator('#rules-list li', { hasText: 'commence par' }).count()) === 1, 'règle ajoutée');
+  assert(await catBox(page, 'BE | Belgique').isChecked() && await catBox(page, 'BE | Belgique').isDisabled(), 'catégorie cochée par la règle');
+  await page.fill('#cat-search', '');
+  await page.click('#tab-channels');
+  await page.fill('#search', '');
+  await page.waitForTimeout(250);
+  await page.selectOption('#ch-category', { label: (await page.locator('#ch-category option', { hasText: 'FR | Information' }).innerText()) });
+  await page.selectOption('#ch-state', 'on');
+  const firstRow = page.locator('#channels .channel').first();
+  const firstName = await firstRow.locator('.ch-name').innerText();
+  await firstRow.locator('.item-btn', { hasText: '☆' }).click();
+  await waitFor(async () => (await page.locator('#channels .channel').first().locator('.fav-on').count()) === 1, 'favori');
+  await page.locator('#channels .channel').first().locator('.item-btn', { hasText: '✎' }).click();
+  await page.fill('#dialog-input', 'Ma chaîne info');
+  await page.fill('#dialog-input2', '7');
+  await page.click('#dialog-ok');
+  await waitFor(async () => (await page.locator('#channels .channel').first().locator('.ch-name').innerText()) === 'Ma chaîne info', 'renommage');
+  await page.selectOption('#ch-state', 'all');
+  await page.selectOption('#ch-category', '');
+  await page.click('#options-box > summary');
+  await page.check('#opt-dedupe');
+  await page.click('#options-box > summary');
+  await page.click('#tab-summary');
+  assert(await page.locator('#sum-favorites li', { hasText: 'Ma chaîne info' }).count() === 1, 'favori dans le résumé');
+  await page.click('#save');
+  await waitFor(async () => !(await page.isVisible('#dirty')), 'enregistrement des personnalisations');
+  const { text: m3uCustom } = await fetchText(url);
+  const lines = m3uCustom.split('\n');
+  assert(/group-title="★ Favoris",Ma chaîne info$/.test(lines[1]), `favori en tête : ${lines[1]}`);
+  assert(m3uCustom.includes('tvg-chno="7"') && m3uCustom.includes('group-title="BE | Belgique"'), 'numéro et règle dans le M3U');
+  assert(!m3uCustom.includes(`,${firstName}\n`) || firstName === 'Ma chaîne info', 'nom d\'origine remplacé');
+  await page.click('#auto-number');
+  await page.click('#dialog-ok');
+  await waitFor(async () => (await page.locator('#sum-custom li').count()) > 5, 'numérotation automatique');
+  await page.click('#save');
+  await waitFor(async () => !(await page.isVisible('#dirty')), 'enregistrement de la numérotation');
+  const { text: numbered } = await fetchText(url);
+  assert(numbered.includes('tvg-chno="1"') && numbered.includes('tvg-chno="2"'), 'numéros 1, 2… dans le M3U');
+  if (shots) await page.screenshot({ path: join(shots, 'desktop-summary.png') });
+  await page.click('#tab-categories');
+
   // Films et séries dans la même playlist (même URL)
   const kindBtn = (kind) => page.locator(`#view-playlists [data-kind="${kind}"]`);
   await waitFor(async () => /films disponibles/.test(await page.innerText('[data-kind-meta="vod"]')), 'tuile Films : films disponibles');

@@ -152,6 +152,13 @@
             <p class="hint">Les deux passent par ton serveur, sans identifiants dans la playlist. Pour tester sans changer la playlist : ajoute <code>?format=m3u8</code> à son URL.</p>
           </div>
           <div class="option-row">
+            <label class="check-row"><input type="checkbox" id="opt-dedupe"> <span>Masquer les doublons SD / HD / FHD / 4K d'une même chaîne (garder la meilleure qualité dans chaque groupe)</span></label>
+          </div>
+          <div class="option-row">
+            <label for="opt-fav-name">Nom du groupe des favoris</label>
+            <input id="opt-fav-name" type="text" maxlength="100" placeholder="★ Favoris">
+          </div>
+          <div class="option-row">
             <label class="check-row"><input type="checkbox" id="opt-catchup" checked> <span>Replay (catch-up) : revoir les programmes passés depuis le guide, sur les chaînes qui le proposent</span></label>
           </div>
         </div>
@@ -210,6 +217,23 @@
             <button type="button" class="btn small" id="cat-none">Tout décocher</button>
           </div>
         </div>
+        <details class="rules-box" id="rules-box">
+          <summary><span>⚡ Règles automatiques</span> <span class="count" id="rules-count"></span></summary>
+          <p class="hint">Les catégories dont le nom correspond sont ajoutées automatiquement à la playlist, y compris celles que le fournisseur créera plus tard (insensible aux majuscules et aux accents).</p>
+          <ul id="rules-list" class="sum-list"></ul>
+          <div class="rule-form">
+            <label class="sr-only" for="rule-match">Condition</label>
+            <select id="rule-match">
+              <option value="prefix">Le nom commence par</option>
+              <option value="contains">Le nom contient</option>
+              <option value="exact">Le nom est exactement</option>
+            </select>
+            <label class="sr-only" for="rule-value">Texte</label>
+            <input id="rule-value" type="text" maxlength="100" placeholder="Ex. FR |" autocomplete="off">
+            <button type="button" class="btn small" id="rule-add">Ajouter la règle</button>
+          </div>
+          <p class="hint" id="rule-preview"></p>
+        </details>
         <p class="hint" id="cat-info"></p>
         <div id="categories" class="category-grid"></div>
       </div>
@@ -226,6 +250,8 @@
             <option value="off">Non retenus</option>
             <option value="included">Ajouts manuels</option>
             <option value="excluded">Exclusions</option>
+            <option value="favorites">★ Favoris</option>
+            <option value="custom">Renommés / numérotés</option>
           </select>
         </div>
         <div class="toolbar between">
@@ -251,6 +277,23 @@
             <ul id="sum-included" class="sum-list"></ul>
             <div class="card-head"><h3>Exclusions</h3><button type="button" class="btn small ghost" id="clear-excluded">Tout retirer</button></div>
             <ul id="sum-excluded" class="sum-list"></ul>
+          </div>
+        </div>
+        <div class="summary-grid custom-grid">
+          <div>
+            <div class="card-head"><h3>★ Favoris</h3><button type="button" class="btn small ghost" id="clear-favorites">Tout retirer</button></div>
+            <p class="hint">Regroupés en tête de la playlist (ils restent aussi dans leur groupe). Ajoute-les avec ☆ dans la liste.</p>
+            <ol id="sum-favorites" class="sum-list"></ol>
+          </div>
+          <div>
+            <div class="card-head"><h3>Noms et numéros</h3>
+              <div class="btn-row">
+                <button type="button" class="btn small" id="auto-number" title="Numéros 1, 2, 3… dans l'ordre actuel des chaînes">Numéroter les chaînes</button>
+                <button type="button" class="btn small ghost" id="clear-custom">Tout effacer</button>
+              </div>
+            </div>
+            <p class="hint">Les numéros servent au zapping à la télécommande et à l'ordre des chaînes dans chaque groupe. Utilise ✎ dans la liste pour renommer ou numéroter.</p>
+            <ul id="sum-custom" class="sum-list"></ul>
           </div>
         </div>
       </div>
@@ -359,6 +402,10 @@
     <div class="field" id="dialog-field" hidden>
       <label for="dialog-input" id="dialog-label"></label>
       <input id="dialog-input" type="text" autocomplete="off">
+    </div>
+    <div class="field" id="dialog-field2" hidden>
+      <label for="dialog-input2" id="dialog-label2"></label>
+      <input id="dialog-input2" type="number" min="1" max="99999" step="1" autocomplete="off">
     </div>
     <div class="btn-row end">
       <button type="submit" class="btn ghost" value="cancel">Annuler</button>

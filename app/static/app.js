@@ -37,6 +37,11 @@
     limit: PAGE,
     tab: 'categories',
     summary: null,           // {live|vod|series: {items, categories, error}} (/api/catalog/summary)
+    rules: [],               // règles automatiques [{kind, match, value}]
+    favorites: [],           // clés des favoris ("42", "vod:7", "series:9"), dans l'ordre
+    itemNames: {},           // noms personnalisés {clé: nom}
+    itemNumbers: {},         // numéros des chaînes du direct {id: numéro}
+    hiddenCache: null,       // doublons masqués (calculé à la demande)
   };
   // Raccourcis vers le catalogue et la sélection du type affiché (state.categories, state.selected…).
   for (const key of ['categories', 'categoryNames', 'channels', 'channelById', 'channelsByCat', 'catalogLoaded', 'categoriesError']) {
@@ -132,7 +137,7 @@
   }
   function clearError() { $('alert').hidden = true; }
 
-  function ask({ title, text, okLabel = 'Confirmer', danger = false, input = null }) {
+  function ask({ title, text, okLabel = 'Confirmer', danger = false, input = null, input2 = null }) {
     const dialog = $('dialog');
     $('dialog-title').textContent = title;
     $('dialog-text').textContent = text || '';
@@ -143,8 +148,17 @@
       $('dialog-label').textContent = input.label;
       $('dialog-input').value = input.value || '';
     }
+    $('dialog-field2').hidden = !input2;
+    if (input2) {
+      $('dialog-label2').textContent = input2.label;
+      $('dialog-input2').value = input2.value || '';
+    }
     if (typeof dialog.showModal !== 'function') {
       // Navigateur très ancien : repli sur les boîtes natives.
+      if (input && input2) {
+        const value = window.prompt(`${title}\n${input.label}`, input.value || '');
+        return Promise.resolve(value === null ? null : { value, value2: window.prompt(input2.label, input2.value || '') || '' });
+      }
       if (input) return Promise.resolve(window.prompt(`${title}\n${input.label}`, input.value || ''));
       return Promise.resolve(window.confirm(`${title}\n${text || ''}`) ? true : null);
     }
@@ -152,7 +166,8 @@
       dialog.returnValue = 'cancel';
       dialog.addEventListener('close', () => {
         if (dialog.returnValue !== 'ok') return resolve(null);
-        resolve(input ? $('dialog-input').value : true);
+        if (input2) resolve({ value: $('dialog-input').value, value2: $('dialog-input2').value });
+        else resolve(input ? $('dialog-input').value : true);
       }, { once: true });
       dialog.showModal();
       if (input) $('dialog-input').select();
@@ -173,8 +188,69 @@
     toast('URL copiée dans le presse-papiers');
   }
 
+  // ------------------------------------------------- règles et doublons
+  // Mêmes règles que le serveur (app/builder.py) pour que les compteurs concordent.
+  const EMPTY_SET = new Set();
+  const QUALITY = [
+    [/(?<![a-z0-9])(4k|uhd|2160p?)(?![a-z0-9])/, 4],
+    [/(?<![a-z0-9])(fhd|full ?hd|1080[pi]?)(?![a-z0-9])/, 3],
+    [/(?<![a-z0-9])(hd|720p?)(?![a-z0-9])/, 2],
+    [/(?<![a-z0-9])(sd|576[pi]?|480[pi]?)(?![a-z0-9])/, 1],
+  ];
+  const QUALITY_TAGS = /(?<![a-z0-9])(4k|uhd|2160p?|fhd|full ?hd|1080[pi]?|hd|720p?|sd|576[pi]?|480[pi]?|hevc|h\.?26[45]|x26[45]|hdr|50 ?fps|60 ?fps|25 ?fps|backup|raw|multi|vip)(?![a-z0-9])/g;
+  const squash = (text) => norm(text).split(/\s+/).filter(Boolean).join(' ');
+  function qualityOf(name) {
+    const n = squash(name);
+    for (const [re, score] of QUALITY) if (re.test(n)) return score;
+    return 1.5;
+  }
+  function baseName(name) {
+    return squash(name).replace(QUALITY_TAGS, ' ').replace(/[|()[\]{}:._\-+*/\\]+/g, ' ').split(/\s+/).filter(Boolean).join(' ');
+  }
+  function ruleMatches(name, rule) {
+    const n = squash(name), v = squash(rule.value);
+    if (rule.match === 'prefix') return n.startsWith(v);
+    if (rule.match === 'exact') return n === v;
+    return n.includes(v);
+  }
+  const ruleCache = new Map();
+  function ruleSet(kind, rules = state.rules) {
+    const list = rules.filter((r) => r.kind === kind);
+    if (!list.length) return EMPTY_SET;
+    const key = `${kind}|${JSON.stringify(list)}|${state.cat[kind].categories.length}`;
+    if (!ruleCache.has(key)) {
+      ruleCache.set(key, new Set(state.cat[kind].categories.filter((cat) => list.some((r) => ruleMatches(cat.name, r))).map((cat) => cat.category_id)));
+    }
+    return ruleCache.get(key);
+  }
+  const catOn = (kind, id) => state.sel[kind].selected.has(id) || ruleSet(kind).has(id);
+  const keyOf = (c, kind = state.kind) => KIND[kind].prefix + c.stream_id;
+  const displayName = (c, kind = state.kind) => state.itemNames[keyOf(c, kind)] || c.name;
+
+  /** Chaînes du direct masquées comme doublons (option « Masquer les doublons »). */
+  function hiddenDuplicates() {
+    if (!$('opt-dedupe').checked) return EMPTY_SET;
+    if (state.hiddenCache) return state.hiddenCache;
+    const sel = state.sel.live;
+    const best = new Map();
+    const kept = [];
+    for (const c of state.cat.live.channels) {
+      if (sel.excluded.has(c.stream_id)) continue;
+      const group = c.category_ids.find((id) => catOn('live', id)) || (sel.included.has(c.stream_id) ? c.category_id : null);
+      if (group == null) continue;
+      const key = `${group}\u0000${baseName(c.name)}`;
+      const q = qualityOf(c.name);
+      const current = best.get(key);
+      if (!current || q > current.q) best.set(key, { q, id: c.stream_id });
+      kept.push(c.stream_id);
+    }
+    const keep = new Set([...best.values()].map((v) => v.id));
+    state.hiddenCache = new Set(kept.filter((id) => !keep.has(id)));
+    return state.hiddenCache;
+  }
+
   // ----------------------------------------------------------- sélection
-  const inCategory = (c) => c.category_ids.some((id) => state.selected.has(id));
+  const inCategory = (c) => c.category_ids.some((id) => catOn(state.kind, id));
   const isOn = (c) => !state.excluded.has(c.stream_id) && (inCategory(c) || state.included.has(c.stream_id));
 
   function setChannel(c, on) {
@@ -196,7 +272,7 @@
       const [catField, incField, excField] = KIND[kind].fields;
       // Nettoyage : une exclusion n'a de sens que pour un élément d'une catégorie cochée.
       let excluded = [...sel.excluded];
-      if (!sorted) excluded = excluded.filter((id) => { const c = byId.get(id); return !c || c.category_ids.some((cid) => sel.selected.has(cid)); });
+      if (!sorted) excluded = excluded.filter((id) => { const c = byId.get(id); return !c || c.category_ids.some((cid) => catOn(kind, cid)); });
       const list = (set) => (sorted ? [...set].sort() : [...set]);
       data[catField] = list(sel.selected);
       data[incField] = list(sel.included);
@@ -204,6 +280,13 @@
     }
     data.live_format = $('opt-live-format').value;
     data.catchup = $('opt-catchup').checked;
+    data.dedupe = $('opt-dedupe').checked;
+    data.favorites_name = $('opt-fav-name').value.trim() || '★ Favoris';
+    data.rules = state.rules.map((r) => ({ ...r }));
+    data.favorites = sorted ? [...state.favorites].sort() : [...state.favorites];
+    const sortedObject = (obj) => Object.fromEntries(Object.keys(obj).sort().map((k) => [k, obj[k]]));
+    data.item_names = sortedObject(Object.fromEntries(Object.entries(state.itemNames).filter(([, v]) => String(v).trim()).map(([k, v]) => [k, String(v).trim()])));
+    data.item_numbers = sortedObject(state.itemNumbers);
     data.group_order = [...state.groupOrder];
     data.group_names = cleanGroupNames();
     return data;
@@ -219,12 +302,13 @@
   }
 
   const signature = () => JSON.stringify(payload({ sorted: true }));
-  const hasSelection = () => KINDS.some((k) => state.sel[k].selected.size || state.sel[k].included.size);
+  const hasSelection = () => state.rules.length > 0 || KINDS.some((k) => state.sel[k].selected.size || state.sel[k].included.size);
   const isDirty = () => signature() !== state.snapshot;
 
   function countFor(p, kind = 'live') {
     const [catField, incField, excField] = KIND[kind].fields;
-    const cats = new Set(p[catField] || []), inc = new Set(p[incField] || []), exc = new Set(p[excField] || []);
+    const cats = new Set([...(p[catField] || []), ...ruleSet(kind, p.rules || [])]);
+    const inc = new Set(p[incField] || []), exc = new Set(p[excField] || []);
     let n = 0;
     for (const c of state.cat[kind].channels) {
       if (!exc.has(c.stream_id) && (c.category_ids.some((id) => cats.has(id)) || inc.has(c.stream_id))) n += 1;
@@ -237,12 +321,13 @@
     const sel = state.sel[kind];
     let n = 0;
     for (const c of state.cat[kind].channels) {
-      if (!sel.excluded.has(c.stream_id) && (c.category_ids.some((id) => sel.selected.has(id)) || sel.included.has(c.stream_id))) n += 1;
+      if (!sel.excluded.has(c.stream_id) && (c.category_ids.some((id) => catOn(kind, id)) || sel.included.has(c.stream_id))) n += 1;
     }
-    return n;
+    return kind === 'live' ? n - hiddenDuplicates().size : n;
   }
 
-  const usesKind = (p, kind) => Boolean((p[KIND[kind].fields[0]] || []).length || (p[KIND[kind].fields[1]] || []).length);
+  const usesKind = (p, kind) => Boolean((p[KIND[kind].fields[0]] || []).length || (p[KIND[kind].fields[1]] || []).length
+    || (p.rules || []).some((r) => r.kind === kind));
 
   // -------------------------------------------------------------- URLs
   function baseUrl() {
@@ -279,9 +364,10 @@
     show('stat-channels', 'live');
     show('stat-vod', 'vod');
     show('stat-series', 'series');
-    $('stat-categories').textContent = KINDS.reduce((n, k) => n + state.sel[k].selected.size, 0).toLocaleString('fr-FR');
+    const catsOn = (k) => state.cat[k].categories.filter((cat) => catOn(k, cat.category_id)).length || state.sel[k].selected.size;
+    $('stat-categories').textContent = KINDS.reduce((n, k) => n + catsOn(k), 0).toLocaleString('fr-FR');
     const n = counts[state.kind] || 0;
-    $('tab-cat-count').textContent = state.categories.length ? `(${state.selected.size}/${state.categories.length})` : '';
+    $('tab-cat-count').textContent = state.categories.length ? `(${catsOn(state.kind)}/${state.categories.length})` : '';
     $('tab-ch-count').textContent = state.channels.length ? `(${n.toLocaleString('fr-FR')})` : '';
     const parts = KINDS.filter((k) => counts[k]).map((k) => noun(counts[k], k));
     $('bar-count').textContent = parts.length ? parts.join(' · ') : 'Playlist vide';
@@ -323,7 +409,8 @@
       const cat = state.cat[kind];
       return cat.catalogLoaded ? cat.channels.length : (state.summary && state.summary[kind] && state.summary[kind].items) || 0;
     };
-    const missing = ['vod', 'series'].filter((kind) => available(kind) > 0 && !state.sel[kind].selected.size && !state.sel[kind].included.size);
+    const missing = ['vod', 'series'].filter((kind) => available(kind) > 0 && !state.sel[kind].selected.size
+      && !state.sel[kind].included.size && !state.rules.some((r) => r.kind === kind));
     if (!missing.length || state.kind !== 'live') {
       hint.hidden = true;
       return;
@@ -442,6 +529,7 @@
   function renderOptionsPill() {
     const parts = [$('opt-live-format').value === 'hls' ? 'HLS' : 'MPEG-TS'];
     if ($('opt-catchup').checked) parts.push('Replay');
+    if ($('opt-dedupe').checked) parts.push('Sans doublons');
     $('options-pill-text').textContent = parts.join(' · ');
   }
 
@@ -518,25 +606,28 @@
     const retained = categoryStats();
     const visible = state.categories.filter((cat) => {
       if (query && !cat._search.includes(query)) return false;
-      if (state.catFilter === 'on' && !state.selected.has(cat.category_id)) return false;
-      if (state.catFilter === 'off' && state.selected.has(cat.category_id)) return false;
+      if (state.catFilter === 'on' && !catOn(state.kind, cat.category_id)) return false;
+      if (state.catFilter === 'off' && catOn(state.kind, cat.category_id)) return false;
       return true;
     });
     const fragment = document.createDocumentFragment();
     for (const cat of visible) {
-      const on = state.selected.has(cat.category_id);
+      const ruled = !state.selected.has(cat.category_id) && ruleSet(state.kind).has(cat.category_id);
+      const on = catOn(state.kind, cat.category_id);
       const kept = retained.get(cat.category_id) || 0;
       let metaText = noun(cat.count);
       let partial = false;
       const parent = cat.parent_id && state.categoryNames.get(cat.parent_id);
       if (on && kept !== cat.count) { metaText = `${kept} / ${cat.count} ${K().many} ${K().kept}`; partial = true; }
       else if (!on && kept) { metaText = `${noun(cat.count)} · ${kept} ${K().added.toLowerCase()}${kept > 1 ? 's' : ''}`; partial = true; }
-      const box = h('input', { type: 'checkbox', checked: on, 'aria-label': `Inclure la catégorie ${cat.name}` });
+      const box = h('input', { type: 'checkbox', checked: on, disabled: ruled, 'aria-label': `Inclure la catégorie ${cat.name}`,
+        title: ruled ? 'Ajoutée par une règle automatique' : null });
       box.addEventListener('change', () => {
         if (box.checked) state.selected.add(cat.category_id); else state.selected.delete(cat.category_id);
         refresh({ channels: false });
       });
-      fragment.append(h('label', { class: `cat${on ? ' on' : ''}` },
+      if (ruled) { metaText = `${metaText} · ajoutée par une règle`; partial = true; }
+      fragment.append(h('label', { class: `cat${on ? ' on' : ''}${ruled ? ' ruled' : ''}` },
         box,
         h('span', { class: 'grow' }, h('span', { class: 'name', text: cat.name }),
           parent ? h('span', { class: 'meta', text: `Sous-groupe de ${parent}` }) : null,
@@ -559,12 +650,18 @@
     const mode = $('ch-state').value;
     return state.channels.filter((c) => {
       if (category && !c.category_ids.includes(category)) return false;
-      if (terms.length && !terms.every((t) => c._search.includes(t))) return false;
+      if (terms.length) {
+        const custom = state.itemNames[keyOf(c)];
+        const hay = custom ? `${c._search} ${norm(custom)}` : c._search;
+        if (!terms.every((t) => hay.includes(t))) return false;
+      }
       switch (mode) {
         case 'on': return isOn(c);
         case 'off': return !isOn(c);
         case 'included': return state.included.has(c.stream_id);
         case 'excluded': return state.excluded.has(c.stream_id);
+        case 'favorites': return state.favorites.includes(keyOf(c));
+        case 'custom': return Boolean(state.itemNames[keyOf(c)] || (state.kind === 'live' && state.itemNumbers[c.stream_id]));
         default: return true;
       }
     });
@@ -602,10 +699,12 @@
         box,
         thumb(c),
         h('span', { class: 'grow' },
-          h('span', { class: 'ch-name', text: c.name }),
+          h('span', { class: 'ch-name', text: displayName(c) }),
+          state.itemNames[keyOf(c)] ? h('span', { class: 'ch-orig', text: `Nom d'origine : ${c.name}` }) : null,
           h('span', { class: 'ch-meta', text: itemMeta(c) }),
           state.kind === 'series' ? episodesButton(c) : null),
         h('span', { class: 'badges' }, badgesFor(c)),
+        itemActions(c),
       )));
     }
     list.append(fragment);
@@ -620,7 +719,10 @@
 
   function itemMeta(c) {
     const cats = c.category_ids.map((id) => state.categoryNames.get(id) || 'Sans catégorie').join(' · ');
-    if (state.kind === 'live') return (c.num ? `N° ${c.num} · ` : '') + cats;
+    if (state.kind === 'live') {
+      const custom = state.itemNumbers[c.stream_id];
+      return (custom ? `N° ${custom} (perso) · ` : c.num ? `N° ${c.num} · ` : '') + cats;
+    }
     return [c.year, c.rating ? `★ ${c.rating}` : '', cats, c.ext ? c.ext.toUpperCase() : ''].filter(Boolean).join(' · ');
   }
 
@@ -630,7 +732,44 @@
     if (state.excluded.has(c.stream_id)) badges.push(h('span', { class: 'badge danger', text: K().excludedLabel }));
     if (c.epg) badges.push(h('span', { class: 'badge opt', text: 'EPG', title: 'Identifiant EPG disponible' }));
     if (c.archive) badges.push(h('span', { class: 'badge opt', text: `Replay ${c.archive} j`, title: 'Programmes passés disponibles (catch-up)' }));
+    if (state.kind === 'live' && hiddenDuplicates().has(c.stream_id)) badges.push(h('span', { class: 'badge warn', text: 'Doublon masqué', title: 'Une meilleure qualité de cette chaîne est déjà dans le groupe' }));
     return badges;
+  }
+
+  function toggleFavorite(c) {
+    const key = keyOf(c);
+    state.favorites = state.favorites.includes(key) ? state.favorites.filter((k) => k !== key) : [...state.favorites, key];
+  }
+
+  async function editItem(c) {
+    const isLive = state.kind === 'live';
+    const result = await ask({
+      title: `Personnaliser « ${c.name} »`,
+      text: 'Laisse vide pour garder le nom ou le numéro du fournisseur. Ne concerne que cette playlist.',
+      okLabel: 'Appliquer',
+      input: { label: 'Nom affiché', value: state.itemNames[keyOf(c)] || '' },
+      input2: isLive ? { label: 'Numéro de chaîne (1 à 99 999)', value: state.itemNumbers[c.stream_id] || '' } : null,
+    });
+    if (!result) return;
+    const name = result.value.trim();
+    if (name && name !== c.name) state.itemNames[keyOf(c)] = name.slice(0, 100); else delete state.itemNames[keyOf(c)];
+    if (isLive) {
+      const number = parseInt(result.value2, 10);
+      if (Number.isInteger(number) && number >= 1 && number <= 99999) state.itemNumbers[c.stream_id] = number;
+      else delete state.itemNumbers[c.stream_id];
+    }
+    refresh();
+  }
+
+  function itemActions(c) {
+    const fav = state.favorites.includes(keyOf(c));
+    return h('span', { class: 'item-actions' },
+      h('button', { type: 'button', class: `item-btn${fav ? ' fav-on' : ''}`, text: fav ? '★' : '☆',
+        title: fav ? 'Retirer des favoris' : 'Ajouter aux favoris', 'aria-label': `${fav ? 'Retirer' : 'Ajouter'} ${displayName(c)} ${fav ? 'des' : 'aux'} favoris`,
+        onclick: (event) => { event.preventDefault(); event.stopPropagation(); toggleFavorite(c); refresh(); } }),
+      h('button', { type: 'button', class: 'item-btn', text: '✎', title: 'Renommer / numéroter',
+        'aria-label': `Personnaliser ${displayName(c)}`,
+        onclick: (event) => { event.preventDefault(); event.stopPropagation(); editItem(c); } }));
   }
 
   /** Bouton « Épisodes » : appelle get_series_info (via /api/series/<id>) à la demande. */
@@ -666,8 +805,8 @@
     for (const kind of KINDS) {
       const sel = state.sel[kind];
       for (const c of state.cat[kind].channels) {
-        if (sel.excluded.has(c.stream_id)) continue;
-        const inCat = c.category_ids.find((id) => sel.selected.has(id));
+        if (sel.excluded.has(c.stream_id) || (kind === 'live' && hiddenDuplicates().has(c.stream_id))) continue;
+        const inCat = c.category_ids.find((id) => catOn(kind, id));
         if (!inCat && !sel.included.has(c.stream_id)) continue;
         const key = KIND[kind].prefix + (inCat || c.category_id);
         groups.set(key, (groups.get(key) || 0) + 1);
@@ -744,6 +883,74 @@
     };
     fill($('sum-included'), 'included', 'Aucun ajout hors catégories.');
     fill($('sum-excluded'), 'excluded', 'Aucune exclusion.');
+    renderCustomSummary();
+  }
+
+  function itemByKey(key) {
+    for (const kind of ['vod', 'series']) {
+      if (key.startsWith(KIND[kind].prefix)) return { kind, item: state.cat[kind].channelById.get(key.slice(KIND[kind].prefix.length)) };
+    }
+    return { kind: 'live', item: state.cat.live.channelById.get(key) };
+  }
+
+  function renderCustomSummary() {
+    const favList = $('sum-favorites');
+    favList.replaceChildren();
+    state.favorites.forEach((key, index) => {
+      const { kind, item } = itemByKey(key);
+      const label = item ? displayName(item, kind) : `${KIND[kind].one} ${key}`;
+      favList.append(h('li', null,
+        h('span', null, h('span', { class: `kind-tag ${kind}`, text: KIND[kind].label }), ' ', label),
+        h('span', { class: 'btn-row' },
+          h('button', { type: 'button', class: 'x', text: '↑', title: 'Monter', disabled: index === 0, onclick: () => {
+            const list = [...state.favorites]; [list[index - 1], list[index]] = [list[index], list[index - 1]]; state.favorites = list; refresh();
+          } }),
+          h('button', { type: 'button', class: 'x', text: '×', title: 'Retirer', onclick: () => { state.favorites = state.favorites.filter((k) => k !== key); refresh(); } }))));
+    });
+    if (!state.favorites.length) favList.append(h('li', { class: 'empty', text: 'Aucun favori.' }));
+    const custom = $('sum-custom');
+    custom.replaceChildren();
+    const keys = new Set([...Object.keys(state.itemNames), ...Object.keys(state.itemNumbers)]);
+    for (const key of keys) {
+      const { kind, item } = itemByKey(key);
+      const parts = [];
+      if (state.itemNames[key]) parts.push(`« ${state.itemNames[key]} »`);
+      if (kind === 'live' && state.itemNumbers[key]) parts.push(`n° ${state.itemNumbers[key]}`);
+      custom.append(h('li', null,
+        h('span', null, h('span', { class: `kind-tag ${kind}`, text: KIND[kind].label }), ' ', `${item ? item.name : key} → ${parts.join(' · ')}`),
+        h('button', { type: 'button', class: 'x', text: '×', title: 'Annuler la personnalisation', onclick: () => {
+          delete state.itemNames[key]; delete state.itemNumbers[key]; refresh();
+        } })));
+    }
+    if (!keys.size) custom.append(h('li', { class: 'empty', text: 'Aucun nom ni numéro personnalisé.' }));
+  }
+
+  function renderRules() {
+    const list = $('rules-list');
+    list.replaceChildren();
+    const mine = state.rules.filter((r) => r.kind === state.kind);
+    const labels = { prefix: 'commence par', contains: 'contient', exact: 'est exactement' };
+    for (const rule of mine) {
+      const n = ruleSet(state.kind, [rule]).size;
+      list.append(h('li', null,
+        h('span', { text: `Nom ${labels[rule.match]} « ${rule.value} » → ${plural(n, 'catégorie', 'catégories')}` }),
+        h('button', { type: 'button', class: 'x', text: '×', title: 'Supprimer la règle', onclick: () => {
+          state.rules = state.rules.filter((r) => r !== rule); refresh();
+        } })));
+    }
+    if (!mine.length) list.append(h('li', { class: 'empty', text: `Aucune règle pour ${K().label.toLowerCase()}.` }));
+    $('rules-count').textContent = state.rules.length ? `(${state.rules.length})` : '';
+    previewRule();
+  }
+
+  function previewRule() {
+    const value = $('rule-value').value.trim();
+    if (!value) { $('rule-preview').textContent = ''; return; }
+    const rule = { kind: state.kind, match: $('rule-match').value, value };
+    const matched = state.categories.filter((cat) => ruleMatches(cat.name, rule));
+    $('rule-preview').textContent = matched.length
+      ? `Aperçu : ${plural(matched.length, 'catégorie', 'catégories')} — ${matched.slice(0, 6).map((c) => c.name).join(', ')}${matched.length > 6 ? '…' : ''}`
+      : 'Aperçu : aucune catégorie actuelle ne correspond (la règle s\'appliquera aux futures catégories).';
   }
 
   function renderCategorySelect() {
@@ -758,8 +965,9 @@
 
   function refresh(options = {}) {
     const { channels = true, row = null, channel = null } = options;
+    state.hiddenCache = null;
     renderStats();
-    if (state.tab === 'categories' || channels === true) renderCategories();
+    if (state.tab === 'categories' || channels === true) { renderCategories(); renderRules(); }
     if (channels === true) renderChannels();
     else if (channels === 'row') updateRow(row, channel);
     if (state.tab === 'summary') renderSummary();
@@ -803,6 +1011,13 @@
     }
     $('opt-live-format').value = (p && p.live_format) || 'ts';
     $('opt-catchup').checked = !p || p.catchup !== false;
+    $('opt-dedupe').checked = Boolean(p && p.dedupe);
+    $('opt-fav-name').value = (p && p.favorites_name) || '★ Favoris';
+    state.rules = p && p.rules ? p.rules.map((r) => ({ ...r })) : [];
+    state.favorites = p && p.favorites ? [...p.favorites] : [];
+    state.itemNames = p && p.item_names ? { ...p.item_names } : {};
+    state.itemNumbers = p && p.item_numbers ? { ...p.item_numbers } : {};
+    state.hiddenCache = null;
     renderOptionsPill();
     state.groupOrder = p && p.group_order ? [...p.group_order] : [];
     state.groupNames = p && p.group_names ? { ...p.group_names } : {};
@@ -1159,6 +1374,7 @@
   function applyCatalog(catalog) {
     const kind = catalog.kind || 'live';
     const target = state.cat[kind];
+    ruleCache.clear();
     target.categories = catalog.categories.map((cat) => ({ ...cat, _search: `${norm(cat.name)} #${cat.category_id}` }));
     target.categoryNames = new Map(target.categories.map((cat) => [cat.category_id, cat.name]));
     target.channels = catalog.channels.map((c) => ({ ...c, _search: norm(`${c.name} ${c.year || ''}`) }));
@@ -1272,6 +1488,51 @@
   $('save').addEventListener('click', save);
   $('opt-live-format').addEventListener('change', () => { renderOptionsPill(); renderStats(); });
   $('opt-catchup').addEventListener('change', () => { renderOptionsPill(); renderStats(); });
+  $('opt-dedupe').addEventListener('change', () => { renderOptionsPill(); refresh(); });
+  $('opt-fav-name').addEventListener('input', () => renderStats());
+  $('rule-value').addEventListener('input', debounce(previewRule, 150));
+  $('rule-match').addEventListener('change', previewRule);
+  const addRule = () => {
+    const value = $('rule-value').value.trim();
+    if (!value) { $('rule-value').focus(); return; }
+    const rule = { kind: state.kind, match: $('rule-match').value, value: value.slice(0, 100) };
+    if (state.rules.some((r) => r.kind === rule.kind && r.match === rule.match && squash(r.value) === squash(rule.value))) { toast('Cette règle existe déjà', 'error'); return; }
+    state.rules = [...state.rules, rule];
+    $('rule-value').value = '';
+    refresh();
+    toast(`Règle ajoutée : ${plural(ruleSet(rule.kind, [rule]).size, 'catégorie', 'catégories')}`);
+  };
+  $('rule-add').addEventListener('click', addRule);
+  $('rule-value').addEventListener('keydown', (event) => { if (event.key === 'Enter') { event.preventDefault(); addRule(); } });
+  $('clear-favorites').addEventListener('click', () => { state.favorites = []; refresh(); });
+  $('clear-custom').addEventListener('click', async () => {
+    if (!(await ask({ title: 'Effacer les personnalisations ?', text: 'Tous les noms et numéros personnalisés de cette playlist seront supprimés.', okLabel: 'Effacer', danger: true }))) return;
+    state.itemNames = {}; state.itemNumbers = {}; refresh();
+  });
+  $('auto-number').addEventListener('click', async () => {
+    const groups = groupCounts();
+    const order = orderedGroups(groups).filter((key) => groupInfo(key).kind === 'live');
+    const sel = state.sel.live;
+    const hidden = hiddenDuplicates();
+    const byGroup = new Map(order.map((g) => [g, []]));
+    for (const c of state.cat.live.channels) {
+      if (sel.excluded.has(c.stream_id) || hidden.has(c.stream_id)) continue;
+      const g = c.category_ids.find((id) => catOn('live', id)) || (sel.included.has(c.stream_id) ? c.category_id : null);
+      if (g != null && byGroup.has(g)) byGroup.get(g).push(c);
+    }
+    const ordered = [];
+    for (const g of order) {
+      const list = byGroup.get(g);
+      list.sort((a, b) => (state.itemNumbers[a.stream_id] || 1e9) - (state.itemNumbers[b.stream_id] || 1e9));
+      ordered.push(...list);
+    }
+    if (!ordered.length) { toast('Aucune chaîne à numéroter', 'error'); return; }
+    if (Object.keys(state.itemNumbers).length && !(await ask({ title: 'Renuméroter ?', text: `Les ${ordered.length} chaînes seront numérotées de 1 à ${ordered.length} dans l'ordre actuel ; les numéros existants seront remplacés.`, okLabel: 'Numéroter' }))) return;
+    state.itemNumbers = {};
+    ordered.forEach((c, i) => { state.itemNumbers[c.stream_id] = i + 1; });
+    refresh();
+    toast(`${ordered.length} chaînes numérotées`);
+  });
   $('epg-refresh').addEventListener('click', refreshEpg);
   document.querySelectorAll('[data-kind]').forEach((btn) => btn.addEventListener('click', () => switchKind(btn.dataset.kind)));
   $('view-btn-playlists').addEventListener('click', () => switchView('playlists'));
