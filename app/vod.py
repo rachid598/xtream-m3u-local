@@ -314,6 +314,13 @@ class KeyedCache:
                 count += 1
         return count
 
+    def known(self, sid: str) -> list[dict] | None:
+        """Résultat en cache encore valable (liste éventuellement vide), sinon ``None``."""
+        cached = self._load(sid)
+        if cached and time.time() - cached[0] < self.max_age:
+            return cached[1]
+        return None
+
     def fetched_at(self, sid: str) -> float | None:
         cached = self._load(sid)
         return cached[0] if cached else None

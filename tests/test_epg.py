@@ -234,3 +234,54 @@ class XmltvAliasTests(StackTestCase):
         body = self.get(stack.proxy_base + "/xmltv.php")[1]
         self.assertIn(b"other.fr", body)        # fichier fournisseur tel quel
         self.assertNotIn(b"xtream-43", self.get(stack.proxy_base + "/playlist.m3u")[1])
+
+
+class BorrowedGuideTests(unittest.TestCase):
+    """Une chaîne sans programme emprunte le guide d'une autre version (doublon masqué)."""
+
+    class FakeApiCache:
+        def __init__(self, data, cached):
+            self.data, self.cached, self.calls = data, set(cached), []
+
+        def known(self, sid):  # ``None`` = jamais demandée
+            return self.data.get(sid, []) if sid in self.cached else None
+
+        def episodes_for(self, ids, budget=0):
+            self.calls.extend(ids)
+            self.cached.update(ids)
+            return {sid: self.data.get(sid, []) for sid in ids}, []
+
+        def pending_count(self, ids):
+            return 0
+
+        def fetched_at(self, sid):
+            return 1.0
+
+    def test_alternate_versions_fill_the_guide(self):
+        import tempfile
+        from app.epg import EpgCache
+        programme = [{"title": "Le 20h", "start": 1794762000, "stop": 1794765600, "desc": ""}]
+        api = self.FakeApiCache({"1": [], "2": programme}, cached=["1"])
+        with tempfile.TemporaryDirectory() as tmp:
+            epg = EpgCache(lambda: None, tmp)
+            channels = [{"stream_id": "1", "name": "VIP: TF1 ᴴᴰ", "logo": "", "epg_id": "", "alternates": ["2", "3"]},
+                        {"stream_id": "9", "name": "Sans guide", "logo": "", "epg_id": ""}]
+            path, stats = epg.playlist_guide("t", channels, mode="api", api=api)
+            self.assertEqual(api.calls, ["2", "9"])        # « 1 » connue vide → sa version « 2 » ; « 9 » demandée
+            self.assertEqual((stats["api"], [m["stream_id"] for m in stats["missing"]]), (1, ["9"]))
+            self.assertIn("Le 20h", path.read_text(encoding="utf-8"))
+            self.assertIn('channel="xtream-1"', path.read_text(encoding="utf-8"))
+
+
+from .helpers import StackTestCase as _Stack  # noqa: E402
+
+
+class MyGroupsGuideTests(_Stack):
+    def test_groups_fetched_first_and_coverage_reported(self):
+        self.create({"slug": "salon", "name": "Salon", "category_ids": ["1", "2", "10"], "favorites": ["44"],
+                     "custom_groups": [{"id": "radio", "name": "Radio", "patterns": ["radio"]}]})
+        from app.server import live_channels_in_order
+        order = [c["stream_id"] for c in live_channels_in_order(self.stack.api, self.stack.store.get("salon"))]
+        self.assertEqual(order[:2], ["44", "43"])         # favori, puis « Mes groupes », puis le reste
+        status = json.loads(self.get(self.stack.web_base + "/api/epg?slug=salon")[1])
+        self.assertEqual(status["playlist"]["mine"]["channels"], 2)

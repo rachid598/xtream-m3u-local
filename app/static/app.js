@@ -616,11 +616,16 @@
     $('epg-xmltv').textContent = pl.xmltv.toLocaleString('fr-FR');
     $('epg-api').textContent = data.mode === 'xmltv' ? 'désactivé' : pl.api.toLocaleString('fr-FR');
     $('epg-missing-count').textContent = pl.missing.length.toLocaleString('fr-FR');
-    if (pl.pending) setEpgPill('warn', `Récupération en cours… ${pct} %`);
+    const mine = pl.mine && pl.mine.channels ? pl.mine : null;
+    const minePct = mine ? Math.round((mine.covered / mine.channels) * 100) : null;
+    const mineText = mine ? `Mes groupes ${minePct} % · ` : '';
+    if (pl.pending) setEpgPill('warn', `${mineText}récupération en cours… ${pct} %`);
     else if (!pl.channels) setEpgPill('', 'Aucune chaîne');
     else if (!covered) setEpgPill('error', 'Aucun programme');
+    else if (mine) setEpgPill(minePct >= 80 ? 'ok' : 'warn', `Mes groupes ${minePct} % · toutes ${pct} %`);
     else setEpgPill(pl.missing.length ? 'warn' : 'ok', `${pct} % des chaînes`);
     const parts = [];
+    if (mine) parts.push(`Mes groupes et favoris : ${mine.covered} / ${mine.channels} chaînes avec programmes (récupérées en premier).`);
     if (data.mode === 'api') parts.push('Mode EPG_SOURCE=api : programmes récupérés chaîne par chaîne via l\'API Xtream.');
     else if (src.ok) {
       const when = src.updated_at ? new Date(src.updated_at * 1000).toLocaleString('fr-FR', { dateStyle: 'short', timeStyle: 'short' }) : '';

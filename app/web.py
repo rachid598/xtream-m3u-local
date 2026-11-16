@@ -21,7 +21,8 @@ import time
 from .builder import select_items
 from .custom import SLUG_RE, filter_kind, uses
 from .epg import EpgUnavailable
-from .server import KINDS, Config, UpstreamError, XtreamAPI, redact
+from .builder import CUSTOM_PREFIX
+from .server import KINDS, Config, UpstreamError, XtreamAPI, live_channels_in_order, redact
 from .devices import DeviceStore, InvalidDevice
 from .streams import StreamManager
 from .vod import SeriesCache
@@ -448,7 +449,7 @@ class WebHandler(BaseHTTPRequestHandler):
 
     # ----------------------------------------------------------------- EPG
     def playlist_channels(self, saved: dict) -> list[dict]:
-        return [c for c, _ in select_items(self.api, saved, "live")[0]]
+        return live_channels_in_order(self.api, saved)
 
     def epg_status(self, slug: str | None) -> None:
         if self.epg is None:
@@ -472,7 +473,14 @@ class WebHandler(BaseHTTPRequestHandler):
                 return self.json(404, {"error": "Playlist introuvable"})
             try:
                 # Budget nul : on mesure la couverture et on planifie les chaînes manquantes en arrière-plan.
-                _, stats = self.epg.playlist_guide(slug, self.playlist_channels(saved), budget=0)
+                ordered = live_channels_in_order(self.api, saved, with_groups=True)
+                _, stats = self.epg.playlist_guide(slug, [c for c, _ in ordered], budget=0)
+                # Couverture de « Mes groupes » (TNT, Bouquet Canal+…) et des favoris, à part.
+                missing = {m["stream_id"] for m in stats["missing"]}
+                favorites = set(saved.get("favorites") or [])
+                mine = {c["stream_id"] for c, group in ordered
+                        if group.startswith(CUSTOM_PREFIX) or c["stream_id"] in favorites}
+                stats["mine"] = {"channels": len(mine), "covered": len(mine - missing)}
                 data["playlist"] = stats
             except (UpstreamError, EpgUnavailable) as exc:
                 data["error"] = str(exc)

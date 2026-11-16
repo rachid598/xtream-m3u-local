@@ -690,6 +690,21 @@ def playlists_live_ids(api: XtreamAPI, store: PlaylistStore, limit: int) -> set[
     return set(ids[:limit])
 
 
+def live_channels_in_order(api: XtreamAPI, saved: dict, *, refresh: bool = False,
+                           with_groups: bool = False):
+    """Chaînes du direct dans l'ordre de la playlist : favoris, groupes perso (TNT, Canal+…), puis le reste.
+
+    Le guide complété par l'API interroge les chaînes dans cet ordre : les chaînes préférées d'abord.
+    """
+    entries, groups = select_items(api, saved, "live", refresh=refresh)
+    favorites = set(saved.get("favorites") or [])
+    ordered = order_entries(entries, groups, saved.get("group_order"))
+    ordered.sort(key=lambda e: 0 if e[0]["stream_id"] in favorites else 1)  # tri stable
+    if with_groups:
+        return ordered
+    return [c for c, _ in ordered]
+
+
 def collect_entries(api: XtreamAPI, series: "SeriesCache", saved: dict, kinds: tuple[str, ...], *,
                     refresh: bool = False, budget: float = 20) -> tuple[list[tuple[dict, str]], dict[str, str], int]:
     """Éléments d'une playlist personnalisée, tous types confondus.
@@ -1364,7 +1379,7 @@ class Handler(BaseHTTPRequestHandler):
             incomplete = 0
             try:
                 if ext == "xml":
-                    selected = [c for c, _ in select_items(self.api, saved, "live", refresh=refresh)[0]]
+                    selected = live_channels_in_order(self.api, saved, refresh=refresh)
                     path_out, _ = self.epg.playlist_guide(
                         slug, selected, budget=0 if head_only else self.config.epg_fetch_seconds)
                     return self.send_file(path_out, "application/xml; charset=utf-8",

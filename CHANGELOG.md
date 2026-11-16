@@ -2,6 +2,13 @@
 
 Format inspiré de « Keep a Changelog ». Les versions suivent le versionnage sémantique.
 
+## [3.4.0] — 2026-11-16
+
+### Ajouté
+- **Guide : priorité à tes chaînes** — l'API est interrogée dans l'ordre de la playlist : favoris, puis « Mes groupes » (TNT, Bouquet Canal+…), puis le reste.
+- **Guide emprunté à une autre version** : si le fournisseur n'a aucun programme pour la version gardée (ex. « VIP: TF1 ᴴᴰ »), le guide est pris sur une de ses versions masquées (« FR: TF1 »…), sous l'identifiant de la chaîne gardée.
+- Bloc EPG : couverture « Mes groupes x % · toutes y % » et liste des chaînes sans programme dans l'ordre de la playlist.
+
 ## [3.3.0] — 2026-11-16
 
 ### Ajouté

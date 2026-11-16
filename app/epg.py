@@ -322,10 +322,32 @@ class EpgCache:
             if source is None and not targets:
                 raise EpgUnavailable("Guide XMLTV du fournisseur indisponible : enregistre une playlist personnalisée "
                                      "pour obtenir un guide complété par l'API, puis réessaie")
+        # Chaque chaîne interroge d'abord sa propre version, puis — si le fournisseur n'a aucun programme
+        # pour elle — ses autres versions (doublons masqués : « VIP: TF1 », « FR: TF1 »…). Ordre des
+        # appels = ordre de la playlist (groupes perso et favoris d'abord).
+        source_of: dict[str, str] = {}
+        to_fetch: list[str] = []
+        for c in targets:
+            chain = [c["stream_id"], *(c.get("alternates") or [])[:3]]
+            for sid in chain:
+                known = api.known(sid) if hasattr(api, "known") else None
+                if known is None:
+                    source_of[c["stream_id"]] = sid
+                    to_fetch.append(sid)
+                    break
+                if known:
+                    source_of[c["stream_id"]] = sid
+                    break
+        fetched: dict[str, list[dict]] = {}
+        if to_fetch:
+            fetched, _ = api.episodes_for(list(dict.fromkeys(to_fetch)), budget=budget)
         listings: dict[str, list[dict]] = {}
-        if targets:
-            listings, _ = api.episodes_for([c["stream_id"] for c in targets], budget=budget)
-        pending = api.pending_count([c["stream_id"] for c in targets]) if targets else 0
+        for c in targets:
+            sid = source_of.get(c["stream_id"])
+            items = fetched.get(sid) if sid in fetched else (api.known(sid) if sid and hasattr(api, "known") else None)
+            if items:
+                listings[c["stream_id"]] = items
+        pending = api.pending_count(list(dict.fromkeys(to_fetch))) if to_fetch else 0
         from_api = {c["stream_id"] for c in targets if listings.get(c["stream_id"])}
         wanted = {c["epg_id"].strip().lower() for c in channels if c["stream_id"] in covered}
         stats = {
@@ -343,7 +365,8 @@ class EpgCache:
             digest.update(item.encode("utf-8", "replace") + b"\n")
         for c in sorted(targets, key=lambda c: c["stream_id"]):
             if c["stream_id"] in from_api:
-                digest.update(f"{c['stream_id']}:{xml_channel_id(c)}:{api.fetched_at(c['stream_id'])}\n".encode("utf-8", "replace"))
+                sid = source_of.get(c["stream_id"], c["stream_id"])
+                digest.update(f"{c['stream_id']}:{xml_channel_id(c)}:{sid}:{api.fetched_at(sid)}\n".encode("utf-8", "replace"))
         signature = digest.hexdigest()
         self.directory.mkdir(parents=True, exist_ok=True)
         out = self.directory / f"p-{key}.xml"
