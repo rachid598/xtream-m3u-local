@@ -43,6 +43,12 @@ try {
   await page.goto(`${base}/`);
   await waitFor(async () => (await page.getAttribute('#connection', 'class')) === 'pill ok', 'connexion catalogue');
 
+  // Adresse EPG « à la Xtream » de la playlist complète
+  const fullEpg = await page.innerText('#full-epg-url');
+  assert(fullEpg.endsWith('/xmltv.php'), `URL EPG complète ${fullEpg}`);
+  const xmltv = await fetchText(fullEpg);
+  assert(xmltv.status === 200 && xmltv.text.includes('<programme'), '/xmltv.php répond avec des programmes');
+
   // Création
   await page.fill('#name', 'Salon');
   assert(await page.inputValue('#slug') === 'salon', 'slug automatique');

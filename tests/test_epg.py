@@ -189,3 +189,48 @@ class ApiEpgTests(StackTestCase):
         status = json.loads(self.get(stack.web_base + "/api/epg?slug=x")[1])
         self.assertFalse(status["enabled"])
         self.assertEqual(self.send(stack.web_base + "/api/epg/refresh", "POST", {})[0], 409)
+
+
+class XmltvAliasTests(StackTestCase):
+    """/xmltv.php : adresse EPG « à la Xtream » utilisée d'office par certains lecteurs."""
+
+    def test_xmltv_php_alias(self):
+        status, body, headers = self.get(self.stack.proxy_base + "/xmltv.php?username=x&password=y")
+        self.assertEqual(status, 200)
+        self.assertTrue(headers["Content-Type"].startswith("application/xml"))
+        root = ET.fromstring(body)
+        self.assertEqual(sorted(c.get("id") for c in root.findall("channel")), ["franceinfo.fr", "sport1.fr"])
+        self.assertEqual(self.get(self.stack.proxy_base + "/epg.xml")[1], body)
+        # Aucun appel API chaîne par chaîne sans playlist personnalisée.
+        self.assertEqual(FakeXtream.simple_epg_calls, [])
+        m3u = self.get(self.stack.proxy_base + "/playlist.m3u")[1].decode()
+        self.assertIn('tvg-id="xtream-43"', m3u)
+
+    def test_full_guide_completed_by_api_for_playlist_channels(self):
+        FakeXtream.epg_mode = "error"
+        self.assertEqual(self.get(self.stack.proxy_base + "/xmltv.php")[0], 502)   # aucune playlist : rien à compléter
+        self.create({"slug": "salon", "name": "Salon", "category_ids": ["1"]})
+        status, body, _ = self.get(self.stack.proxy_base + "/xmltv.php")
+        self.assertEqual(status, 200)
+        root = ET.fromstring(body)
+        self.assertEqual([p.find("title").text for p in root.findall("programme")], ["Journal API"])
+        self.assertNotIn("43", FakeXtream.simple_epg_calls)       # chaîne hors playlists : pas d'appel
+
+    def test_api_channel_cap(self):
+        stack = self.make_stack(epg_api_max_channels=0)
+        FakeXtream.epg_mode = "error"
+        self.create({"slug": "salon", "name": "Salon", "category_ids": ["1"]}, stack)
+        self.assertEqual(self.get(stack.proxy_base + "/xmltv.php")[0], 502)
+
+    def test_token_and_disabled(self):
+        stack = self.make_stack(access_token="tok")
+        self.assertEqual(self.get(stack.proxy_base + "/xmltv.php")[0], 403)
+        self.assertEqual(self.get(stack.proxy_base + "/xmltv.php?token=tok")[0], 200)
+        disabled = self.make_stack(enable_epg=False)
+        self.assertEqual(self.get(disabled.proxy_base + "/xmltv.php")[0], 404)
+
+    def test_xmltv_mode_serves_provider_file(self):
+        stack = self.make_stack(epg_source="xmltv")
+        body = self.get(stack.proxy_base + "/xmltv.php")[1]
+        self.assertIn(b"other.fr", body)        # fichier fournisseur tel quel
+        self.assertNotIn(b"xtream-43", self.get(stack.proxy_base + "/playlist.m3u")[1])

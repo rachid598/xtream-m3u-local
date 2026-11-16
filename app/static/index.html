@@ -49,6 +49,12 @@
         <code id="full-url">—</code>
         <button type="button" class="btn small" data-copy="full-url">Copier</button>
       </div>
+      <p class="muted small epg-label">Guide des programmes (champ « EPG » du lecteur) :</p>
+      <div class="url-box">
+        <code id="full-epg-url">—</code>
+        <button type="button" class="btn small" data-copy="full-epg-url">Copier</button>
+      </div>
+      <p class="hint">Conseil : une playlist personnalisée (<code>/p/nom.m3u</code>) est plus légère, inclut films et séries, et son guide est complété pour toutes ses chaînes.</p>
     </section>
 
     <section class="card" id="token-card" hidden>
@@ -109,7 +115,7 @@
           <span class="pill" id="epg-pill"><span class="dot"></span><span id="epg-pill-text">Vérification…</span></span>
         </summary>
         <div class="epg-body">
-          <p class="hint">Les lecteurs (TiviMate, VLC…) le chargent automatiquement depuis la playlist. Si ton lecteur demande une « source EPG » séparée, copie cette adresse :</p>
+          <p class="hint">Les lecteurs (TiviMate, VLC…) le chargent automatiquement depuis la playlist. Si ton lecteur demande une adresse « EPG » séparée, copie celle-ci (l'adresse <code>http://IP:7777/xmltv.php</code> fonctionne aussi) :</p>
           <div class="url-box">
             <code id="epg-url">—</code>
             <button type="button" class="btn small" data-copy="epg-url">Copier</button>

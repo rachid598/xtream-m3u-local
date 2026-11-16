@@ -87,6 +87,7 @@ Puis attendre 20 s et vérifier :
    curl -s --max-time 8 -o /dev/null -w '%{http_code} %{size_download}\n' "<URL du flux>"
    → 200 et quelques centaines de Ko. (Une seule lecture à la fois : l'abonnement peut limiter les connexions.)
 8. EPG : curl -s --max-time 120 http://IP:7777/p/test-hermes.xml | head -c 300 → XML <tv>… avec des <programme>
+   et : curl -s -o /dev/null -w '%{http_code}\n' http://IP:7777/xmltv.php   → 200 (adresse EPG « à la Xtream »)
    puis : curl -s "http://IP:7778/api/epg?slug=test-hermes"
    → noter "source" (xmltv.php ok/erreur, nombre de chaînes/programmes) et "playlist" (channels, xmltv, api, pending,
    nombre de "missing"). Si pending > 0, réessayer 30 s plus tard. Si xmltv.php est en erreur, c'est normal que

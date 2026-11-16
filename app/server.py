@@ -113,6 +113,7 @@ class Config:
     epg_source: str = "auto"
     epg_url: str = ""
     epg_fetch_seconds: int = 15
+    epg_api_max_channels: int = 1000
     series_fetch_seconds: int = 20
 
     @classmethod
@@ -155,6 +156,7 @@ class Config:
             epg_source=_epg_source(),
             epg_url=_epg_url(),
             epg_fetch_seconds=max(0, _env_int("EPG_FETCH_SECONDS", 15)),
+            epg_api_max_channels=max(0, _env_int("EPG_API_MAX_CHANNELS", 1000)),
             series_fetch_seconds=max(0, _env_int("SERIES_FETCH_SECONDS", 20)),
         )
 
@@ -510,6 +512,22 @@ def parse_content(raw: str | None, default: tuple[str, ...]) -> tuple[str, ...]:
     return tuple(kind for kind in KINDS if kind in wanted)
 
 
+def playlists_live_ids(store: PlaylistStore, channels: list[dict], limit: int) -> set[str]:
+    """Chaînes du direct présentes dans au moins une playlist personnalisée (au plus ``limit``)."""
+    try:
+        playlists = store.list()
+    except RuntimeError:
+        return set()
+    ids: list[str] = []
+    seen: set[str] = set()
+    for saved in playlists:
+        for channel, _ in filter_channels(channels, saved):
+            if channel["stream_id"] not in seen:
+                seen.add(channel["stream_id"])
+                ids.append(channel["stream_id"])
+    return set(ids[:limit])
+
+
 def collect_entries(api: XtreamAPI, series: "SeriesCache", saved: dict, kinds: tuple[str, ...], *,
                     refresh: bool = False, budget: float = 20) -> tuple[list[tuple[dict, str]], dict[str, str], int]:
     """Éléments d'une playlist personnalisée, tous types confondus.
@@ -683,6 +701,24 @@ class Handler(BaseHTTPRequestHandler):
             if headers_sent:
                 self.close_connection = True
 
+    def full_guide(self, *, refresh: bool = False, budget: float = 15) -> Path:
+        """Guide de toutes les chaînes du compte.
+
+        Mode ``xmltv`` (ou catalogue indisponible) : XMLTV fournisseur tel quel. Sinon : XMLTV limité aux
+        chaînes du compte, complété par l'API pour les chaînes des playlists personnalisées
+        (au plus ``EPG_API_MAX_CHANNELS``) afin de ne pas lancer des milliers d'appels.
+        """
+        if self.config.epg_source == "xmltv":
+            return self.epg.ensure(refresh=refresh)
+        try:
+            channels, _ = self.api.catalog()
+        except UpstreamError:
+            return self.epg.ensure(refresh=refresh)
+        path, _ = self.epg.playlist_guide("_all", channels, budget=budget, refresh=refresh,
+                                          api_ids=playlists_live_ids(self.store, channels,
+                                                                     self.config.epg_api_max_channels))
+        return path
+
     def handle_request(self, *, head_only: bool) -> None:
         parts = urlsplit(self.path)
         qs = parse_qs(parts.query, keep_blank_values=True)
@@ -721,7 +757,8 @@ class Handler(BaseHTTPRequestHandler):
                     entries.extend((c, prefix + c["category_id"]) for c in items)
                 entries = order_entries(entries, groups)
                 content = playlist(self.config, entries, groups, base, mode=mode, fmt=fmt,
-                                   epg_path="/epg.xml" if "live" in kinds else None)
+                                   epg_path="/epg.xml" if "live" in kinds else None,
+                                   api_epg_ids=self.config.enable_epg and self.config.epg_source != "xmltv")
             except ValueError as exc:
                 return self._error(400, str(exc), head_only=head_only)
             except UpstreamError as exc:
@@ -787,12 +824,15 @@ class Handler(BaseHTTPRequestHandler):
                 self.end_headers()
                 return
             return self.relay(self.api.direct_stream(match.group(1)), head_only=False)
-        if path == "/epg.xml" and self.config.enable_epg:
+        if path in ("/epg.xml", "/xmltv.php") and self.config.enable_epg:
+            # /xmltv.php : adresse « à la Xtream » que certains lecteurs utilisent d'office pour le guide
+            # (les paramètres username/password éventuels sont ignorés).
             try:
-                source = self.epg.ensure(refresh=refresh)
+                guide = self.full_guide(refresh=refresh, budget=0 if head_only else self.config.epg_fetch_seconds)
             except EpgUnavailable as exc:
                 return self._error(502, str(exc), head_only=head_only)
-            return self.send_file(source, "application/xml; charset=utf-8", head_only=head_only, filename="epg.xml")
+            return self.send_file(guide, "application/xml; charset=utf-8", head_only=head_only,
+                                  filename="epg.xml")
         return self._error(404, "Page introuvable", head_only=head_only)
 
 

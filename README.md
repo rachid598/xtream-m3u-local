@@ -58,6 +58,7 @@ Deux vues, entièrement en français, responsives (téléphone, tablette, ordina
 - Chaque playlist annonce son guide dans l'en-tête M3U (`url-tvg` / `x-tvg-url` → `http://IP_UNRAID:7777/p/<nom>.xml`) : TiviMate, VLC et la plupart des lecteurs le chargent automatiquement. Si un lecteur demande une « source EPG » séparée, utiliser cette même adresse.
 - **Mode `auto` (par défaut)** : programmes du guide XMLTV du fournisseur (`xmltv.php`, ou `EPG_URL`) ; les chaînes qui n'y figurent pas — ou toutes, si `xmltv.php` ne fonctionne pas, comme `get.php` chez certains fournisseurs — sont complétées par l'API Xtream chaîne par chaîne (`get_simple_data_table`), avec cache disque (6 h) et préchargement à l'enregistrement de la playlist.
 - Les chaînes sans identifiant EPG fournisseur reçoivent `tvg-id="xtream-<id>"` pour être reliées au guide complété.
+- **Champ « EPG » d'un lecteur** : `http://IP_UNRAID:7777/xmltv.php` (adresse à la Xtream, paramètres `username`/`password` ignorés) ou `/epg.xml` = guide de toutes les chaînes ; il est complété par l'API pour les chaînes présentes dans tes playlists personnalisées (au plus `EPG_API_MAX_CHANNELS`). Pour une playlist personnalisée, préférer `http://IP_UNRAID:7777/p/<nom>.xml`.
 - Dans l'interface, le bloc **« Guide des programmes (EPG) »** de chaque playlist affiche l'URL à copier, la couverture (chaînes avec programmes, via xmltv.php / via l'API), la liste des chaînes sans programme et un bouton **Actualiser le guide**.
 
 ## Contenu des playlists
@@ -84,7 +85,7 @@ Deux vues, entièrement en français, responsives (téléphone, tablette, ordina
 | `/playlist.m3u?mode=direct&format=ts\|m3u8` | Liens directs fournisseur — **contient tes identifiants** |
 | `/get.php` | Alias de `/playlist.m3u` (ce n'est pas une API Xtream complète) |
 | `/stream/<id>.ts` | Relais MPEG-TS sans transcodage |
-| `/epg.xml` | Guide XMLTV complet (mis en cache sur disque) |
+| `/epg.xml` · `/xmltv.php` | Guide de toutes les chaînes (XMLTV fournisseur en cache, complété par l'API pour les chaînes des playlists personnalisées) |
 | `/health` | Sonde de santé (utilisée par le `HEALTHCHECK` Docker) |
 | `…?refresh=1` | Force la relecture du catalogue fournisseur |
 
@@ -104,6 +105,7 @@ Deux vues, entièrement en français, responsives (téléphone, tablette, ordina
 | `EPG_CACHE_HOURS` | `12` | Durée de cache du guide XMLTV sur disque |
 | `EPG_SOURCE` | `auto` | `auto` (xmltv.php + API pour les chaînes manquantes), `xmltv` (xmltv.php seul), `api` (API seule) |
 | `EPG_URL` | vide | Guide XMLTV externe (http(s), `.xml` ou `.xml.gz`) à utiliser à la place de `xmltv.php` |
+| `EPG_API_MAX_CHANNELS` | `1000` | Nombre maximal de chaînes complétées par l'API dans le guide complet `/xmltv.php` |
 | `EPG_FETCH_SECONDS` | `15` | Temps maximal passé à compléter le guide par l'API lors d'une demande de `/p/<nom>.xml` |
 | `CACHE_SECONDS` | `1800` | Durée de cache des catalogues (direct, films, séries) en mémoire |
 | `SERIES_CACHE_HOURS` | `24` | Durée de cache disque des épisodes (`/data/cache/series`) |
@@ -138,7 +140,7 @@ Si les liens d'une playlist utilisent une mauvaise adresse, définir `PUBLIC_BAS
 ## Développement
 
 ```bash
-python -m unittest discover -s tests -t . -v      # 88 tests, faux fournisseur Xtream local
+python -m unittest discover -s tests -t . -v      # 93 tests, faux fournisseur Xtream local
 python -m tools.demo                               # démo sans abonnement : chaînes, films et séries fictifs
 node tests/e2e_browser.mjs http://127.0.0.1:7778   # scénario navigateur (Playwright pour Node)
 ```

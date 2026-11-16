@@ -432,3 +432,6 @@ dialog .field { margin-bottom: 16px; }
 }
 
 #save { gap: .3em; }
+
+.epg-label { margin-top: 10px; }
+.card .hint code, .card .muted code { font-size: 11.5px; }

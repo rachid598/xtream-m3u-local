@@ -1,6 +1,6 @@
 # Passation — Xtream M3U Local
 
-> **État au 16 novembre 2026 — version 2.3.0 (TV en direct + films + séries + guide EPG complété par l'API).** Document à transmettre tel quel à l'IA suivante avec le dépôt.
+> **État au 16 novembre 2026 — version 2.3.1 (TV en direct + films + séries + guide EPG complété par l'API, `/xmltv.php`).** Document à transmettre tel quel à l'IA suivante avec le dépôt.
 > Aucun mot de passe, token ni URL fournisseur réelle ne doit être copié ici ni commité sur GitHub.
 
 ## 1. Objectif utilisateur
@@ -98,6 +98,19 @@ Chaque chaîne : `{stream_id, name, logo, epg_id, num, category_id, category_ids
 - `group_names` renomme le `group-title` **dans cette playlist uniquement**.
 - Le `slug` est figé après création (URL permanente) ; le nom est modifiable. Les anciens fichiers V2 (sans `group_order`/`group_names`) restent compatibles.
 - Limites : 100 playlists, 100 000 identifiants par liste, slug `^[a-z0-9][a-z0-9_-]{0,59}$`, nom 1–100 caractères.
+
+## 4 quinquies. Session 5 — `/xmltv.php` (2.3.0 → 2.3.1)
+
+**Retour utilisateur (capture d'écran du lecteur Android TV, écran « Playlist M3U via URL »)** : playlist `http://192.168.0.108:7777/playlist.m3u` → « La Playlist est accessible » ; champ EPG `http://192.168.0.108:7777/xmltv.php` → « Impossible de lire le contenu de cette URL » (404 : cette adresse n'existait pas, le guide était sous `/epg.xml`). L'utilisateur utilise la **playlist complète**, pas une playlist personnalisée.
+
+**Modifications**
+- `/xmltv.php` (paramètres `username`/`password` ignorés, `?token=` respecté) = alias de `/epg.xml`.
+- Guide complet (`Handler.full_guide`) : en mode `auto`/`api`, XMLTV limité aux chaînes du compte + complément API **uniquement pour les chaînes présentes dans les playlists personnalisées** (`playlists_live_ids`, plafond `EPG_API_MAX_CHANNELS`=1000) ; 502 explicite si ni XMLTV ni chaînes à compléter. Mode `xmltv` : fichier fournisseur tel quel.
+- `/playlist.m3u` : `tvg-id="xtream-<id>"` pour les chaînes sans identifiant EPG (hors mode `xmltv`).
+- Interface : carte « Playlist complète » avec l'URL EPG `…/xmltv.php` à copier et conseil d'utiliser une playlist personnalisée ; bloc EPG mentionne `/xmltv.php`.
+- Tests : 5 nouveaux (`XmltvAliasTests`) → 93 ; scénario navigateur : `/xmltv.php` renvoie des programmes.
+
+**Conseil donné à l'utilisateur** : dans le lecteur, champ EPG `http://192.168.0.108:7777/xmltv.php` (fonctionne désormais) ; idéalement passer à `…/p/<nom>.m3u` + `…/p/<nom>.xml` (plus léger, films/séries, guide complété pour toutes les chaînes de la playlist).
 
 ## 4 quater. Session 4 — guide des programmes (2.2.1 → 2.3.0)
 
@@ -215,7 +228,7 @@ Chaque chaîne : `{stream_id, name, logo, epg_id, num, category_id, category_ids
 
 | Vérification | Résultat |
 |---|---|
-| `python -m unittest discover -s tests -t .` | **88 tests OK** en 2.3.0 (81 en 2.2.1, 80 en 2.2.0, 65 en 2.1.0) — faux fournisseur local avec direct, films, séries, épisodes |
+| `python -m unittest discover -s tests -t .` | **93 tests OK** en 2.3.1 (88 en 2.3.0, 81 en 2.2.1, 80 en 2.2.0, 65 en 2.1.0) — faux fournisseur local avec direct, films, séries, épisodes |
 | `node --check app/static/app.js` | OK |
 | Scénario Chromium `tests/e2e_browser.mjs` sur la démo (1 500 chaînes, sous-groupes) | **OK** : création, exclusion, ajout manuel, réordonnancement/renommage de groupe, M3U conforme à l'URL affichée, modification à URL constante, duplication, suppression, vue catalogue, recherche, export JSON, aucun défilement horizontal à 390 / 768 / 1366 / 1920 px, aucune erreur console |
 | `docker build` (python:3.13-alpine) | OK |

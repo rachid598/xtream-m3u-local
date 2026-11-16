@@ -296,24 +296,32 @@ class EpgCache:
     api_cache = None  # KeyedCache des programmes par chaîne (get_simple_data_table)
 
     def playlist_guide(self, key: str, channels: list[dict], *, mode: str | None = None, api=None,
-                       budget: float = 15) -> tuple[Path, dict]:
+                       budget: float = 15, api_ids: set[str] | None = None,
+                       refresh: bool = False) -> tuple[Path, dict]:
         """XMLTV de la playlist ``key`` + statistiques de couverture.
 
         ``channels`` : chaînes du direct de la playlist (``stream_id``, ``name``, ``logo``, ``epg_id``).
         ``api`` : :class:`app.vod.KeyedCache` des programmes par chaîne (``get_simple_data_table``).
+        ``api_ids`` : si fourni (guide complet), seules ces chaînes peuvent être complétées par l'API ;
+        ``EpgUnavailable`` est levée si ni le XMLTV ni l'API ne peuvent fournir de programmes.
         """
         mode = mode or self.mode
         api = api if api is not None else self.api_cache
         source = None
         if mode in ("auto", "xmltv"):
             try:
-                source = self.ensure()
+                source = self.ensure(refresh=refresh)
             except EpgUnavailable:
                 if mode == "xmltv" or api is None:
                     raise
         index = self.index() if source else {}
         covered = {c["stream_id"] for c in channels if c.get("epg_id") and index.get(c["epg_id"].strip().lower(), 0) > 0}
         targets = [] if mode == "xmltv" or api is None else [c for c in channels if c["stream_id"] not in covered]
+        if api_ids is not None:
+            targets = [c for c in targets if c["stream_id"] in api_ids]
+            if source is None and not targets:
+                raise EpgUnavailable("Guide XMLTV du fournisseur indisponible : enregistre une playlist personnalisée "
+                                     "pour obtenir un guide complété par l'API, puis réessaie")
         listings: dict[str, list[dict]] = {}
         if targets:
             listings, _ = api.episodes_for([c["stream_id"] for c in targets], budget=budget)

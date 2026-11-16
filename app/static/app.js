@@ -462,6 +462,7 @@
       box.classList.remove('ready');
     }
     $('full-url').textContent = withToken(`${baseUrl()}/playlist.m3u`);
+    $('full-epg-url').textContent = state.status && state.status.epg_enabled ? withToken(`${baseUrl()}/xmltv.php`) : 'EPG désactivé (ENABLE_EPG=false)';
   }
 
   function renderPlaylists() {
