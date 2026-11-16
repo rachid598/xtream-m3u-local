@@ -87,6 +87,16 @@ class XtreamEmulator:
             return False
         return any(item["stream_id"] == item_id for item, _ in entries)
 
+    def alternates(self, device: dict, item_id: str) -> list[str]:
+        """Versions de secours d'une chaîne si la playlist de l'appareil a la bascule automatique."""
+        try:
+            entries, _, saved = self.entries(device, "live")
+        except Exception:
+            return []
+        if not saved.get("failover"):
+            return []
+        return next((list(item.get("alternates") or []) for item, _ in entries if item["stream_id"] == item_id), [])
+
     # --------------------------------------------------------------- réponses
     def categories(self, device: dict, kind: str) -> list[dict]:
         entries, groups, saved = self.entries(device, kind)

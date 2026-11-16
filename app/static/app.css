@@ -529,3 +529,8 @@ dialog .field { margin-bottom: 16px; }
 .icon-btn.danger:hover { background: var(--danger-soft); color: var(--danger); }
 .badge.grp { background: var(--accent-soft); color: var(--accent-strong); border-color: transparent; }
 .kind-tag.mine { color: var(--accent-strong); border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
+
+.hint.warn-text { color: var(--warn); }
+#options-box > summary { flex-wrap: wrap; }
+#options-pill { max-width: 100%; min-width: 0; }
+#options-pill-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }

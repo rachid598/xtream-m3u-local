@@ -165,3 +165,45 @@ class RelayLimitTests(StackTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FailoverTests(StackTestCase):
+    """Bascule automatique entre les versions d'une même chaîne (option ``failover``)."""
+
+    def test_dedupe_keeps_alternates_best_first(self):
+        from app.builder import dedupe
+        entries = [({"stream_id": "1", "name": "VIP: TF1 ᴴᴰ"}, "g"), ({"stream_id": "2", "name": "FR: TF1 4K"}, "g"),
+                   ({"stream_id": "3", "name": "AF: TF1"}, "g"), ({"stream_id": "4", "name": "TF1 FHD"}, "g"),
+                   ({"stream_id": "5", "name": "M6"}, "g")]
+        kept = dedupe(entries)
+        self.assertEqual([(e[0]["stream_id"], e[0].get("alternates")) for e in kept],
+                         [("2", ["4", "1", "3"]), ("5", None)])
+
+    def test_playlist_urls_carry_alternates_only_with_failover(self):
+        from app.server import playlist
+        entries = [({"stream_id": "2", "name": "TF1", "logo": "", "epg_id": "", "num": "", "alternates": ["4", "1"]}, "1")]
+        on = playlist(self.stack.config, entries, {"1": "TNT"}, "http://h", failover=True).decode()
+        off = playlist(self.stack.config, entries, {"1": "TNT"}, "http://h").decode()
+        hls = playlist(self.stack.config, entries, {"1": "TNT"}, "http://h", failover=True, live_format="hls").decode()
+        self.assertIn("http://h/stream/2.ts?alt=4,1", on)
+        self.assertNotIn("alt=", off + hls)
+        from app.server import parse_alternates
+        self.assertEqual(parse_alternates("4,1,x,4,../9,1234567890123"), ["4", "1"])
+
+    def test_relay_switches_to_next_version(self):
+        stack = self.make_stack(failover_stall_seconds=1.0)
+        start = time.monotonic()
+        status, body, _ = self.get(stack.proxy_base + "/stream/60.ts?alt=62,61")
+        self.assertEqual(status, 200)
+        # 60 se tait → 62 absent (404) → 61 fonctionne.
+        self.assertTrue(body.startswith(b"A" * 4096 + b"B" * 10240), body[:40] + body[4090:4110])
+        self.assertLess(time.monotonic() - start, 15)
+        for _ in range(50):
+            if not stack.streams.count():
+                break
+            time.sleep(0.05)
+        self.assertEqual(stack.streams.count(), 0)
+
+    def test_option_saved(self):
+        self.create({"slug": "f", "name": "F", "category_ids": ["1"], "dedupe": True, "failover": True})
+        self.assertTrue(self.stack.store.get("f")["failover"])

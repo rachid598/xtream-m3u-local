@@ -157,6 +157,10 @@
             <label class="check-row"><input type="checkbox" id="opt-dedupe"> <span>Masquer les doublons SD / HD / FHD / 4K d'une même chaîne (garder la meilleure qualité dans chaque groupe)</span></label>
           </div>
           <div class="option-row">
+            <label class="check-row"><input type="checkbox" id="opt-failover"> <span>Bascule automatique : si la version lue coupe, se fige ou rame, passer toute seule à la version suivante de la même chaîne (4K → FHD → HD → SD)</span></label>
+            <p class="hint" id="opt-failover-hint">Utilise les doublons masqués comme versions de secours : active aussi « Masquer les doublons ». Format MPEG-TS seulement ; chaque bascule provoque une courte coupure (1 à 3 s) et la version suivante reste jusqu'au prochain changement de chaîne.</p>
+          </div>
+          <div class="option-row">
             <label class="check-row"><input type="checkbox" id="opt-separators"> <span>Masquer les séparateurs du fournisseur (fausses chaînes du type « ##### PRIME ##### » ou « ===== FR ===== »)</span></label>
           </div>
           <div class="option-row">

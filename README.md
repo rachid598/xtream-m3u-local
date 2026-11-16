@@ -53,7 +53,7 @@ Entièrement en français, responsive (téléphone, tablette, ordinateur), thèm
 - **☆ favoris** (groupe en tête de la playlist), **✎ renommage et numéro de chaîne** (zapping à la télécommande et ordre), **numérotation automatique** ;
 - **📁 Mes groupes de chaînes** (onglet « 3. Résumé ») : crée tes propres groupes du direct — « TNT », « Canal+ », « Sport »… — placés **en tête de la playlist**. Modèles prêts (**Bouquet Canal+** : toutes les chaînes de l'offre Canal+ rangées par thème comme sur le décodeur ; TNT dans l'ordre des numéros ; Chaînes Canal+ ; Sport, Info, Cinéma, Jeunesse, Documentaires) ou groupe vide « + Nouveau groupe en premier ». Un groupe se remplit tout seul avec les chaînes retenues dont le nom correspond (« contient » ou « est exactement », sans tenir compte du pays « FR: », des accents ni de HD/FHD/4K), et le bouton **📁** d'une chaîne la range à la main dans un groupe (ou la laisse dans son groupe d'origine). Écrire « 4: Canal+ » donne aussi le numéro 4 à la chaîne (comme sur un décodeur). Une chaîne rangée quitte son groupe d'origine ; si elle correspond à plusieurs groupes, elle va dans le plus haut ;
 - résumé : ordre et noms des groupes, ajouts, exclusions, favoris, personnalisations ;
-- options : format **MPEG-TS ou HLS**, **replay**, **masquer les doublons SD/HD/FHD/4K**, **masquer les séparateurs** (fausses chaînes « #### PRIME #### » du fournisseur), nom du groupe des favoris ;
+- options : format **MPEG-TS ou HLS**, **replay**, **masquer les doublons SD/HD/FHD/4K**, **bascule automatique** entre ces versions, **masquer les séparateurs** (fausses chaînes « #### PRIME #### » du fournisseur), nom du groupe des favoris ;
 - bloc **Guide des programmes (EPG)** : URL, couverture, chaînes sans programme, actualisation.
 
 **Catalogue fournisseur** (lecture seule) : ordre exact, identifiants, `parent_id`, chaînes / films / séries, recherche, **export JSON** (identifiants masqués).
@@ -89,7 +89,10 @@ Un abonnement autorise souvent une seule connexion. Le serveur compte les lectur
 - limite = valeur de l'abonnement (`MAX_CONNECTIONS=auto`), un nombre, ou `0` (illimité) ;
 - limite atteinte : le flux **du même appareil** est remplacé (zapping), sinon le plus ancien est coupé (`STREAM_TAKEOVER=true`) ou la nouvelle lecture est refusée (`false`) ;
 - l'appareil coupé ne peut pas reprendre **le même** flux pendant 30 s (sinon les deux TV se couperaient en boucle) ;
-- vue **Système** : lectures en cours, débit transmis, bouton « Arrêter ».
+- vue **Système** : lectures en cours, débit transmis, bouton « Arrêter » ;
+- le badge « x/y connexion » prend le plus grand entre le compteur du fournisseur (souvent en retard) et les lectures relayées par le serveur.
+
+**Bascule automatique** (option de playlist, avec « Masquer les doublons », format MPEG-TS) : les doublons masqués d'une chaîne (ex. TF1 4K, FHD, HD, SD) deviennent ses versions de secours, de la meilleure à la moins bonne. Si la version lue ne démarre pas, se coupe, reste muette `FAILOVER_STALL_SECONDS` secondes ou rame (débit < `FAILOVER_SLOW_PERCENT` % du meilleur débit observé), le serveur ferme la connexion et enchaîne la version suivante dans le même flux : courte coupure (1 à 3 s), sans changer de chaîne. Une seule connexion fournisseur à la fois. Limites : le serveur ne voit que le fournisseur (pas les saccades dues au Wi-Fi ou à la TV) et ne remonte pas en qualité tout seul (rezapper pour revenir à la meilleure version). URL : `/stream/<id>.ts?alt=<id2>,<id3>` ; mode Xtream : automatique.
 
 ## Guide des programmes (EPG)
 
@@ -132,6 +135,8 @@ Ajouter `XTREAM_URL_2`, `XTREAM_USERNAME_2`, `XTREAM_PASSWORD_2` (et `XTREAM_NAM
 | `PUBLIC_BASE_URL` | auto | Adresse écrite dans les playlists, ex. `http://192.168.1.10:7777` |
 | `MAX_CONNECTIONS` | `auto` | Connexions simultanées : `auto` (abonnement), `0` (illimité) ou un nombre |
 | `STREAM_TAKEOVER` | `true` | Limite atteinte : couper le flux le plus ancien (`true`) ou refuser (`false`) |
+| `FAILOVER_STALL_SECONDS` | `6` | Bascule automatique : version suivante si le flux reste muet N secondes |
+| `FAILOVER_SLOW_PERCENT` | `35` | … ou si son débit tombe sous ce % du meilleur débit observé (2 fois 10 s ; `0` = jamais) |
 | `PROVIDER_TIMEZONE` | auto | Fuseau du serveur Xtream pour le replay (ex. `Europe/Paris`) |
 | `ENABLE_EPG` | `true` | Guide des programmes |
 | `EPG_SOURCE` | `auto` | `auto`, `xmltv` ou `api` |

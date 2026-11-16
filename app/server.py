@@ -172,6 +172,8 @@ class Config:
     epg_api_max_channels: int = 1000
     max_connections: int = -1        # -1 = auto (valeur de l'abonnement), 0 = illimité
     stream_takeover: bool = True
+    failover_stall_seconds: float = 6.0   # bascule automatique : flux muet pendant N s → version suivante
+    failover_slow_ratio: float = 0.35     # … ou débit < 35 % du meilleur débit observé (2 fenêtres de suite) ; 0 = jamais
     provider_timezone: str = ""      # vide = fuseau annoncé par le fournisseur (server_info.timezone)
     provider_name: str = ""          # XTREAM_NAME : nom affiché du fournisseur principal
     extra_providers: tuple = ()      # ((nom, url, utilisateur, mot de passe), …) : XTREAM_URL_2 … _9
@@ -225,6 +227,8 @@ class Config:
             epg_api_max_channels=max(0, _env_int("EPG_API_MAX_CHANNELS", 1000)),
             max_connections=_max_connections(),
             stream_takeover=_env_bool("STREAM_TAKEOVER", True),
+            failover_stall_seconds=float(min(60, max(2, _env_int("FAILOVER_STALL_SECONDS", 6)))),
+            failover_slow_ratio=min(90, max(0, _env_int("FAILOVER_SLOW_PERCENT", 35))) / 100,
             provider_timezone=_timezone_env(),
             provider_name=os.environ.get("XTREAM_NAME", "").strip()[:40],
             extra_providers=_extra_providers(),
@@ -579,6 +583,12 @@ def escape_title(value: object) -> str:
     return str(value or "Sans nom").replace("\r", " ").replace("\n", " ").strip() or "Sans nom"
 
 
+def parse_alternates(value: str) -> list[str]:
+    """``?alt=12,34`` : versions de secours d'une chaîne (identifiants numériques, 8 au maximum)."""
+    ids = [part for part in (value or "").split(",") if part.isdigit() and len(part) <= 12]
+    return list(dict.fromkeys(ids))[:8]
+
+
 def with_token(url: str, token: str) -> str:
     if not token:
         return url
@@ -589,7 +599,7 @@ def playlist(config: Config, entries: list[tuple[dict, str]], categories: dict[s
              *, mode: str = "proxy", fmt: str = "ts", epg_path: str | None = "/epg.xml",
              group_names: dict[str, str] | None = None, api_epg_ids: bool = False,
              live_format: str = "ts", catchup: bool = True, token: str | None = None,
-             direct_url=None) -> bytes:
+             direct_url=None, failover: bool = False) -> bytes:
     """Build an M3U (extended) document.
 
     ``entries`` = ``[(élément, clé_de_groupe), ...]`` où l'élément est une chaîne (``kind`` absent ou ``live``),
@@ -630,6 +640,9 @@ def playlist(config: Config, entries: list[tuple[dict, str]], categories: dict[s
         if mode == "proxy":
             if path == "live":
                 local = f"hls/{stream_id}.m3u8" if live_format == "hls" else f"stream/{stream_id}.ts"
+                if failover and live_format != "hls" and channel.get("alternates"):
+                    # Bascule automatique : versions de secours (meilleure qualité d'abord).
+                    local += "?alt=" + ",".join(channel["alternates"])
             else:
                 local = f"{path}/{stream_id}.{ext}"
             target = with_token(f"{base}/{local}", token)
@@ -942,6 +955,96 @@ class Handler(BaseHTTPRequestHandler):
             if headers_sent:
                 self.close_connection = True
 
+    def relay_live(self, ids: list[str]) -> None:
+        """Direct avec bascule automatique : si la version lue coupe, se tait ou rame, passer à la suivante.
+
+        Une seule connexion fournisseur à la fois (la précédente est fermée avant d'ouvrir la suivante) ;
+        les flux MPEG-TS sont enchaînés dans la même réponse, le lecteur continue sans changer de chaîne.
+        """
+        ids = list(dict.fromkeys(ids))
+        names = {sid: self.item_label("live", sid) for sid in ids}
+        session = self.open_session("live", ids[0], names[ids[0]])
+        if session is None:
+            return
+        state = {"headers_sent": False}
+        index, switches, max_switches = 0, 0, 2 * len(ids)
+        try:
+            while not session.cancelled.is_set():
+                sid = ids[index]
+                session.label = names[ids[0]] + (f" → secours {index}/{len(ids) - 1} ({names[sid]})" if index else "")
+                outcome = self._pump_live(sid, session, state)
+                if outcome in ("client", "cancelled"):
+                    break
+                switches += 1
+                if switches > max_switches:
+                    LOG.warning("Bascule automatique : aucune version de la chaîne %s ne fonctionne", ids[0])
+                    break
+                index = (index + 1) % len(ids)
+                LOG.info("Bascule automatique (%s) : %s → %s", outcome, sid, ids[index])
+                if index == 0:
+                    time.sleep(1)  # toutes les versions essayées : petite pause avant de recommencer
+        finally:
+            self.streams.release(session)
+            if state["headers_sent"]:
+                self.close_connection = True
+            else:
+                try:
+                    self._error(502, "Flux fournisseur inaccessible (toutes les versions ont été essayées)", head_only=False)
+                except (OSError, ValueError):
+                    pass
+
+    def _pump_live(self, sid: str, session, state: dict) -> str:
+        """Relaie une version. Retourne client | cancelled | failed | stalled | slow | ended."""
+        stall = self.config.failover_stall_seconds
+        request = Request(self.api.direct_stream(sid), headers={"User-Agent": self.config.user_agent, "Accept": "*/*"})
+        try:
+            upstream = urlopen(request, timeout=stall + 4)  # délai de démarrage un peu plus large
+        except (HTTPError, URLError, TimeoutError, OSError, HTTPException, ValueError) as exc:
+            LOG.warning("Version %s indisponible (%s)", sid, getattr(exc, "code", type(exc).__name__))
+            return "failed"
+        with upstream:
+            session.attach(upstream.close)
+            try:
+                upstream.fp.raw._sock.settimeout(stall)  # lecture : « muet » au-delà de N secondes
+            except AttributeError:
+                pass
+            if not state["headers_sent"]:
+                self.send_response(200)
+                self.send_header("Content-Type", "video/mp2t")
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                state["headers_sent"] = True
+            reader = getattr(upstream, "read1", upstream.read)
+            window, window_start, best_rate, slow_windows = 0, time.monotonic(), 0.0, 0
+            started = window_start
+            ratio = self.config.failover_slow_ratio
+            while True:
+                if session.cancelled.is_set():
+                    return "cancelled"
+                try:
+                    chunk = reader(64 * 1024)
+                except (socket.timeout, TimeoutError):
+                    return "stalled"
+                except Exception:
+                    return "cancelled" if session.cancelled.is_set() else "failed"
+                if not chunk:
+                    return "ended"
+                try:
+                    self.wfile.write(chunk)
+                except (BrokenPipeError, ConnectionResetError, socket.timeout, OSError):
+                    return "client"
+                session.touch(len(chunk))
+                window += len(chunk)
+                now = time.monotonic()
+                if now - window_start >= 10:
+                    rate = window / (now - window_start)
+                    if now - started > 15:  # après le démarrage (rafale initiale)
+                        slow_windows = slow_windows + 1 if ratio and best_rate and rate < best_rate * ratio else 0
+                        if slow_windows >= 2:
+                            return "slow"
+                    best_rate = max(best_rate, rate)
+                    window, window_start = 0, now
+
     def build_custom_m3u(self, saved: dict, qs: dict[str, list[str]], *, epg_path: str, refresh: bool = False,
                          head_only: bool = False, default_kinds: tuple[str, ...] = tuple(KINDS)) -> tuple[bytes, int]:
         """M3U d'une playlist personnalisée (aussi utilisé par ``get.php`` d'un appareil)."""
@@ -960,7 +1063,7 @@ class Handler(BaseHTTPRequestHandler):
                            group_names=saved.get("group_names"),
                            api_epg_ids=self.config.enable_epg and self.config.epg_source != "xmltv",
                            live_format=live_format, catchup=saved.get("catchup", True),
-                           token=self.request_token)
+                           token=self.request_token, failover=bool(saved.get("failover")))
         return content, incomplete
 
     # ------------------------------------------------------- Xtream local
@@ -1028,6 +1131,9 @@ class Handler(BaseHTTPRequestHandler):
                 return None
             if head_only:
                 return self.response(200, b"", "video/mp2t", head_only=True)
+            alternates = self.emulator.alternates(device, item_id)
+            if alternates:
+                return self.relay_live([item_id, *alternates])
             return self.relay(self.api.direct_stream(item_id), head_only=False, track=("live", item_id))
         return self.relay(self.api.direct_url(kind, item_id, ext), head_only=head_only,
                           default_type=mime_for(ext), track=(kind, item_id))
@@ -1295,6 +1401,9 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_header("Cache-Control", "no-store")
                 self.end_headers()
                 return
+            alternates = parse_alternates(qs.get("alt", [""])[0])
+            if alternates:
+                return self.relay_live([match.group(1), *alternates])
             return self.relay(self.api.direct_stream(match.group(1)), head_only=False,
                               track=("live", match.group(1)))
         if path in ("/epg.xml", "/xmltv.php") and self.config.enable_epg:

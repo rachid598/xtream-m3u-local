@@ -235,6 +235,31 @@ class FakeXtream(BaseHTTPRequestHandler):
                 return self.send_body(404, b"nope", "text/plain")
             ctype = "application/vnd.apple.mpegurl" if url.path.endswith(".m3u8") else "video/mp2t"
             return self.send_body(200, files[url.path], ctype)
+        if url.path == f"/live/{USERNAME}/{PASSWORD}/60.ts":
+            # Bascule automatique : démarre puis se tait (saccade / coupure côté fournisseur).
+            try:
+                self.send_response(200)
+                self.send_header("Content-Type", "video/mp2t")
+                self.end_headers()
+                self.wfile.write(b"A" * 4096)
+                self.wfile.flush()
+                time.sleep(20)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+            return
+        if url.path == f"/live/{USERNAME}/{PASSWORD}/61.ts":
+            # Version de secours qui fonctionne (puis se termine).
+            try:
+                self.send_response(200)
+                self.send_header("Content-Type", "video/mp2t")
+                self.end_headers()
+                for _ in range(10):
+                    self.wfile.write(b"B" * 1024)
+                    self.wfile.flush()
+                    time.sleep(0.02)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+            return
         if url.path in (f"/live/{USERNAME}/{PASSWORD}/50.ts", f"/live/{USERNAME}/{PASSWORD}/51.ts"):
             # Flux continu (direct) : 1 Kio toutes les 50 ms pendant 15 s au maximum.
             type(self).open_streams += 1

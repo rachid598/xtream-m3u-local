@@ -406,6 +406,7 @@
     data.live_format = $('opt-live-format').value;
     data.catchup = $('opt-catchup').checked;
     data.dedupe = $('opt-dedupe').checked;
+    data.failover = $('opt-failover').checked;
     data.hide_separators = $('opt-separators').checked;
     data.favorites_name = $('opt-fav-name').value.trim() || '★ Favoris';
     data.rules = state.rules.map((r) => ({ ...r }));
@@ -662,6 +663,8 @@
     if ($('opt-catchup').checked) parts.push('Replay');
     if ($('opt-dedupe').checked) parts.push('Sans doublons');
     if ($('opt-separators').checked) parts.push('Sans séparateurs');
+    if ($('opt-failover').checked && $('opt-dedupe').checked && $('opt-live-format').value !== 'hls') parts.push('Bascule auto');
+    $('opt-failover-hint').classList.toggle('warn-text', $('opt-failover').checked && (!$('opt-dedupe').checked || $('opt-live-format').value === 'hls'));
     $('options-pill-text').textContent = parts.join(' · ');
   }
 
@@ -1285,6 +1288,7 @@
     $('opt-live-format').value = (p && p.live_format) || 'ts';
     $('opt-catchup').checked = !p || p.catchup !== false;
     $('opt-dedupe').checked = Boolean(p && p.dedupe);
+    $('opt-failover').checked = Boolean(p && p.failover);
     $('opt-separators').checked = Boolean(p && p.hide_separators);
     $('opt-fav-name').value = (p && p.favorites_name) || '★ Favoris';
     state.rules = p && p.rules ? p.rules.map((r) => ({ ...r })) : [];
@@ -1510,6 +1514,8 @@
 
   function renderStreams(data) {
     const n = data.streams.length;
+    state.localStreams = n;
+    renderAccountPill();
     $('streams-pill').hidden = !n;
     $('streams-pill-text').textContent = `${n} lecture${n > 1 ? 's' : ''}`;
     const limitText = data.limit
@@ -1814,19 +1820,29 @@
     try {
       const status = await request('/api/status?account=1');
       renderAccountFacts(status);
-      const a = status.account;
-      renderExpiry(a);
-      if (!a) return;
-      const parts = [];
-      if (a.status) parts.push(a.status === 'Active' ? 'Abonnement actif' : `Abonnement : ${a.status}`);
-      if (a.exp_date) parts.push(`expire le ${new Date(a.exp_date * 1000).toLocaleDateString('fr-FR')}`);
-      if (a.max_connections) parts.push(`${a.active_connections || 0}/${a.max_connections} connexion${a.max_connections === '1' ? '' : 's'}`);
-      if (parts.length) {
-        $('account').textContent = parts.join(' · ');
-        $('account').title = 'Informations renvoyées par le fournisseur (player_api.php)';
-        $('account').hidden = false;
-      }
+      state.account = status.account;
+      renderExpiry(state.account);
+      renderAccountPill();
     } catch (_) { /* facultatif */ }
+  }
+
+  /** Badge de l'abonnement. Connexions : le compteur du fournisseur n'est lu qu'à l'ouverture de la page
+   *  (et il est souvent en retard) ; on prend le plus grand avec les lectures relayées par ce serveur. */
+  function renderAccountPill() {
+    const a = state.account;
+    if (!a) return;
+    const parts = [];
+    if (a.status) parts.push(a.status === 'Active' ? 'Abonnement actif' : `Abonnement : ${a.status}`);
+    if (a.exp_date) parts.push(`expire le ${new Date(a.exp_date * 1000).toLocaleDateString('fr-FR')}`);
+    if (a.max_connections) {
+      const active = Math.max(Number(a.active_connections) || 0, state.localStreams || 0);
+      parts.push(`${active}/${a.max_connections} connexion${a.max_connections === '1' ? '' : 's'}`);
+    }
+    if (parts.length) {
+      $('account').textContent = parts.join(' · ');
+      $('account').title = 'Abonnement (player_api.php) ; connexions = lectures en cours sur ce serveur ou compteur du fournisseur';
+      $('account').hidden = false;
+    }
   }
 
   async function init() {
@@ -1862,6 +1878,7 @@
   $('opt-live-format').addEventListener('change', () => { renderOptionsPill(); renderStats(); });
   $('opt-catchup').addEventListener('change', () => { renderOptionsPill(); renderStats(); });
   $('opt-dedupe').addEventListener('change', () => { renderOptionsPill(); refresh(); });
+  $('opt-failover').addEventListener('change', () => { renderOptionsPill(); refresh({ channels: false }); });
   $('opt-separators').addEventListener('change', () => { renderOptionsPill(); refresh(); });
   $('opt-fav-name').addEventListener('input', () => renderStats());
   $('rule-value').addEventListener('input', debounce(previewRule, 150));

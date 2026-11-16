@@ -2,6 +2,15 @@
 
 Format inspiré de « Keep a Changelog ». Les versions suivent le versionnage sémantique.
 
+## [3.3.0] — 2026-11-16
+
+### Ajouté
+- **Bascule automatique** (option de playlist `failover`) : les doublons masqués deviennent les versions de secours d'une chaîne (meilleure qualité d'abord). Coupure, flux qui ne démarre pas, silence (`FAILOVER_STALL_SECONDS`, 6 s) ou débit trop faible (`FAILOVER_SLOW_PERCENT`, 35 %) → version suivante enchaînée dans le même flux, une seule connexion fournisseur à la fois. M3U (`/stream/<id>.ts?alt=…`) et mode Xtream. Vue Système : « → secours n/N ».
+
+### Corrigé
+- Badge « x/y connexion » : le compteur du fournisseur n'était lu qu'au chargement de la page (souvent 0 pendant une lecture) ; il prend maintenant le plus grand avec les lectures en cours sur le serveur et se met à jour avec elles.
+- Mobile : la pastille des options ne déborde plus.
+
 ## [3.2.1] — 2026-11-16
 
 ### Corrigé

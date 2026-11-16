@@ -166,17 +166,31 @@ def rule_matches(category_name: str, rule: dict) -> bool:
     return value in name
 
 
+MAX_ALTERNATES = 8
+
+
 def dedupe(entries: list[tuple[dict, str]]) -> list[tuple[dict, str]]:
-    """Dans chaque groupe, garde la meilleure qualité d'une même chaîne (SD/HD/FHD/4K…)."""
-    best: dict[tuple[str, str], tuple[float, int]] = {}
+    """Dans chaque groupe, garde la meilleure qualité d'une même chaîne (SD/HD/FHD/4K…).
+
+    La version gardée reçoit ``alternates`` : les autres versions, de la meilleure à la moins bonne,
+    utilisées par la bascule automatique (option ``failover``).
+    """
+    versions: dict[tuple[str, str], list[tuple[float, int]]] = {}
     for index, (item, group) in enumerate(entries):
         # Même nom comparable que les groupes perso : « VIP: TF1 ᴴᴰ », « FR: TF1 », « AF: TF1 » → « tf1 ».
         key = (group, match_name(item["name"]) or base_name(item["name"]))
-        score = quality(item["name"])
-        if key not in best or score > best[key][0]:
-            best[key] = (score, index)
-    keep = {index for _, index in best.values()}
-    return [entry for index, entry in enumerate(entries) if index in keep]
+        versions.setdefault(key, []).append((quality(item["name"]), index))
+    keep: dict[int, list[int]] = {}
+    for found in versions.values():
+        ranked = [index for _, index in sorted(found, key=lambda v: (-v[0], v[1]))]
+        keep[ranked[0]] = ranked[1:]
+    result = []
+    for index, (item, group) in enumerate(entries):
+        if index not in keep:
+            continue
+        others = [entries[i][0]["stream_id"] for i in keep[index]][:MAX_ALTERNATES]
+        result.append(({**item, "alternates": others} if others else item, group))
+    return result
 
 
 def item_key(item: dict) -> str:
