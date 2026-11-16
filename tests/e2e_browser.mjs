@@ -287,6 +287,25 @@ try {
   assert(revoked.user_info.auth === 0, 'accès révoqué');
   await page.click('#view-btn-playlists');
 
+  // Système : abonnement, diagnostic, sauvegarde / restauration
+  await page.click('#view-btn-system');
+  await waitFor(async () => /Active/.test(await page.innerText('#account-facts')), 'carte abonnement');
+  assert(await page.isHidden('#expiry-banner'), 'pas d\'alerte d\'expiration (2030)');
+  await page.click('#diag-run');
+  await waitFor(async () => (await page.locator('#diag-results .diag-item').count()) >= 8, 'résultats du diagnostic', 60000);
+  const okCount = await page.locator('#diag-results .diag-item.ok').count();
+  assert(okCount >= 9, `diagnostic : ${okCount} tests OK`);
+  if (shots) await page.screenshot({ path: join(shots, 'desktop-system.png'), fullPage: true });
+  const backupHref = await page.getAttribute('#backup-download', 'href');
+  const backupText = (await fetchText(`${base}${backupHref}`)).text;
+  const backup = JSON.parse(backupText);
+  assert(backup.playlists.some((p) => p.slug === 'salon'), 'sauvegarde');
+  await page.setInputFiles('#restore-file', { name: 'sauvegarde.json', mimeType: 'application/json', buffer: Buffer.from(backupText) });
+  await page.click('#restore-run');
+  await page.click('#dialog-ok');
+  await waitFor(async () => (await page.locator('.toast', { hasText: 'Restauration terminée' }).count()) > 0, 'restauration');
+  await page.click('#view-btn-playlists');
+
   // Mise en page responsive
   for (const [width, height, name] of [[390, 844, 'mobile'], [768, 1024, 'tablette'], [1920, 1080, 'large']]) {
     const p2 = await browser.newPage({ viewport: { width, height }, deviceScaleFactor: 2 });

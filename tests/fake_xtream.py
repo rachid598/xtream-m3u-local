@@ -118,6 +118,7 @@ class FakeXtream(BaseHTTPRequestHandler):
     series_info_calls: list[str] = []
     simple_epg_calls: list[str] = []
     open_streams = 0
+    serve_any = False
     hls_requests: list[str] = []
     timeshift_requests: list[str] = []
     epg_mode = "plain"  # plain | gzip | html | error
@@ -273,6 +274,16 @@ class FakeXtream(BaseHTTPRequestHandler):
             if type(self).epg_mode == "gzip":
                 body = gzip.compress(body)
             return self.send_body(200, body, "application/xml")
+        if type(self).serve_any:
+            # Mode démo : un contenu factice pour n'importe quel flux.
+            prefix = f"/{USERNAME}/{PASSWORD}/"
+            if url.path.startswith("/live" + prefix) and url.path.endswith(".m3u8"):
+                return self.send_body(200, b"#EXTM3U\n#EXT-X-TARGETDURATION:4\n#EXTINF:4.0,\n/hlsgw/tok123/42/low/seg10.ts\n",
+                                      "application/vnd.apple.mpegurl")
+            if url.path.startswith(("/live" + prefix, "/timeshift" + prefix)):
+                return self.send_body(200, (b"\x47" + b"\x00" * 187) * 256, "video/mp2t")
+            if url.path.startswith(("/movie" + prefix, "/series" + prefix)):
+                return self.send_body(200, b"\x00\x00\x00\x18ftypmp42" + b"\x00" * 65536, "video/mp4")
         return self.send_body(404, b"not found", "text/plain")
 
 

@@ -185,7 +185,7 @@
       try { document.execCommand('copy'); } catch (__) { /* ignore */ }
       area.remove();
     }
-    toast('URL copiée dans le presse-papiers');
+    toast('Copié dans le presse-papiers');
   }
 
   // ------------------------------------------------- règles et doublons
@@ -1258,6 +1258,7 @@
 
   function loadSystem() {
     loadStreams();
+    loadAccount();
   }
 
   function providerChannelList(list, limit = 300, withCategories = false) {
@@ -1439,10 +1440,98 @@
     if (state.view === 'catalog') renderProvider();
   }
 
+  function renderExpiry(a) {
+    const banner = $('expiry-banner');
+    banner.hidden = true;
+    if (!a) return;
+    const now = Date.now() / 1000;
+    if (a.exp_date && a.exp_date < now) {
+      banner.className = 'banner error';
+      banner.textContent = `⚠️ Ton abonnement Xtream a expiré le ${new Date(a.exp_date * 1000).toLocaleDateString('fr-FR')} : les chaînes ne se lanceront plus.`;
+      banner.hidden = false;
+    } else if (a.exp_date && a.exp_date - now < 14 * 86400) {
+      const days = Math.max(0, Math.ceil((a.exp_date - now) / 86400));
+      banner.className = 'banner warn';
+      banner.textContent = `⏳ Ton abonnement Xtream expire dans ${plural(days, 'jour', 'jours')} (le ${new Date(a.exp_date * 1000).toLocaleDateString('fr-FR')}). Pense à le renouveler.`;
+      banner.hidden = false;
+    } else if (a.status && !/^active$/i.test(a.status)) {
+      banner.className = 'banner warn';
+      banner.textContent = `Statut de l'abonnement renvoyé par le fournisseur : ${a.status}.`;
+      banner.hidden = false;
+    }
+  }
+
+  function renderAccountFacts(status) {
+    const a = status && status.account;
+    const facts = $('account-facts');
+    const rows = [];
+    if (!a) rows.push(['État', 'Informations indisponibles (le fournisseur ne répond pas)']);
+    else {
+      const now = Date.now() / 1000;
+      rows.push(['Statut', a.status || '?']);
+      if (a.exp_date) {
+        const days = Math.ceil((a.exp_date - now) / 86400);
+        rows.push(['Expiration', `${new Date(a.exp_date * 1000).toLocaleDateString('fr-FR', { dateStyle: 'long' })} (${days >= 0 ? `dans ${plural(days, 'jour', 'jours')}` : 'expiré'})`]);
+      } else rows.push(['Expiration', 'non communiquée']);
+      rows.push(['Connexions', `${a.active_connections || 0} active(s) sur ${a.max_connections || '?'} autorisée(s)`]);
+      rows.push(['Fuseau du fournisseur', a.timezone || 'non communiqué (UTC)']);
+      if (a.is_trial) rows.push(['Type', 'Essai']);
+    }
+    facts.replaceChildren(...rows.flatMap(([k, v]) => [h('dt', { text: k }), h('dd', { text: v })]));
+    if (status) $('sys-version').textContent = `Xtream M3U Local ${status.version}`;
+  }
+
+  const DIAG_ICON = { ok: '✅', warn: '⚠️', error: '❌', skipped: '⏭️' };
+  let lastDiagnostic = null;
+
+  async function runDiagnostic() {
+    const btn = $('diag-run');
+    btn.disabled = true;
+    btn.textContent = 'Diagnostic en cours…';
+    $('diag-results').replaceChildren(h('li', { class: 'empty', text: 'Tests en cours (jusqu\'à une minute selon le fournisseur)…' }));
+    try {
+      lastDiagnostic = await request('/api/diagnostic', 'POST');
+      const list = $('diag-results');
+      list.replaceChildren(...lastDiagnostic.results.map((r) => h('li', { class: `diag-item ${r.status}` },
+        h('span', { class: 'icon', text: DIAG_ICON[r.status] || '•' }),
+        h('span', { class: 'grow' }, h('span', { class: 'd-label', text: r.label }), h('span', { class: 'd-detail', text: r.detail })),
+        r.ms != null ? h('span', { class: 'd-ms', text: `${r.ms.toLocaleString('fr-FR')} ms` }) : null)));
+      $('diag-copy').hidden = false;
+      const errors = lastDiagnostic.results.filter((r) => r.status === 'error').length;
+      const warnings = lastDiagnostic.results.filter((r) => r.status === 'warn').length;
+      toast(errors ? `Diagnostic terminé : ${plural(errors, 'erreur', 'erreurs')}`
+        : `Diagnostic terminé : aucune erreur${warnings ? ` (${plural(warnings, 'avertissement', 'avertissements')})` : ''}`, errors ? 'error' : 'ok');
+    } catch (error) {
+      $('diag-results').replaceChildren(h('li', { class: 'empty', text: error.message }));
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Relancer le diagnostic';
+    }
+  }
+
+  async function restoreBackup() {
+    const file = $('restore-file').files[0];
+    if (!file) { toast('Choisis d\'abord un fichier de sauvegarde', 'error'); return; }
+    let backup;
+    try { backup = JSON.parse(await file.text()); } catch (_) { toast('Fichier JSON illisible', 'error'); return; }
+    const mode = $('restore-mode').value;
+    const withDevices = $('restore-devices').checked;
+    const count = Array.isArray(backup.playlists) ? backup.playlists.length : 0;
+    if (!(await ask({ title: 'Restaurer la sauvegarde ?', text: `${plural(count, 'playlist', 'playlists')} à ${mode === 'replace' ? 'restaurer en remplaçant toutes les playlists actuelles' : 'fusionner avec les playlists actuelles'}${withDevices ? ', appareils compris' : ''}.`, okLabel: 'Restaurer', danger: mode === 'replace' || withDevices }))) return;
+    try {
+      const result = await request('/api/restore', 'POST', { backup, mode, include_devices: withDevices });
+      toast(`Restauration terminée : ${result.added} ajoutée(s), ${result.replaced} remplacée(s)`);
+      state.playlists = await request('/api/playlists');
+      load(state.playlists.length ? [...state.playlists].sort((a, b) => collator.compare(a.name, b.name))[0] : null);
+    } catch (error) { toast(error.message, 'error'); }
+  }
+
   async function loadAccount() {
     try {
       const status = await request('/api/status?account=1');
+      renderAccountFacts(status);
       const a = status.account;
+      renderExpiry(a);
       if (!a) return;
       const parts = [];
       if (a.status) parts.push(a.status === 'Active' ? 'Abonnement actif' : `Abonnement : ${a.status}`);
@@ -1568,6 +1657,14 @@
   });
   $('streams-pill').addEventListener('click', () => switchView('system'));
   $('streams-refresh').addEventListener('click', loadStreams);
+  $('diag-run').addEventListener('click', runDiagnostic);
+  $('diag-copy').addEventListener('click', () => {
+    if (!lastDiagnostic) return;
+    const lines = [`Diagnostic Xtream M3U Local ${lastDiagnostic.version} — ${new Date(lastDiagnostic.started_at * 1000).toLocaleString('fr-FR')} (${lastDiagnostic.seconds} s)`];
+    for (const r of lastDiagnostic.results) lines.push(`${DIAG_ICON[r.status] || '-'} ${r.label} : ${r.detail}${r.ms != null ? ` (${r.ms} ms)` : ''}`);
+    copyText(lines.join('\n'));
+  });
+  $('restore-run').addEventListener('click', restoreBackup);
   document.addEventListener('visibilitychange', () => { if (!document.hidden) loadStreams(); });
   $('prov-search').addEventListener('input', debounce(renderProvider, 200));
   $('prov-expand').addEventListener('click', () => {

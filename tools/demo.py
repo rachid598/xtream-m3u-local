@@ -118,6 +118,7 @@ def main() -> None:
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     build_catalog(args.channels)
+    fake_xtream.FakeXtream.serve_any = True
     provider, provider_url = fake_xtream.start_fake()
     config = Config(provider_url, fake_xtream.USERNAME, fake_xtream.PASSWORD, port=args.port,
                     web_port=args.web_port, data_dir=args.data)

@@ -13,7 +13,7 @@ from urllib.parse import parse_qs, urlsplit
 
 from . import __version__
 from .httputil import encode_body
-from .custom import InvalidPlaylist, PlaylistStore
+from .custom import InvalidPlaylist, PlaylistStore, validate_playlist
 from .epg import EpgCache
 import threading
 import time
@@ -162,6 +162,8 @@ class WebHandler(BaseHTTPRequestHandler):
             return self.json(200, self.streams_status())
         if path == "/api/devices":
             return self.devices_status()
+        if path == "/api/backup":
+            return self.backup()
         if path == "/api/epg":
             return self.epg_status(qs.get("slug", [""])[0] or None)
         series_match = SERIES_API.fullmatch(path)
@@ -216,6 +218,58 @@ class WebHandler(BaseHTTPRequestHandler):
             return self.json(400, {"error": str(exc)})
         except RuntimeError as exc:
             return self.json(500, {"error": str(exc)})
+
+    # -------------------------------------------------- sauvegarde et diagnostic
+    def backup(self) -> None:
+        try:
+            document = {"generator": f"Xtream M3U Local {__version__}", "format": 1,
+                        "exported_at": int(time.time()), "playlists": self.store.list(),
+                        "devices": self.devices.export() if self.devices is not None else None}
+        except RuntimeError:
+            return self.json(500, {"error": "Sauvegarde illisible dans /data"})
+        data = json.dumps(document, ensure_ascii=False, indent=1).encode("utf-8")
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Content-Disposition", f'attachment; filename="xtream-m3u-local-sauvegarde-{stamp}.json"')
+        self.end_headers()
+        if self.command != "HEAD":
+            self.wfile.write(data)
+
+    def restore(self) -> None:
+        body = self.read_payload()
+        if body is None:
+            return
+        backup = body.get("backup")
+        if not isinstance(backup, dict) or not isinstance(backup.get("playlists"), list):
+            return self.json(400, {"error": "Fichier de sauvegarde non reconnu"})
+        mode = body.get("mode", "merge")
+        try:
+            # Tout valider avant d'écrire quoi que ce soit (pas de restauration à moitié faite).
+            for item in backup["playlists"]:
+                validate_playlist(item)
+            if mode not in ("merge", "replace"):
+                raise InvalidPlaylist("Mode de restauration : merge ou replace")
+            if body.get("include_devices") and isinstance(backup.get("devices"), dict) and self.devices is not None:
+                self.devices.restore(backup["devices"])
+            result = self.store.restore(backup["playlists"], mode=mode)
+        except (InvalidPlaylist, InvalidDevice) as exc:
+            return self.json(400, {"error": str(exc)})
+        except RuntimeError as exc:
+            return self.json(500, {"error": str(exc)})
+        return self.json(200, result)
+
+    def diagnostic(self) -> None:
+        if not self.same_origin():
+            return
+        from .diagnostic import run
+        started = time.time()
+        results = run(self.api, self.epg, self.series, self.streams, self.store, self.config)
+        return self.json(200, {"started_at": int(started), "seconds": round(time.time() - started, 1),
+                               "version": __version__, "results": results})
 
     def streams_status(self) -> dict:
         if self.streams is None:
@@ -322,6 +376,10 @@ class WebHandler(BaseHTTPRequestHandler):
             return self.refresh_epg()
         if path == "/api/devices":
             return self.device_write("POST", None)
+        if path == "/api/restore":
+            return self.restore()
+        if path == "/api/diagnostic":
+            return self.diagnostic()
         stop = STREAM_STOP_API.fullmatch(path)
         if stop:
             if not self.same_origin():

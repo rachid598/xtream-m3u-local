@@ -276,6 +276,32 @@ class PlaylistStore:
             self._write(playlists)
         return saved
 
+    def restore(self, playlists: object, *, mode: str = "merge") -> dict:
+        """Restaure des playlists (sauvegarde JSON). ``merge`` : ajoute/remplace par identifiant ;
+        ``replace`` : remplace tout. Toutes les entrées sont validées avant toute écriture."""
+        if not isinstance(playlists, list):
+            raise InvalidPlaylist("Sauvegarde invalide : liste de playlists attendue")
+        if mode not in ("merge", "replace"):
+            raise InvalidPlaylist("Mode de restauration : merge ou replace")
+        incoming = [validate_playlist(item) for item in playlists]
+        if len({p["slug"] for p in incoming}) != len(incoming):
+            raise InvalidPlaylist("Sauvegarde invalide : identifiants de playlist en double")
+        with self._lock:
+            current = [] if mode == "replace" else self.list()
+            by_slug = {p["slug"]: i for i, p in enumerate(current)}
+            added = replaced = 0
+            for item in incoming:
+                if item["slug"] in by_slug:
+                    current[by_slug[item["slug"]]] = item
+                    replaced += 1
+                else:
+                    current.append(item)
+                    added += 1
+            if len(current) > MAX_PLAYLISTS:
+                raise InvalidPlaylist(f"Maximum de {MAX_PLAYLISTS} playlists dépassé")
+            self._write(current)
+        return {"added": added, "replaced": replaced, "total": len(current)}
+
     def delete(self, slug: str) -> bool:
         with self._lock:
             playlists = self.list()
