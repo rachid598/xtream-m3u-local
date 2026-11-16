@@ -107,7 +107,7 @@ Clés de groupes/éléments : direct sans préfixe, films `vod:`, séries `serie
 - **2.1.0** : audit V2 (catégories vides/ordre, sans-catégorie, multi-catégories, double import, droits `/data`, exceptions, SIGTERM, CI arm64), nouvelle interface, catalogue fournisseur, EPG filtré, Docker/Unraid.
 - **2.2.0 / 2.2.1** : films et séries (épisodes via `get_series_info`), puis tuiles « Contenu de la playlist ».
 - **2.3.0 / 2.3.1** : EPG complété par l'API, bloc EPG ; `/xmltv.php` (le lecteur de l'utilisateur l'appelait d'office).
-- **3.0.0** (cette session) : tout le reste de la liste d'améliorations — gzip/ETag, limite de connexions, HLS, replay, appareils, serveur Xtream local, règles/doublons/favoris/noms/numéros, sauvegarde, alerte d'expiration, diagnostic, multi-fournisseurs, CI parallèle, Dependabot, CHANGELOG, branche `main` et tag `v3.0.0`.
+- **3.0.0** (cette session) : tout le reste de la liste d'améliorations — gzip/ETag, limite de connexions, HLS, replay, appareils, serveur Xtream local, règles/doublons/favoris/noms/numéros, sauvegarde, alerte d'expiration, diagnostic, multi-fournisseurs, CI parallèle (vérifiée : build 30 s en parallèle des tests ~2 min, promotion 15 s), Dependabot, CHANGELOG, branche `main` (tag `v3.0.0` à créer sur GitHub).
 - Faux échec intermittent corrigé en 2.3.0 : un test cherchait « pw » dans une réponse contenant un chemin temporaire aléatoire.
 
 ## 6. Tests et vérifications (16/11/2026)
@@ -118,7 +118,7 @@ Clés de groupes/éléments : direct sans préfixe, films `vod:`, séries `serie
 | `node --check app/static/app.js` | OK |
 | Scénario Chromium `tests/e2e_browser.mjs` sur `python -m tools.demo` | OK : création, exclusion/ajout, groupes, règle, favori, renommage + numéro, doublons, numérotation, films/séries/épisodes, EPG, appareil (connexion `player_api.php` réelle puis révocation), diagnostic (≥ 9 tests OK), sauvegarde/restauration, catalogue, mise en page 390/768/1366/1920 px sans défilement horizontal, aucune erreur console |
 | Docker 3.0.0 (`docker build` + `run`, dossier `/data` créé par root) | OK : droits abandonnés (UID 99), playlist HLS + favori + replay, appareil → `player_api.php` auth 1 (fuseau Europe/Paris), manifeste HLS réécrit, gzip, replay converti à l'heure de Paris, diagnostic vert (faux flux TS en « warn »), `devices.json` 0600, appareil conservé après recréation du conteneur, healthcheck « healthy », aucun secret dans les journaux |
-| GitHub Actions | Vert à chaque push ; image `ghcr.io/rachid598/xtream-m3u-local` publiée depuis la branche par défaut |
+| GitHub Actions | Vert à chaque push (run n° 7 pour 3.0.0 : build + tests + promotion `latest`) ; image `ghcr.io/rachid598/xtream-m3u-local:latest` publiée depuis la branche par défaut |
 
 Faux fournisseurs de test : `tests/fake_xtream.py` (direct, films, séries, épisodes, XMLTV, `get_simple_data_table`, HLS avec redirection/variantes/clé, flux lents, replay, `get_vod_info`, mode démo `serve_any`).
 
@@ -134,7 +134,11 @@ Faux fournisseurs de test : `tests/fake_xtream.py` (direct, films, séries, épi
 
 1. Mettre à jour Tower (`git pull && docker compose up -d --build`) et lancer **Système → Diagnostic** ; noter les résultats.
 2. Tester le mode Xtream dans TiviMate avec un appareil ; tester HLS (`?format=m3u8`) et le replay sur une chaîne qui le propose ; vérifier « EPG Shift = 0 ».
-3. GitHub : passer la branche par défaut sur `main` (Settings → Branches), puis supprimer éventuellement `claude/wizardly-keller-bd38ld` ; rendre le package GHCR public si besoin.
+3. GitHub :
+   - la branche **`main` existe** (même contenu que `claude/wizardly-keller-bd38ld`) ; la passer en branche par défaut (Settings → General → Default branch), puis supprimer éventuellement l'ancienne branche ;
+   - le **tag `v3.0.0` n'a pas pu être poussé** depuis l'environnement de l'IA (le push de tags est coupé par son proxy Git, les branches passent). Le créer sur GitHub : Releases → « Draft a new release » → tag `v3.0.0` sur `main` → Publish. Le workflow publiera alors `ghcr.io/rachid598/xtream-m3u-local:3.0.0`, `:3.0` et `:3` ;
+   - **Dependabot** a ouvert des pull requests (actions GitHub, image `python:3.15-alpine`) : à examiner ; la montée de Python est à tester avant fusion ;
+   - rendre le package GHCR public si besoin.
 4. Pistes : contrôle d'accès des épisodes par appareil, fusion de plusieurs XMLTV, historique des lectures, notifications Unraid, renommage en masse, import de logos alternatifs.
 5. Mettre à jour ce fichier après chaque étape.
 
