@@ -65,8 +65,8 @@ class StackTestCase(unittest.TestCase):
         self.stack.close()
         self.tmp.cleanup()
 
-    def make_stack(self, **overrides) -> Stack:
-        stack = Stack(self.provider_url, self.tmp.name, **overrides)
+    def make_stack(self, data_dir: str | None = None, **overrides) -> Stack:
+        stack = Stack(self.provider_url, data_dir or self.tmp.name, **overrides)
         if hasattr(self, "stack"):
             self._extra = getattr(self, "_extra", []) + [stack]
         return stack

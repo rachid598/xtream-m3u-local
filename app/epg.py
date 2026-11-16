@@ -1,16 +1,22 @@
-"""Cache disque du guide XMLTV fournisseur et EPG filtré par playlist.
+"""Guide des programmes (EPG) : cache XMLTV fournisseur, EPG par playlist, complément par l'API.
 
-- ``/epg.xml`` sert le XMLTV complet, téléchargé au plus toutes les ``EPG_CACHE_HOURS``.
-- ``/p/<slug>.xml`` sert uniquement les chaînes/programmes de la playlist ``slug``
-  (beaucoup plus léger pour TiviMate / Android TV).
+- ``/epg.xml`` sert le XMLTV complet (``xmltv.php`` ou ``EPG_URL``), téléchargé au plus toutes
+  les ``EPG_CACHE_HOURS``.
+- ``/p/<slug>.xml`` sert uniquement les chaînes de la playlist ``slug`` (léger pour Android TV).
+  Mode ``auto`` (défaut) : programmes de ``xmltv.php`` ; les chaînes absentes (ou toutes, si
+  ``xmltv.php`` ne fonctionne pas) sont complétées par ``get_simple_data_table`` (un appel par
+  chaîne, mis en cache et préchargé comme les épisodes de séries).
 
 Bibliothèque standard uniquement. Le parseur ``expat`` de Python 3.13 protège contre
 l'expansion d'entités (« billion laughs ») et ElementTree ne résout pas les entités externes.
 """
 from __future__ import annotations
 
+import base64
+import binascii
 import gzip
 import hashlib
+import json
 import logging
 import os
 import shutil
@@ -23,11 +29,80 @@ from typing import Callable
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 from http.client import HTTPException
-from xml.sax.saxutils import quoteattr
+from xml.sax.saxutils import escape, quoteattr
 
 LOG = logging.getLogger("xtream-m3u-local.epg")
 MAX_EPG_BYTES = 1024 * 1024 * 1024  # 1 Gio
 RETRY_AFTER_FAILURE = 900  # 15 min sans nouvelle tentative après un échec
+EPG_MODES = ("auto", "xmltv", "api")
+
+
+def _decode(value: object) -> str:
+    """Titres et descriptions de ``get_simple_data_table`` : base64 (parfois texte brut)."""
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    try:
+        decoded = base64.b64decode(text, validate=True).decode("utf-8")
+    except (binascii.Error, ValueError, UnicodeDecodeError):
+        decoded = text
+    return " ".join(decoded.replace("\x00", " ").split())
+
+
+def _timestamp(value: object) -> int | None:
+    try:
+        number = int(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+    return number if 946684800 <= number <= 4102444800 else None  # 2000 → 2100
+
+
+def _parse_datetime(value: object) -> int | None:
+    from datetime import datetime, timezone
+    try:
+        return int(datetime.strptime(str(value).strip(), "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc).timestamp())
+    except ValueError:
+        return None
+
+
+def normalize_listings(data: object) -> list[dict]:
+    """``get_simple_data_table`` / ``get_short_epg`` -> ``[{start, stop, title, desc}]`` triés (UTC)."""
+    listings = data.get("epg_listings") if isinstance(data, dict) else None
+    if not isinstance(listings, list):
+        return []
+    result: dict[int, dict] = {}
+    for item in listings:
+        if not isinstance(item, dict):
+            continue
+        start = _timestamp(item.get("start_timestamp")) or _parse_datetime(item.get("start"))
+        stop = _timestamp(item.get("stop_timestamp")) or _parse_datetime(item.get("end") or item.get("stop"))
+        title = _decode(item.get("title"))
+        if not start or not stop or stop <= start or not title:
+            continue
+        result[start] = {"start": start, "stop": stop, "title": title[:300],
+                         "desc": _decode(item.get("description"))[:2000]}
+    return [result[k] for k in sorted(result)]
+
+
+def xmltv_time(ts: int) -> str:
+    return time.strftime("%Y%m%d%H%M%S +0000", time.gmtime(ts))
+
+
+def write_api_channel(dst, xml_id: str, name: str, logo: str, listings: list[dict], *,
+                      with_channel: bool = True) -> int:
+    if with_channel:
+        icon = f"<icon src={quoteattr(logo)}/>" if logo else ""
+        dst.write(f"<channel id={quoteattr(xml_id)}><display-name>{escape(name)}</display-name>{icon}</channel>\n")
+    for item in listings:
+        desc = f"<desc>{escape(item['desc'])}</desc>" if item.get("desc") else ""
+        dst.write(f"<programme start=\"{xmltv_time(item['start'])}\" stop=\"{xmltv_time(item['stop'])}\" "
+                  f"channel={quoteattr(xml_id)}><title>{escape(item['title'])}</title>{desc}</programme>\n")
+    return len(listings)
+
+
+def xml_channel_id(channel: dict) -> str:
+    """Identifiant XMLTV d'une chaîne : ``epg_channel_id`` du fournisseur, sinon ``xtream-<stream_id>``."""
+    return channel.get("epg_id") or f"xtream-{channel['stream_id']}"
 
 
 class EpgUnavailable(Exception):
@@ -45,6 +120,8 @@ class EpgCache:
         self._download_lock = threading.Lock()
         self._filter_lock = threading.Lock()
         self._failed_at = 0.0
+        self.last_error: str | None = None
+        self._index: tuple[str, dict[str, int]] | None = None
 
     # ------------------------------------------------------------------ source
     def _age(self) -> float | None:
@@ -65,8 +142,10 @@ class EpgCache:
             try:
                 self._download()
                 self._failed_at = 0.0
-            except EpgUnavailable:
+                self.last_error = None
+            except EpgUnavailable as exc:
                 self._failed_at = time.monotonic()
+                self.last_error = str(exc)
                 if age is not None:
                     LOG.warning("EPG : échec de mise à jour, utilisation de la copie en cache")
                     return self.source
@@ -150,6 +229,148 @@ class EpgCache:
                     os.unlink(tmp)
         return out
 
+    # ------------------------------------------------------------- index / état
+    def _source_key(self) -> str | None:
+        try:
+            stat = self.source.stat()
+        except OSError:
+            return None
+        return f"{stat.st_mtime_ns}:{stat.st_size}"
+
+    def index(self) -> dict[str, int]:
+        """``{identifiant_chaîne_minuscule: nombre_de_programmes}`` du XMLTV en cache ({} si absent)."""
+        key = self._source_key()
+        if key is None:
+            return {}
+        if self._index and self._index[0] == key:
+            return self._index[1]
+        index_file = self.directory / "index.json"
+        try:
+            data = json.loads(index_file.read_text(encoding="utf-8"))
+            if data.get("source") == key and isinstance(data.get("channels"), dict):
+                self._index = (key, data["channels"])
+                return self._index[1]
+        except (OSError, ValueError):
+            pass
+        counts: dict[str, int] = {}
+        try:
+            for _, elem in ET.iterparse(self.source, events=("end",)):
+                if elem.tag == "channel":
+                    counts.setdefault(elem.get("id", "").strip().lower(), 0)
+                    elem.clear()
+                elif elem.tag == "programme":
+                    cid = elem.get("channel", "").strip().lower()
+                    counts[cid] = counts.get(cid, 0) + 1
+                    elem.clear()
+        except (ET.ParseError, OSError):
+            LOG.warning("EPG : XMLTV en cache illisible, index vide")
+            return {}
+        counts.pop("", None)
+        self._index = (key, counts)
+        try:
+            index_file.write_text(json.dumps({"source": key, "channels": counts}), encoding="utf-8")
+        except OSError:
+            pass
+        return counts
+
+    def status(self) -> dict:
+        """État de la source XMLTV (sans URL ni identifiants)."""
+        key = self._source_key()
+        index = self.index() if key else {}
+        try:
+            stat = self.source.stat()
+            updated, size = int(stat.st_mtime), stat.st_size
+        except OSError:
+            updated, size = None, 0
+        return {
+            "ok": key is not None,
+            "updated_at": updated,
+            "size": size,
+            "channels": len(index),
+            "programmes": sum(index.values()),
+            "error": self.last_error,
+        }
+
+    # ------------------------------------------------- guide d'une playlist
+    mode = "auto"   # remplacé par EPG_SOURCE (voir make_epg)
+    api_cache = None  # KeyedCache des programmes par chaîne (get_simple_data_table)
+
+    def playlist_guide(self, key: str, channels: list[dict], *, mode: str | None = None, api=None,
+                       budget: float = 15) -> tuple[Path, dict]:
+        """XMLTV de la playlist ``key`` + statistiques de couverture.
+
+        ``channels`` : chaînes du direct de la playlist (``stream_id``, ``name``, ``logo``, ``epg_id``).
+        ``api`` : :class:`app.vod.KeyedCache` des programmes par chaîne (``get_simple_data_table``).
+        """
+        mode = mode or self.mode
+        api = api if api is not None else self.api_cache
+        source = None
+        if mode in ("auto", "xmltv"):
+            try:
+                source = self.ensure()
+            except EpgUnavailable:
+                if mode == "xmltv" or api is None:
+                    raise
+        index = self.index() if source else {}
+        covered = {c["stream_id"] for c in channels if c.get("epg_id") and index.get(c["epg_id"].strip().lower(), 0) > 0}
+        targets = [] if mode == "xmltv" or api is None else [c for c in channels if c["stream_id"] not in covered]
+        listings: dict[str, list[dict]] = {}
+        if targets:
+            listings, _ = api.episodes_for([c["stream_id"] for c in targets], budget=budget)
+        pending = api.pending_count([c["stream_id"] for c in targets]) if targets else 0
+        from_api = {c["stream_id"] for c in targets if listings.get(c["stream_id"])}
+        wanted = {c["epg_id"].strip().lower() for c in channels if c["stream_id"] in covered}
+        stats = {
+            "mode": mode,
+            "channels": len(channels),
+            "xmltv": len(covered),
+            "api": len(from_api),
+            "pending": pending,
+            "missing": [{"stream_id": c["stream_id"], "name": c["name"], "epg_id": c.get("epg_id") or ""}
+                        for c in channels if c["stream_id"] not in covered and c["stream_id"] not in from_api],
+        }
+        digest = hashlib.sha256()
+        digest.update(f"{mode}\n{self._source_key() if source else '-'}\n".encode())
+        for item in sorted(wanted):
+            digest.update(item.encode("utf-8", "replace") + b"\n")
+        for c in sorted(targets, key=lambda c: c["stream_id"]):
+            if c["stream_id"] in from_api:
+                digest.update(f"{c['stream_id']}:{xml_channel_id(c)}:{api.fetched_at(c['stream_id'])}\n".encode("utf-8", "replace"))
+        signature = digest.hexdigest()
+        self.directory.mkdir(parents=True, exist_ok=True)
+        out = self.directory / f"p-{key}.xml"
+        sig_file = self.directory / f"p-{key}.sig"
+        with self._filter_lock:
+            try:
+                if out.exists() and sig_file.read_text() == signature:
+                    return out, stats
+            except OSError:
+                pass
+            fd, tmp = tempfile.mkstemp(prefix=f".p-{key}-", suffix=".tmp", dir=self.directory)
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as dst:
+                    if source is not None and wanted:
+                        write_filtered_xmltv(source, dst, wanted, close=False)
+                    else:
+                        dst.write('<?xml version="1.0" encoding="UTF-8"?>\n<tv generator-info-name="Xtream M3U Local">\n')
+                    written: set[str] = set()
+                    for c in targets:
+                        items = listings.get(c["stream_id"])
+                        xml_id = xml_channel_id(c)
+                        if items and xml_id.lower() not in written:
+                            written.add(xml_id.lower())
+                            write_api_channel(dst, xml_id, c["name"], c.get("logo", ""), items)
+                    dst.write("</tv>\n")
+                os.chmod(tmp, 0o644)
+                os.replace(tmp, out)
+                sig_file.write_text(signature)
+            except ET.ParseError as exc:
+                raise EpgUnavailable("Guide XMLTV du fournisseur illisible") from exc
+            finally:
+                if os.path.exists(tmp):
+                    os.unlink(tmp)
+        return out, stats
+
     def forget(self, key: str) -> None:
         for name in (f"p-{key}.xml", f"p-{key}.sig"):
             try:
@@ -158,8 +379,11 @@ class EpgCache:
                 pass
 
 
-def write_filtered_xmltv(source: Path, dst, wanted: set[str]) -> int:
-    """Stream ``source`` into ``dst`` keeping only wanted channels/programmes. Returns kept elements."""
+def write_filtered_xmltv(source: Path, dst, wanted: set[str], *, close: bool = True) -> int:
+    """Stream ``source`` into ``dst`` keeping only wanted channels/programmes. Returns kept elements.
+
+    ``close=False`` laisse la balise ``<tv>`` ouverte pour y ajouter des programmes (API).
+    """
     dst.write('<?xml version="1.0" encoding="UTF-8"?>\n')
     kept = 0
     depth = 0
@@ -189,5 +413,6 @@ def write_filtered_xmltv(source: Path, dst, wanted: set[str]) -> int:
             root.clear()
     if not header_written:
         dst.write("<tv>\n")
-    dst.write("</tv>\n")
+    if close:
+        dst.write("</tv>\n")
     return kept

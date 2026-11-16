@@ -88,6 +88,20 @@ try {
   assert(url.endsWith('/p/salon.m3u'), `URL ${url}`);
   assert(await page.locator('#saved .playlist-item').count() === 1, 'liste des playlists');
   assert(await page.isDisabled('#slug'), 'slug figé');
+  // Guide des programmes (EPG) de la playlist
+  assert(await page.isVisible('#epg-box'), 'bloc EPG visible');
+  await page.click('#epg-box > summary');
+  await waitFor(async () => /% des chaînes/.test(await page.innerText('#epg-pill-text')), 'couverture EPG', 20000);
+  assert((await page.innerText('#epg-url')).endsWith('/p/salon.xml'), 'URL EPG');
+  assert(/^\d+ \/ \d+$/.test(await page.innerText('#epg-covered')), 'compteur EPG');
+  assert(num(await page.innerText('#epg-api')) > 0, 'chaînes complétées par l\'API');
+  assert(/xmltv\.php/.test(await page.innerText('#epg-source')), 'source EPG décrite');
+  const { text: guide } = await fetchText((await page.innerText('#epg-url')));
+  assert(guide.includes('<programme') && guide.trim().endsWith('</tv>'), 'XMLTV de la playlist');
+  if (shots) await page.screenshot({ path: join(shots, 'desktop-epg.png') });
+  await page.click('#epg-refresh');
+  await waitFor(async () => (await page.locator('.toast', { hasText: 'Actualisation du guide' }).count()) > 0, 'actualisation EPG');
+  await page.click('#epg-box > summary');
   const { text: m3u } = await fetchText(url);
   assert(m3u.startsWith('#EXTM3U'), 'en-tête M3U');
   assert(!m3u.includes(`,${excludedName}\n`), 'chaîne exclue présente');

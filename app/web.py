@@ -17,7 +17,8 @@ from .epg import EpgCache
 import threading
 import time
 
-from .custom import filter_kind, uses
+from .custom import SLUG_RE, filter_channels, filter_kind, uses
+from .epg import EpgUnavailable
 from .server import KINDS, Config, UpstreamError, XtreamAPI, redact
 from .vod import SeriesCache
 
@@ -146,6 +147,8 @@ class WebHandler(BaseHTTPRequestHandler):
             except UpstreamError as exc:
                 return self.json(502, {"error": str(exc)})
             return self.json(200, catalog_payload(items, categories, self.api, kind))
+        if path == "/api/epg":
+            return self.epg_status(qs.get("slug", [""])[0] or None)
         series_match = SERIES_API.fullmatch(path)
         if series_match and self.series is not None:
             episodes = self.series.episodes(series_match.group(1), refresh=refresh, timeout=30)
@@ -212,6 +215,7 @@ class WebHandler(BaseHTTPRequestHandler):
             "categories_error": self.api.categories_error,
             "data_file": str(self.store.path),
             "series_cache": self.series.stats() if self.series is not None else None,
+            "epg_mode": self.config.epg_source,
         }
         # Le token des lecteurs n'est transmis que si l'interface est protégée par mot de passe.
         if self.config.access_token and self.config.web_password:
@@ -247,7 +251,10 @@ class WebHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         if not self.check_auth():
             return
-        if urlsplit(self.path).path != "/api/playlists":
+        path = urlsplit(self.path).path
+        if path == "/api/epg/refresh":
+            return self.refresh_epg()
+        if path != "/api/playlists":
             return self.json(404, {"error": "Route introuvable"})
         body = self.read_payload()
         if body is None:
@@ -255,6 +262,7 @@ class WebHandler(BaseHTTPRequestHandler):
         try:
             saved = self.store.save(body)
             self.prefetch_series(saved)
+            self.prefetch_epg(saved)
             return self.json(201, saved)
         except InvalidPlaylist as exc:
             return self.json(400, {"error": str(exc)})
@@ -273,6 +281,7 @@ class WebHandler(BaseHTTPRequestHandler):
         try:
             saved = self.store.save(body, update_slug=match.group(1))
             self.prefetch_series(saved)
+            self.prefetch_epg(saved)
             return self.json(200, saved)
         except KeyError:
             return self.json(404, {"error": "Playlist introuvable"})
@@ -295,6 +304,85 @@ class WebHandler(BaseHTTPRequestHandler):
             count = self.series.prefetch(ids)
             if count:
                 LOG.info("Playlist %s : préchargement des épisodes de %d série(s)", saved["slug"], count)
+
+        threading.Thread(target=job, daemon=True).start()
+
+    # ----------------------------------------------------------------- EPG
+    def playlist_channels(self, saved: dict) -> list[dict]:
+        channels, _ = self.api.catalog()
+        return [c for c, _ in filter_channels(channels, saved)]
+
+    def epg_status(self, slug: str | None) -> None:
+        if self.epg is None:
+            return self.json(200, {"enabled": False})
+        data = {
+            "enabled": self.config.enable_epg,
+            "mode": self.config.epg_source,
+            "custom_source": bool(self.config.epg_url),
+            "source": self.epg.status(),
+            "playlist": None,
+            "error": None,
+        }
+        if slug and self.config.enable_epg:
+            if not SLUG_RE.fullmatch(slug):
+                return self.json(400, {"error": "Playlist invalide"})
+            try:
+                saved = self.store.get(slug)
+            except RuntimeError:
+                return self.json(500, {"error": "Sauvegarde illisible"})
+            if saved is None:
+                return self.json(404, {"error": "Playlist introuvable"})
+            try:
+                # Budget nul : on mesure la couverture et on planifie les chaînes manquantes en arrière-plan.
+                _, stats = self.epg.playlist_guide(slug, self.playlist_channels(saved), budget=0)
+                data["playlist"] = stats
+            except (UpstreamError, EpgUnavailable) as exc:
+                data["error"] = str(exc)
+            data["source"] = self.epg.status()
+        return self.json(200, data)
+
+    def refresh_epg(self) -> None:
+        """Re-télécharge le guide XMLTV et force la relecture des programmes de la playlist (arrière-plan)."""
+        body = self.read_payload()
+        if body is None:
+            return
+        slug = body.get("slug")
+        saved = None
+        if slug is not None:
+            if not isinstance(slug, str) or not SLUG_RE.fullmatch(slug):
+                return self.json(400, {"error": "Playlist invalide"})
+            saved = self.store.get(slug)
+            if saved is None:
+                return self.json(404, {"error": "Playlist introuvable"})
+        if self.epg is None or not self.config.enable_epg:
+            return self.json(409, {"error": "EPG désactivé (ENABLE_EPG=false)"})
+
+        def job() -> None:
+            if self.config.epg_source != "api":
+                try:
+                    self.epg.ensure(refresh=True)
+                except EpgUnavailable:
+                    pass
+            if saved is not None and self.epg.api_cache is not None:
+                try:
+                    ids = [c["stream_id"] for c in self.playlist_channels(saved)]
+                except UpstreamError:
+                    return
+                self.epg.api_cache.prefetch(ids, force=True)
+
+        threading.Thread(target=job, daemon=True).start()
+        return self.json(202, {"started": True})
+
+    def prefetch_epg(self, saved: dict) -> None:
+        """Après un enregistrement : prépare le guide de la playlist (chaînes à compléter par l'API)."""
+        if self.epg is None or not self.config.enable_epg or not uses(saved, "live"):
+            return
+
+        def job() -> None:
+            try:
+                self.epg.playlist_guide(saved["slug"], self.playlist_channels(saved), budget=0)
+            except (UpstreamError, EpgUnavailable):
+                pass
 
         threading.Thread(target=job, daemon=True).start()
 

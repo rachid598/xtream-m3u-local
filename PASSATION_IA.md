@@ -1,6 +1,6 @@
 # Passation — Xtream M3U Local
 
-> **État au 15 novembre 2026 — version 2.2.1 (TV en direct + films + séries, éditeur films/séries visible).** Document à transmettre tel quel à l'IA suivante avec le dépôt.
+> **État au 16 novembre 2026 — version 2.3.0 (TV en direct + films + séries + guide EPG complété par l'API).** Document à transmettre tel quel à l'IA suivante avec le dépôt.
 > Aucun mot de passe, token ni URL fournisseur réelle ne doit être copié ici ni commité sur GitHub.
 
 ## 1. Objectif utilisateur
@@ -99,6 +99,26 @@ Chaque chaîne : `{stream_id, name, logo, epg_id, num, category_id, category_ids
 - Le `slug` est figé après création (URL permanente) ; le nom est modifiable. Les anciens fichiers V2 (sans `group_order`/`group_names`) restent compatibles.
 - Limites : 100 playlists, 100 000 identifiants par liste, slug `^[a-z0-9][a-z0-9_-]{0,59}$`, nom 1–100 caractères.
 
+## 4 quater. Session 4 — guide des programmes (2.2.1 → 2.3.0)
+
+**Question utilisateur** : « et l'EPG ? ». Avant : guide uniquement issu de `xmltv.php` (souvent cassé chez les fournisseurs dont `get.php` ne marche pas), sans aucun état visible dans l'interface.
+
+**Modifications**
+- `EPG_SOURCE` (`auto` par défaut, `xmltv`, `api`) : en `auto`, `/p/<slug>.xml` = programmes de `xmltv.php` (ou `EPG_URL`) + complément par `get_simple_data_table&stream_id=` pour les chaînes absentes du XMLTV (ou toutes si le XMLTV est indisponible). Titres/descriptions base64 décodés (repli texte brut), horodatages `start_timestamp`/`stop_timestamp` (repli `start`/`end` en UTC), écrits en `YYYYmmddHHMMSS +0000`.
+- Cache par chaîne : `KeyedCache` (généralisation de `SeriesCache`, `app/vod.py`) → `DATA_DIR/cache/epg/<stream_id>.json`, 6 h, 4 récupérations parallèles, 5 min sans nouvel essai après échec ; budget `EPG_FETCH_SECONDS` (15 s) par demande de `/p/<slug>.xml` ; préchargement à l'enregistrement d'une playlist.
+- Index du XMLTV (`DATA_DIR/epg/index.json` : nombre de programmes par identifiant de chaîne, recalculé quand la source change) pour mesurer la couverture sans reparser à chaque requête.
+- Chaînes sans `epg_channel_id` : `tvg-id="xtream-<stream_id>"` dans les playlists personnalisées (sauf `EPG_SOURCE=xmltv`) et `<channel id="xtream-<id>">` dans le guide.
+- `EPG_URL` : guide XMLTV externe à la place de `xmltv.php` (gzip accepté).
+- API Web : `GET /api/epg[?slug=]` (mode, état de la source : ok/date/taille/chaînes/programmes/erreur ; couverture de la playlist : chaînes, via xmltv, via API, en cours, liste des chaînes sans programme) ; `POST /api/epg/refresh {"slug"}` (re-téléchargement XMLTV + relecture forcée des programmes API, en arrière-plan, 202).
+- Interface : bloc dépliable « 🗓️ Guide des programmes (EPG) » sous l'URL de la playlist : pastille de couverture (%), URL EPG à copier, 4 compteurs, description de la source, liste des chaînes sans programme, boutons « Actualiser le guide » / « Ouvrir le XML » ; actualisation automatique tant que des chaînes sont en cours de récupération.
+- Démo : guide réaliste (≈ 2/3 des chaînes dans le XMLTV, d'autres seulement via l'API, quelques-unes sans programme).
+
+**Tests** : 88 tests (7 nouveaux : décodage des programmes, mode auto avec complément API et priorité au XMLTV, XMLTV cassé → API pour tout, mode xmltv seul, API d'état et d'actualisation, EPG désactivé, options de configuration). Scénario navigateur : bloc EPG, couverture, URL, XML récupéré, actualisation. Conteneur Docker réel : guide fusionné XMLTV + API, cache `cache/epg`, aucun secret dans les journaux.
+
+**Cause de l'échec intermittent signalé en 2.2.1 (corrigé)** : `test_status_without_secrets` cherchait la chaîne « pw » (faux mot de passe) dans `/api/status`, qui contient le chemin du dossier temporaire de test ; ce nom aléatoire contient parfois « pw ». Faux positif du test (aucune fuite) : le chemin est désormais exclu du contrôle.
+
+**À vérifier en réel** : `xmltv.php` du fournisseur (bloc EPG → « Source xmltv.php … » ou message d'erreur), volume d'appels `get_simple_data_table` acceptable chez le fournisseur, décalage horaire correct dans TiviMate.
+
 ## 4 ter. Session 3 — éditeur films/séries visible (2.2.0 → 2.2.1)
 
 **Retour utilisateur** : « Possible d'ajouter un éditeur films séries ? Car là on ne les voit pas. » En 2.2.0 le choix du type était une petite rangée de pastilles au-dessus des onglets, facile à manquer (et absente si le conteneur tournait encore en 2.1.0 : vérifier la version en bas de page de l'interface).
@@ -112,7 +132,7 @@ Chaque chaîne : `{stream_id, name, logo, epg_id, num, category_id, category_ids
 - La vue « Catalogue fournisseur » garde son sélecteur compact.
 
 **Tests** : `test_catalog_summary` (81 tests) ; scénario navigateur : tuiles « films/séries disponibles », bandeau, ajout via « Ajouter des films », titre d'édition, compteur de la tuile. Contrôle visuel bureau et mobile (tuiles empilées).
-**Instabilité observée** : un échec unitaire isolé lors d'un passage complet (détail non capturé), non reproduit sur les passages suivants (voir section 6). À surveiller dans GitHub Actions.
+**Instabilité observée** : un échec unitaire isolé — expliqué et corrigé en 2.3.0 (voir 4 quater).
 
 ## 4 bis. Session 2 — films (VOD) et séries (2.1.0 → 2.2.0)
 
@@ -195,7 +215,7 @@ Chaque chaîne : `{stream_id, name, logo, epg_id, num, category_id, category_ids
 
 | Vérification | Résultat |
 |---|---|
-| `python -m unittest discover -s tests -t .` | **81 tests OK** en 2.2.1 (80 en 2.2.0, 65 en 2.1.0) — faux fournisseur local avec direct, films, séries, épisodes |
+| `python -m unittest discover -s tests -t .` | **88 tests OK** en 2.3.0 (81 en 2.2.1, 80 en 2.2.0, 65 en 2.1.0) — faux fournisseur local avec direct, films, séries, épisodes |
 | `node --check app/static/app.js` | OK |
 | Scénario Chromium `tests/e2e_browser.mjs` sur la démo (1 500 chaînes, sous-groupes) | **OK** : création, exclusion, ajout manuel, réordonnancement/renommage de groupe, M3U conforme à l'URL affichée, modification à URL constante, duplication, suppression, vue catalogue, recherche, export JSON, aucun défilement horizontal à 390 / 768 / 1366 / 1920 px, aucune erreur console |
 | `docker build` (python:3.13-alpine) | OK |
@@ -217,7 +237,8 @@ Couverture des tests unitaires : M3U complet et personnalisé (métadonnées, in
 - Pas de renommage/réordonnancement **élément par élément** (seulement les groupes) ; pas de favoris.
 - Films/séries : non testés avec le vrai fournisseur ni dans TiviMate/VLC réels. Pas de sous-titres externes ni de métadonnées détaillées (synopsis, casting) dans le M3U (le format ne les porte pas). Pas de « catch-up » (replay) du direct.
 - Protection contre le *DNS rebinding* non implémentée (l'API ne contient aucun secret ; `WEB_PASSWORD` recommandé sur un réseau partagé).
-- L'EPG complet est servi tel quel (peut faire des centaines de Mo) ; les playlists personnalisées utilisent l'EPG filtré.
+- L'EPG complet `/epg.xml` est servi tel quel (XMLTV seul, peut faire des centaines de Mo) ; les playlists personnalisées utilisent l'EPG filtré et complété par l'API.
+- Pas d'EPG pour les films/séries (sans objet) ; pas de catch-up.
 
 ## 8. Prochaines étapes prioritaires
 

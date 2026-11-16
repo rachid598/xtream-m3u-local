@@ -13,6 +13,7 @@ import argparse
 import logging
 import random
 import threading
+import time
 
 from app.custom import PlaylistStore
 from app.server import Config, XtreamAPI, make_epg, make_series, make_server
@@ -51,6 +52,31 @@ def build_catalog(total: int) -> None:
             "stream_icon": "", "epg_channel_id": f"ch{n}.demo" if n % 4 else "", "category_id": str(cat),
         })
     fake_xtream.STREAMS[:] = streams
+
+    # Guide : ~2/3 des chaînes avec identifiant dans xmltv.php, d'autres seulement via l'API, le reste sans programme.
+    import base64
+    from xml.sax.saxutils import escape
+    now = int(time.time()) // 3600 * 3600
+    shows = ["Journal", "Magazine", "Match en direct", "Documentaire", "Série du soir", "Film", "Météo"]
+    lines = ['<?xml version="1.0" encoding="UTF-8"?>', '<tv generator-info-name="demo">']
+    fake_xtream.SIMPLE_EPG.clear()
+    for item in streams:
+        n = item["num"]
+        if item["epg_channel_id"] and n % 5 != 0:
+            cid = item["epg_channel_id"]
+            lines.append(f'<channel id="{cid}"><display-name>{escape(item["name"])}</display-name></channel>')
+            for h in range(-2, 22):
+                start, stop = now + h * 3600, now + (h + 1) * 3600
+                fmt = lambda t: time.strftime("%Y%m%d%H%M%S +0000", time.gmtime(t))
+                lines.append(f'<programme start="{fmt(start)}" stop="{fmt(stop)}" channel="{cid}">'
+                             f'<title>{rng.choice(shows)}</title></programme>')
+        elif n % 7 != 0:
+            fake_xtream.SIMPLE_EPG[str(item["stream_id"])] = {"epg_listings": [
+                {"title": base64.b64encode(rng.choice(shows).encode()).decode(), "description": "",
+                 "start_timestamp": str(now + h * 3600), "stop_timestamp": str(now + (h + 1) * 3600)}
+                for h in range(-1, 12)]}
+    lines.append("</tv>")
+    fake_xtream.XMLTV = "\n".join(lines)
 
     # Films et séries fictifs (catégories propres, identifiants indépendants du direct).
     movie_groups = ["VOD | Nouveautés", "VOD | Action", "VOD | Comédie", "VOD | Animation", "VOD | Documentaires", "VOD | 4K"]

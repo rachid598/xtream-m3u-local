@@ -115,8 +115,12 @@ class WebTests(StackTestCase):
         self.assertFalse(data["token_required"])
         self.assertEqual(data["account"], {"status": "Active", "exp_date": 1893456000, "max_connections": "1",
                                            "active_connections": "0", "is_trial": False})
-        raw = body.decode()
-        self.assertNotIn("pw", raw.replace("public_base_url", ""))
+        # Le chemin du dossier temporaire (nom aléatoire) peut contenir « pw » : on l'exclut du contrôle.
+        self.assertTrue(data.pop("data_file").endswith("playlists.json"))
+        raw = json.dumps(data)
+        self.assertNotIn('"pw"', raw)
+        self.assertNotIn("/pw", raw)
+        self.assertNotIn("password", raw)
         self.assertNotIn('"user"', raw)
         self.assertNotIn(self.provider_url, raw)
 

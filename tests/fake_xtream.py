@@ -79,6 +79,24 @@ SERIES_INFO = {
                                        "container_extension": "avi", "season": 1}]]},
 }
 
+def _b64(text: str) -> str:
+    import base64
+    return base64.b64encode(text.encode()).decode()
+
+
+# get_simple_data_table : titres/descriptions en base64, horodatages UTC.
+SIMPLE_EPG = {
+    "42": {"epg_listings": [
+        {"id": "1", "epg_id": "1", "title": _b64("Journal API"), "lang": "fr", "start": "2026-11-15 17:00:00",
+         "end": "2026-11-15 18:00:00", "description": _b64("Infos"), "channel_id": "franceinfo.fr",
+         "start_timestamp": "1794762000", "stop_timestamp": "1794765600"}]},
+    "43": {"epg_listings": [
+        {"id": "2", "title": _b64("Concert <live> & co"), "description": _b64("Musique"),
+         "start_timestamp": "1794762000", "stop_timestamp": "1794765600"},
+        {"id": "3", "title": _b64("Sans fin"), "start_timestamp": "1794765600", "stop_timestamp": "0"},
+        {"id": "4", "title": "pas-du-base64 !", "start": "2026-11-15 18:00:00", "end": "2026-11-15 19:30:00"}]},
+}
+
 XMLTV = """<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE tv SYSTEM "xmltv.dtd">
 <tv generator-info-name="fake">
@@ -97,6 +115,7 @@ class FakeXtream(BaseHTTPRequestHandler):
     fail_api = False
     fail_categories = False
     series_info_calls: list[str] = []
+    simple_epg_calls: list[str] = []
     epg_mode = "plain"  # plain | gzip | html | error
     epg_requests = 0
 
@@ -141,6 +160,10 @@ class FakeXtream(BaseHTTPRequestHandler):
                 data = SERIES_CATEGORIES
             elif action == "get_series":
                 data = SERIES
+            elif action == "get_simple_data_table":
+                sid = args.get("stream_id", [""])[0]
+                type(self).simple_epg_calls.append(sid)
+                data = SIMPLE_EPG.get(sid, {"epg_listings": []})
             elif action == "get_series_info":
                 sid = args.get("series_id", [""])[0]
                 type(self).series_info_calls.append(sid)
@@ -198,5 +221,6 @@ def reset_fake() -> None:
     FakeXtream.fail_api = False
     FakeXtream.fail_categories = False
     FakeXtream.series_info_calls = []
+    FakeXtream.simple_epg_calls = []
     FakeXtream.epg_mode = "plain"
     FakeXtream.epg_requests = 0

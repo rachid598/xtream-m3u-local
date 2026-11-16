@@ -181,19 +181,25 @@ def episode_name(series_name: str, ep: dict) -> str:
     return name
 
 
-class SeriesCache:
-    """Cache des épisodes par série (mémoire + disque), avec préchargement en arrière-plan."""
+class KeyedCache:
+    """Cache de réponses API par identifiant (mémoire + disque), préchargement en arrière-plan
+    et budget de temps. Utilisé pour les épisodes (``get_series_info``) et le guide par chaîne
+    (``get_simple_data_table``), qui n'existent qu'élément par élément dans l'API Xtream.
+    """
 
     def __init__(self, fetch: Callable[[str], object], data_dir: str, *, max_age: int = 24 * 3600,
-                 workers: int = 4):
+                 workers: int = 4, normalize: Callable[[object], list[dict]] = None,
+                 subdir: str = "series", label: str = "série"):
         self._fetch = fetch
-        self.directory = Path(data_dir) / "cache" / "series"
+        self._normalize = normalize or normalize_episodes
+        self._label = label
+        self.directory = Path(data_dir) / "cache" / subdir
         self.max_age = max(60, max_age)
         self._memory: dict[str, tuple[float, list[dict]]] = {}
         self._lock = threading.Lock()
         self._pending: dict[str, object] = {}
         self._failed: dict[str, float] = {}
-        self._executor = ThreadPoolExecutor(max_workers=max(1, workers), thread_name_prefix="series")
+        self._executor = ThreadPoolExecutor(max_workers=max(1, workers), thread_name_prefix=subdir)
 
     # ----------------------------------------------------------- stockage
     def _path(self, sid: str) -> Path:
@@ -229,13 +235,13 @@ class SeriesCache:
     # ------------------------------------------------------- récupération
     def _task(self, sid: str) -> list[dict] | None:
         try:
-            episodes = normalize_episodes(self._fetch(sid))
+            episodes = self._normalize(self._fetch(sid))
             self._store(sid, episodes)
             with self._lock:
                 self._failed.pop(sid, None)
             return episodes
         except Exception as exc:  # erreur réseau/API : on garde l'ancienne copie éventuelle
-            LOG.warning("Épisodes de la série %s indisponibles (%s)", sid, type(exc).__name__)
+            LOG.warning("Données %s %s indisponibles (%s)", self._label, sid, type(exc).__name__)
             with self._lock:
                 self._failed[sid] = time.monotonic()
             return None
@@ -294,16 +300,27 @@ class SeriesCache:
         missing = [sid for sid in ids if sid not in results]
         return results, missing
 
-    def prefetch(self, ids: list[str]) -> int:
-        """Planifie en arrière-plan les séries absentes ou périmées du cache. Retourne le nombre planifié."""
+    def prefetch(self, ids: list[str], *, force: bool = False) -> int:
+        """Planifie en arrière-plan les éléments absents ou périmés du cache. Retourne le nombre planifié."""
         count = 0
         for sid in ids:
             cached = self._load(sid)
-            if cached and time.time() - cached[0] < self.max_age:
+            if cached and not force and time.time() - cached[0] < self.max_age:
                 continue
+            if force:
+                with self._lock:
+                    self._failed.pop(sid, None)
             if self._submit(sid) is not None:
                 count += 1
         return count
+
+    def fetched_at(self, sid: str) -> float | None:
+        cached = self._load(sid)
+        return cached[0] if cached else None
+
+    def pending_count(self, ids: list[str]) -> int:
+        with self._lock:
+            return sum(1 for sid in ids if sid in self._pending)
 
     def stats(self) -> dict:
         with self._lock:
@@ -313,3 +330,11 @@ class SeriesCache:
         except OSError:
             cached = 0
         return {"cached": cached, "pending": pending}
+
+
+class SeriesCache(KeyedCache):
+    """Épisodes par série : ``DATA_DIR/cache/series/<series_id>.json``."""
+
+    def __init__(self, fetch: Callable[[str], object], data_dir: str, *, max_age: int = 24 * 3600, workers: int = 4):
+        super().__init__(fetch, data_dir, max_age=max_age, workers=workers,
+                         normalize=normalize_episodes, subdir="series", label="série")

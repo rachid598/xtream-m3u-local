@@ -336,6 +336,107 @@
     hint.hidden = false;
   }
 
+  // ------------------------------------------------------------------ EPG
+  let epgTimer = null;
+  let epgPolls = 0;
+
+  function epgVisible() {
+    const p = state.editing && state.playlists.find((x) => x.slug === state.editing);
+    return Boolean(p && state.status && state.status.epg_enabled && usesKind(p, 'live'));
+  }
+
+  async function loadEpg({ poll = false } = {}) {
+    clearTimeout(epgTimer);
+    if (!poll) epgPolls = 0;
+    const box = $('epg-box');
+    if (!epgVisible()) { box.hidden = true; return; }
+    box.hidden = false;
+    const slug = state.editing;
+    const url = withToken(`${baseUrl()}/p/${slug}.xml`);
+    $('epg-url').textContent = url;
+    $('epg-open').href = url;
+    let data;
+    try {
+      data = await request(`/api/epg?slug=${encodeURIComponent(slug)}`);
+    } catch (error) {
+      setEpgPill('error', 'État indisponible');
+      $('epg-source').textContent = error.message;
+      return;
+    }
+    if (slug !== state.editing) return;
+    renderEpg(data);
+    const pl = data.playlist;
+    if (pl && pl.pending > 0 && epgPolls < 20) {
+      epgPolls += 1;
+      epgTimer = setTimeout(() => loadEpg({ poll: true }), 4000);
+    }
+  }
+
+  function setEpgPill(kind, text) {
+    $('epg-pill').className = `pill ${kind}`;
+    $('epg-pill-text').textContent = text;
+  }
+
+  function renderEpg(data) {
+    const pl = data.playlist;
+    const src = data.source || {};
+    const sourceName = data.custom_source ? 'la source EPG_URL' : 'xmltv.php';
+    $('epg-xmltv-label').textContent = `via ${data.custom_source ? 'EPG_URL' : 'xmltv.php'}`;
+    if (!pl) {
+      setEpgPill('error', 'Guide indisponible');
+      ['epg-covered', 'epg-xmltv', 'epg-api', 'epg-missing-count'].forEach((id) => { $(id).textContent = '–'; });
+      $('epg-source').textContent = data.error || 'Guide indisponible.';
+      $('epg-missing-box').hidden = true;
+      return;
+    }
+    const covered = pl.xmltv + pl.api;
+    const pct = pl.channels ? Math.round((covered / pl.channels) * 100) : 0;
+    $('epg-covered').textContent = `${covered} / ${pl.channels}`;
+    $('epg-xmltv').textContent = pl.xmltv.toLocaleString('fr-FR');
+    $('epg-api').textContent = data.mode === 'xmltv' ? 'désactivé' : pl.api.toLocaleString('fr-FR');
+    $('epg-missing-count').textContent = pl.missing.length.toLocaleString('fr-FR');
+    if (pl.pending) setEpgPill('warn', `Récupération en cours… ${pct} %`);
+    else if (!pl.channels) setEpgPill('', 'Aucune chaîne');
+    else if (!covered) setEpgPill('error', 'Aucun programme');
+    else setEpgPill(pl.missing.length ? 'warn' : 'ok', `${pct} % des chaînes`);
+    const parts = [];
+    if (data.mode === 'api') parts.push('Mode EPG_SOURCE=api : programmes récupérés chaîne par chaîne via l\'API Xtream.');
+    else if (src.ok) {
+      const when = src.updated_at ? new Date(src.updated_at * 1000).toLocaleString('fr-FR', { dateStyle: 'short', timeStyle: 'short' }) : '';
+      parts.push(`Source ${sourceName} : ${plural(src.channels, 'chaîne', 'chaînes')}, ${plural(src.programmes, 'programme', 'programmes')}${when ? `, mise à jour le ${when}` : ''}.`);
+      if (data.mode === 'auto' && pl.api) parts.push(`Les chaînes absentes de ${sourceName} sont complétées par l'API Xtream.`);
+    } else {
+      parts.push(`${sourceName} ne fonctionne pas${src.error ? ` (${src.error})` : ''}${data.mode === 'auto' ? ' : les programmes sont récupérés chaîne par chaîne via l\'API Xtream.' : '.'}`);
+    }
+    if (pl.pending) parts.push(`${plural(pl.pending, 'chaîne', 'chaînes')} en cours de récupération (actualisation automatique).`);
+    $('epg-source').textContent = parts.join(' ');
+    const list = $('epg-missing');
+    list.replaceChildren();
+    for (const item of pl.missing.slice(0, 300)) {
+      list.append(h('li', null, h('span', { text: item.name }), h('span', { class: 'num', text: item.epg_id ? `tvg-id ${item.epg_id}` : 'sans identifiant EPG' })));
+    }
+    if (pl.missing.length > 300) list.append(h('li', { class: 'empty', text: `… et ${pl.missing.length - 300} autres` }));
+    $('epg-missing-summary').textContent = `${plural(pl.missing.length, 'chaîne', 'chaînes')} sans programme (le fournisseur n'en publie pas)`;
+    $('epg-missing-box').hidden = !pl.missing.length;
+  }
+
+  async function refreshEpg() {
+    if (!state.editing) return;
+    $('epg-refresh').disabled = true;
+    try {
+      await request('/api/epg/refresh', 'POST', { slug: state.editing });
+      toast('Actualisation du guide lancée');
+      setEpgPill('warn', 'Actualisation…');
+      epgPolls = 0;
+      clearTimeout(epgTimer);
+      epgTimer = setTimeout(() => loadEpg({ poll: true }), 3000);
+    } catch (error) {
+      toast(error.message, 'error');
+    } finally {
+      setTimeout(() => { $('epg-refresh').disabled = false; }, 3000);
+    }
+  }
+
   async function loadSummary(force = false) {
     try {
       state.summary = await request(`/api/catalog/summary${force ? '?refresh=1' : ''}`);
@@ -703,6 +804,7 @@
     state.limit = PAGE;
     clearError();
     refresh();
+    loadEpg();
     // Charger en arrière-plan les catalogues films / séries utilisés par cette playlist (compteurs, résumé).
     if (p) for (const kind of ['vod', 'series']) if (usesKind(p, kind)) ensureCatalog(kind);
   }
@@ -1018,6 +1120,7 @@
     $('name').focus();
   });
   $('save').addEventListener('click', save);
+  $('epg-refresh').addEventListener('click', refreshEpg);
   document.querySelectorAll('[data-kind]').forEach((btn) => btn.addEventListener('click', () => switchKind(btn.dataset.kind)));
   $('view-btn-playlists').addEventListener('click', () => switchView('playlists'));
   $('view-btn-catalog').addEventListener('click', () => switchView('catalog'));
@@ -1057,7 +1160,11 @@
     renderStats();
     renderUrl();
   });
-  $('token').addEventListener('input', () => { storage('xtream-m3u-token', $('token').value.trim()); renderUrl(); });
+  $('token').addEventListener('input', () => {
+    storage('xtream-m3u-token', $('token').value.trim());
+    renderUrl();
+    if (state.editing) $('epg-url').textContent = withToken(`${baseUrl()}/p/${state.editing}.xml`);
+  });
   $('copy').addEventListener('click', () => { if (state.editing) copyText(playlistUrl(state.editing)); });
   document.querySelectorAll('[data-copy]').forEach((btn) => btn.addEventListener('click', () => copyText($(btn.dataset.copy).textContent)));
 

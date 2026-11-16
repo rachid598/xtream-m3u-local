@@ -19,6 +19,10 @@ services:
       WEB_USERNAME: "${WEB_USERNAME:-admin}"
       WEB_PASSWORD: "${WEB_PASSWORD:-}"
       ENABLE_EPG: "${ENABLE_EPG:-true}"
+      # auto = xmltv.php complété par l'API chaîne par chaîne ; xmltv = xmltv.php seul ; api = API seule
+      EPG_SOURCE: "${EPG_SOURCE:-auto}"
+      # Facultatif : guide XMLTV externe à la place de xmltv.php (http(s), .xml ou .xml.gz)
+      EPG_URL: "${EPG_URL:-}"
       CACHE_SECONDS: "${CACHE_SECONDS:-1800}"
       TZ: "${TZ:-Europe/Paris}"
     volumes:

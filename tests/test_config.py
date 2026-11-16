@@ -52,6 +52,15 @@ class ConfigTests(unittest.TestCase):
             with self.subTest(extra=extra), self.assertRaises(ValueError):
                 config(**extra)
 
+    def test_epg_options(self):
+        cfg = config()
+        self.assertEqual((cfg.epg_source, cfg.epg_url, cfg.epg_fetch_seconds), ("auto", "", 15))
+        self.assertEqual(config(EPG_SOURCE="API").epg_source, "api")
+        self.assertEqual(config(EPG_URL="https://epg.example/guide.xml.gz").epg_url, "https://epg.example/guide.xml.gz")
+        for extra in ({"EPG_SOURCE": "bof"}, {"EPG_URL": "epg.example/guide.xml"}):
+            with self.subTest(extra=extra), self.assertRaises(ValueError):
+                config(**extra)
+
     def test_booleans(self):
         for raw, expected in (("false", False), ("0", False), ("non", False), ("true", True), ("oui", True), ("ON", True)):
             with self.subTest(raw=raw):

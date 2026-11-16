@@ -25,8 +25,8 @@ from urllib.request import Request, urlopen
 
 from . import __version__
 from .custom import CATEGORY_RE, UNCATEGORIZED, PlaylistStore, filter_channels, filter_kind, uses
-from .epg import EpgCache, EpgUnavailable
-from .vod import SeriesCache, episode_name, mime_for, normalize_movie, normalize_series
+from .epg import EPG_MODES, EpgCache, EpgUnavailable, normalize_listings, xml_channel_id
+from .vod import KeyedCache, SeriesCache, episode_name, mime_for, normalize_movie, normalize_series
 
 LOG = logging.getLogger("xtream-m3u-local")
 DEFAULT_USER_AGENT = f"XtreamM3ULocal/{__version__}"
@@ -52,6 +52,20 @@ def _env_int(name: str, default: int) -> int:
         return int(raw)
     except ValueError:
         raise ValueError(f"{name} doit être un nombre entier") from None
+
+
+def _epg_source() -> str:
+    value = os.environ.get("EPG_SOURCE", "").strip().lower() or "auto"
+    if value not in EPG_MODES:
+        raise ValueError("EPG_SOURCE doit valoir auto, xmltv ou api")
+    return value
+
+
+def _epg_url() -> str:
+    value = os.environ.get("EPG_URL", "").strip()
+    if value and (urlsplit(value).scheme not in ("http", "https") or not urlsplit(value).netloc):
+        raise ValueError("EPG_URL doit être une URL http(s) vers un guide XMLTV")
+    return value
 
 
 def normalize_xtream_url(raw: str) -> str:
@@ -96,6 +110,9 @@ class Config:
     user_agent: str = DEFAULT_USER_AGENT
     epg_cache_hours: int = 12
     series_cache_hours: int = 24
+    epg_source: str = "auto"
+    epg_url: str = ""
+    epg_fetch_seconds: int = 15
     series_fetch_seconds: int = 20
 
     @classmethod
@@ -135,6 +152,9 @@ class Config:
             user_agent=os.environ.get("XTREAM_USER_AGENT", "").strip() or DEFAULT_USER_AGENT,
             epg_cache_hours=max(1, _env_int("EPG_CACHE_HOURS", 12)),
             series_cache_hours=max(1, _env_int("SERIES_CACHE_HOURS", 24)),
+            epg_source=_epg_source(),
+            epg_url=_epg_url(),
+            epg_fetch_seconds=max(0, _env_int("EPG_FETCH_SECONDS", 15)),
             series_fetch_seconds=max(0, _env_int("SERIES_FETCH_SECONDS", 20)),
         )
 
@@ -288,6 +308,10 @@ class XtreamAPI:
             raise UpstreamError("Réponse API inattendue : liste absente (identifiants ou abonnement ?)")
         return decoded
 
+    def simple_epg(self, stream_id: str) -> object:
+        """Programmes d'une chaîne (plusieurs jours) : ``get_simple_data_table``."""
+        return self._fetch(self.api_url("get_simple_data_table", stream_id=stream_id), "action=get_simple_data_table")
+
     def series_info(self, series_id: str) -> object:
         return self._fetch(self.api_url("get_series_info", series_id=series_id), "action=get_series_info")
 
@@ -429,7 +453,7 @@ def with_token(url: str, config: Config) -> str:
 
 def playlist(config: Config, entries: list[tuple[dict, str]], categories: dict[str, str], base: str,
              *, mode: str = "proxy", fmt: str = "ts", epg_path: str | None = "/epg.xml",
-             group_names: dict[str, str] | None = None) -> bytes:
+             group_names: dict[str, str] | None = None, api_epg_ids: bool = False) -> bytes:
     """Build an M3U (extended) document.
 
     ``entries`` = ``[(élément, clé_de_groupe), ...]`` où l'élément est une chaîne (``kind`` absent ou ``live``),
@@ -448,6 +472,9 @@ def playlist(config: Config, entries: list[tuple[dict, str]], categories: dict[s
         attrs = []
         if channel.get("epg_id"):
             attrs.append(f'tvg-id="{escape_attribute(channel["epg_id"])}"')
+        elif api_epg_ids and channel.get("kind", "live") == "live":
+            # Pas d'identifiant EPG fournisseur : identifiant du guide complété par l'API.
+            attrs.append(f'tvg-id="{escape_attribute(xml_channel_id(channel))}"')
         attrs.append(f'tvg-name="{escape_attribute(name)}"')
         if channel.get("logo"):
             attrs.append(f'tvg-logo="{escape_attribute(channel["logo"])}"')
@@ -717,8 +744,9 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 if ext == "xml":
                     channels, _ = self.api.catalog(refresh=refresh)
-                    ids = {c["epg_id"] for c, _ in filter_channels(channels, saved) if c.get("epg_id")}
-                    path_out = self.epg.filtered(slug, ids)
+                    selected = [c for c, _ in filter_channels(channels, saved)]
+                    path_out, _ = self.epg.playlist_guide(
+                        slug, selected, budget=0 if head_only else self.config.epg_fetch_seconds)
                     return self.send_file(path_out, "application/xml; charset=utf-8",
                                           head_only=head_only, filename=f"{slug}.xml")
                 kinds = parse_content(qs.get("content", [""])[0], tuple(KINDS))
@@ -729,7 +757,8 @@ class Handler(BaseHTTPRequestHandler):
                 has_live = "live" in kinds and uses(saved, "live")
                 content = playlist(self.config, entries, groups, self.public_base(),
                                    epg_path=f"/p/{slug}.xml" if has_live else None,
-                                   group_names=saved.get("group_names"))
+                                   group_names=saved.get("group_names"),
+                                   api_epg_ids=self.config.enable_epg and self.config.epg_source != "xmltv")
             except EpgUnavailable as exc:
                 return self._error(502, str(exc), head_only=head_only)
             except ValueError as exc:
@@ -776,8 +805,15 @@ def shutil_copy(src, dst, size: int = 256 * 1024) -> None:
 
 
 def make_epg(config: Config, api: XtreamAPI) -> EpgCache:
-    return EpgCache(api.epg_url, config.data_dir, max_age=config.epg_cache_hours * 3600,
-                    user_agent=config.user_agent)
+    """Guide XMLTV (``EPG_URL`` ou ``xmltv.php``) + programmes par chaîne via l'API (mode auto/api)."""
+    url_factory = (lambda: config.epg_url) if config.epg_url else api.epg_url
+    epg = EpgCache(url_factory, config.data_dir, max_age=config.epg_cache_hours * 3600,
+                   user_agent=config.user_agent)
+    epg.mode = config.epg_source
+    if config.epg_source != "xmltv":
+        epg.api_cache = KeyedCache(api.simple_epg, config.data_dir, max_age=6 * 3600,
+                                   normalize=normalize_listings, subdir="epg", label="EPG de la chaîne")
+    return epg
 
 
 def make_series(config: Config, api: XtreamAPI) -> SeriesCache:

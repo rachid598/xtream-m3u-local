@@ -86,8 +86,11 @@ Puis attendre 20 s et vérifier :
 7. Flux : prendre le premier /stream/<id>.ts de la playlist et lancer
    curl -s --max-time 8 -o /dev/null -w '%{http_code} %{size_download}\n' "<URL du flux>"
    → 200 et quelques centaines de Ko. (Une seule lecture à la fois : l'abonnement peut limiter les connexions.)
-8. EPG : curl -s --max-time 120 http://IP:7777/p/test-hermes.xml | head -c 300 → XML <tv>…
-   (si 502 : le fournisseur n'a pas d'EPG exploitable ; le noter, ce n'est pas bloquant).
+8. EPG : curl -s --max-time 120 http://IP:7777/p/test-hermes.xml | head -c 300 → XML <tv>… avec des <programme>
+   puis : curl -s "http://IP:7778/api/epg?slug=test-hermes"
+   → noter "source" (xmltv.php ok/erreur, nombre de chaînes/programmes) et "playlist" (channels, xmltv, api, pending,
+   nombre de "missing"). Si pending > 0, réessayer 30 s plus tard. Si xmltv.php est en erreur, c'est normal que
+   tout passe par l'API (mode auto) ; le signaler dans le rapport.
 8b. Films et séries :
    curl -s "http://IP:7778/api/catalog?kind=vod" | head -c 300      → catégories et films (ou listes vides si l'abonnement n'a pas de VOD)
    curl -s "http://IP:7778/api/catalog?kind=series" | head -c 300   → catégories et séries
@@ -116,7 +119,7 @@ Puis attendre 20 s et vérifier :
 ## Rapport final attendu (sans aucun secret)
 - Pool NVMe utilisé, INSTALL_DIR, DATA_DIR, méthode (Compose ou docker run), image/commit utilisé (`git rev-parse --short HEAD`).
 - Résultat de chaque test de l'étape 5 (OK / échec + message exact).
-- Nombre de catégories et de chaînes, de films et de séries ; état categories_error ; état de l'EPG ; résultat du test d'un film et d'un épisode.
+- Nombre de catégories et de chaînes, de films et de séries ; état categories_error ; état de l'EPG (source xmltv.php OK ou non, couverture xmltv/API/manquantes) ; résultat du test d'un film et d'un épisode.
 - Les URL à utiliser :
     Interface Web : http://IP:7778/
     Exemple de playlist : http://IP:7777/p/salon.m3u (à créer dans l'interface)
