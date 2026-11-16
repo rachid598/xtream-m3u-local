@@ -22,10 +22,12 @@
   <nav class="views" aria-label="Vues">
     <button type="button" class="view-btn" id="view-btn-playlists" aria-pressed="true">Mes playlists</button>
     <button type="button" class="view-btn" id="view-btn-catalog" aria-pressed="false">Catalogue fournisseur</button>
+    <button type="button" class="view-btn" id="view-btn-system" aria-pressed="false">Système</button>
   </nav>
   <div class="top-actions">
     <span class="pill" id="connection" role="status" aria-live="polite"><span class="dot"></span><span id="connection-text">Connexion au fournisseur…</span></span>
     <span class="pill subtle" id="account" hidden></span>
+    <button type="button" class="pill pill-btn" id="streams-pill" hidden title="Lectures en cours (onglet Système)"><span class="dot live-dot"></span><span id="streams-pill-text"></span></button>
     <button type="button" class="btn" id="refresh" title="Recharger la liste des chaînes depuis le fournisseur">
       <span aria-hidden="true">↻</span> <span class="hide-sm">Actualiser le catalogue</span>
     </button>
@@ -272,6 +274,22 @@
       <p class="hint" id="prov-info"></p>
       <div id="prov-results"></div>
       <div id="provider-tree" class="tree"></div>
+    </section>
+  </main>
+</div>
+
+<div class="layout single" id="view-system" hidden>
+  <main class="main">
+    <section class="card">
+      <div class="card-head">
+        <div>
+          <h2>Lectures en cours</h2>
+          <p class="muted small" id="streams-limit">Chargement…</p>
+        </div>
+        <button type="button" class="btn small" id="streams-refresh">↻ Actualiser</button>
+      </div>
+      <ul id="streams-list" class="stream-list"></ul>
+      <p class="hint">Quand la limite de l'abonnement est atteinte, le flux du même appareil est remplacé (zapping), sinon le plus ancien est coupé. L'appareil coupé ne peut pas reprendre ce même flux pendant 30 secondes.</p>
     </section>
   </main>
 </div>

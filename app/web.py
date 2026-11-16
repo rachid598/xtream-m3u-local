@@ -21,6 +21,7 @@ import time
 from .custom import SLUG_RE, filter_channels, filter_kind, uses
 from .epg import EpgUnavailable
 from .server import KINDS, Config, UpstreamError, XtreamAPI, redact
+from .streams import StreamManager
 from .vod import SeriesCache
 
 LOG = logging.getLogger("xtream-m3u-local.web")
@@ -34,6 +35,7 @@ STATIC_FILES = {
 }
 SLUG_API = re.compile(r"^/api/playlists/([a-z0-9][a-z0-9_-]{0,59})$")
 SERIES_API = re.compile(r"^/api/series/([0-9]{1,12})$")
+STREAM_STOP_API = re.compile(r"^/api/streams/([0-9]{1,9})/stop$")
 CSP = (
     "default-src 'none'; style-src 'self'; script-src 'self'; connect-src 'self'; "
     "img-src 'self' data: http: https:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
@@ -49,6 +51,7 @@ class WebHandler(BaseHTTPRequestHandler):
     store: PlaylistStore
     epg: EpgCache | None = None
     series: SeriesCache | None = None
+    streams: StreamManager | None = None
 
     def log_message(self, format: str, *args: object) -> None:
         LOG.info("%s %s %s", self.client_address[0], self.command, urlsplit(self.path).path)
@@ -151,6 +154,8 @@ class WebHandler(BaseHTTPRequestHandler):
             except UpstreamError as exc:
                 return self.json(502, {"error": str(exc)})
             return self.json(200, catalog_payload(items, categories, self.api, kind))
+        if path == "/api/streams":
+            return self.json(200, self.streams_status())
         if path == "/api/epg":
             return self.epg_status(qs.get("slug", [""])[0] or None)
         series_match = SERIES_API.fullmatch(path)
@@ -160,6 +165,12 @@ class WebHandler(BaseHTTPRequestHandler):
                 return self.json(502, {"error": "Épisodes indisponibles (get_series_info)"})
             return self.json(200, {"series_id": series_match.group(1), "episodes": episodes})
         return self.json(404, {"error": "Route introuvable"})
+
+    def streams_status(self) -> dict:
+        if self.streams is None:
+            return {"limit": 0, "auto": False, "takeover": False, "streams": []}
+        return {"limit": self.streams.limit(), "auto": self.config.max_connections < 0,
+                "takeover": self.streams.takeover, "streams": self.streams.list()}
 
     def catalog_summary(self, *, refresh: bool) -> dict:
         """Nombre d'éléments et de catégories par type (léger : ne renvoie pas les listes)."""
@@ -258,6 +269,13 @@ class WebHandler(BaseHTTPRequestHandler):
         path = urlsplit(self.path).path
         if path == "/api/epg/refresh":
             return self.refresh_epg()
+        stop = STREAM_STOP_API.fullmatch(path)
+        if stop:
+            if not self.same_origin():
+                return
+            if self.streams is None or not self.streams.stop(int(stop.group(1))):
+                return self.json(404, {"error": "Lecture introuvable (déjà terminée ?)"})
+            return self.json(200, {"stopped": True})
         if path != "/api/playlists":
             return self.json(404, {"error": "Route introuvable"})
         body = self.read_payload()
@@ -452,9 +470,10 @@ def catalog_payload(channels: list[dict], categories: dict[str, str], api: Xtrea
 
 def make_web_server(config: Config, api: XtreamAPI, store: PlaylistStore, *, host: str = "0.0.0.0",
                     port: int | None = None, epg: EpgCache | None = None,
-                    series: SeriesCache | None = None) -> ThreadingHTTPServer:
+                    series: SeriesCache | None = None, streams: StreamManager | None = None) -> ThreadingHTTPServer:
     handler = type("ConfiguredWebHandler", (WebHandler,),
-                   {"config": config, "api": api, "store": store, "epg": epg, "series": series})
+                   {"config": config, "api": api, "store": store, "epg": epg, "series": series,
+                    "streams": streams})
     server = ThreadingHTTPServer((host, config.web_port if port is None else port), handler)
     server.daemon_threads = True
     return server

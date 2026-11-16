@@ -887,15 +887,73 @@
   }
 
   // ------------------------------------------------ catalogue fournisseur
+  const VIEWS = { playlists: '#', catalog: '#catalogue', system: '#systeme' };
+
   function switchView(view) {
+    if (!VIEWS[view]) view = 'playlists';
     state.view = view;
-    $('view-playlists').hidden = view !== 'playlists';
-    $('view-catalog').hidden = view !== 'catalog';
-    $('view-btn-playlists').setAttribute('aria-pressed', String(view === 'playlists'));
-    $('view-btn-catalog').setAttribute('aria-pressed', String(view === 'catalog'));
-    document.body.classList.toggle('catalog-mode', view === 'catalog');
+    for (const name of Object.keys(VIEWS)) {
+      const panel = $(`view-${name}`);
+      if (panel) panel.hidden = name !== view;
+      const btn = $(`view-btn-${name}`);
+      if (btn) btn.setAttribute('aria-pressed', String(name === view));
+    }
+    document.body.classList.toggle('no-actionbar', view !== 'playlists');
     if (view === 'catalog') renderProvider();
-    try { history.replaceState(null, '', view === 'catalog' ? '#catalogue' : '#'); } catch (_) { /* ignore */ }
+    if (view === 'system') loadSystem();
+    try { history.replaceState(null, '', VIEWS[view]); } catch (_) { /* ignore */ }
+  }
+
+  // ------------------------------------------------------------- système
+  const KIND_LABEL = { live: 'Direct', movie: 'Film', series: 'Épisode', hls: 'Direct (HLS)', timeshift: 'Replay' };
+  let streamsTimer = null;
+
+  function formatBytes(n) {
+    if (n >= 1e9) return `${(n / 1e9).toLocaleString('fr-FR', { maximumFractionDigits: 1 })} Go`;
+    if (n >= 1e6) return `${(n / 1e6).toLocaleString('fr-FR', { maximumFractionDigits: 1 })} Mo`;
+    return `${Math.round(n / 1e3).toLocaleString('fr-FR')} Ko`;
+  }
+  function formatDuration(sec) {
+    const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
+    return h ? `${h} h ${String(m).padStart(2, '0')}` : m ? `${m} min ${String(s).padStart(2, '0')}` : `${s} s`;
+  }
+
+  async function loadStreams() {
+    clearTimeout(streamsTimer);
+    let data;
+    try { data = await request('/api/streams'); } catch (_) { data = null; }
+    if (data) renderStreams(data);
+    const delay = state.view === 'system' ? 3000 : 15000;
+    if (!document.hidden) streamsTimer = setTimeout(loadStreams, delay);
+  }
+
+  function renderStreams(data) {
+    const n = data.streams.length;
+    $('streams-pill').hidden = !n;
+    $('streams-pill-text').textContent = `${n} lecture${n > 1 ? 's' : ''}`;
+    const limitText = data.limit
+      ? `Limite : ${plural(data.limit, 'connexion simultanée', 'connexions simultanées')}${data.auto ? ' (valeur de l\'abonnement)' : ' (MAX_CONNECTIONS)'}${data.takeover ? '' : ' · reprise automatique désactivée'}.`
+      : 'Aucune limite de connexions appliquée (MAX_CONNECTIONS=0 ou valeur de l\'abonnement inconnue).';
+    $('streams-limit').textContent = limitText;
+    const list = $('streams-list');
+    list.replaceChildren();
+    for (const s of data.streams) {
+      list.append(h('li', { class: 'stream-item' },
+        h('span', { class: 'dot live-dot' }),
+        h('span', { class: 'grow' },
+          h('span', { class: 's-title', text: s.label || s.item_id }),
+          h('span', { class: 's-meta', text: `${KIND_LABEL[s.kind] || s.kind} · appareil ${s.client} · depuis ${formatDuration(s.seconds)} · ${formatBytes(s.bytes)}` })),
+        h('button', { type: 'button', class: 'btn small danger', text: 'Arrêter', onclick: async (event) => {
+          event.target.disabled = true;
+          try { await request(`/api/streams/${s.id}/stop`, 'POST'); toast('Lecture arrêtée'); } catch (error) { toast(error.message, 'error'); }
+          loadStreams();
+        } })));
+    }
+    if (!n) list.append(h('li', { class: 'empty', text: 'Aucune lecture en cours.' }));
+  }
+
+  function loadSystem() {
+    loadStreams();
   }
 
   function providerChannelList(list, limit = 300, withCategories = false) {
@@ -1108,7 +1166,9 @@
     if (playlists.status === 'fulfilled') state.playlists = playlists.value;
     else showError(playlists.reason.message);
     load(state.playlists.length ? [...state.playlists].sort((a, b) => collator.compare(a.name, b.name))[0] : null);
-    if (location.hash === '#catalogue') switchView('catalog');
+    const fromHash = Object.keys(VIEWS).find((v) => VIEWS[v] === location.hash);
+    if (fromHash && fromHash !== 'playlists') switchView(fromHash);
+    loadStreams();
     if (await loadCatalog(false, 'live')) refresh();
     loadSummary();
     loadAccount();
@@ -1125,6 +1185,10 @@
   document.querySelectorAll('[data-kind]').forEach((btn) => btn.addEventListener('click', () => switchKind(btn.dataset.kind)));
   $('view-btn-playlists').addEventListener('click', () => switchView('playlists'));
   $('view-btn-catalog').addEventListener('click', () => switchView('catalog'));
+  $('view-btn-system').addEventListener('click', () => switchView('system'));
+  $('streams-pill').addEventListener('click', () => switchView('system'));
+  $('streams-refresh').addEventListener('click', loadStreams);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) loadStreams(); });
   $('prov-search').addEventListener('input', debounce(renderProvider, 200));
   $('prov-expand').addEventListener('click', () => {
     // Les sous-groupes sont créés à l'ouverture du parent : plusieurs passes successives.

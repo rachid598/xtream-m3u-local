@@ -4,6 +4,7 @@ from __future__ import annotations
 import gzip
 import json
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 
@@ -116,6 +117,7 @@ class FakeXtream(BaseHTTPRequestHandler):
     fail_categories = False
     series_info_calls: list[str] = []
     simple_epg_calls: list[str] = []
+    open_streams = 0
     epg_mode = "plain"  # plain | gzip | html | error
     epg_requests = 0
 
@@ -183,6 +185,22 @@ class FakeXtream(BaseHTTPRequestHandler):
             if self.headers.get("Range") == "bytes=3-":
                 return self.send_body(206, body[3:], "video/mp2t", {"Content-Range": "bytes 3-15/16"})
             return self.send_body(200, body, "video/mp2t")
+        if url.path in (f"/live/{USERNAME}/{PASSWORD}/50.ts", f"/live/{USERNAME}/{PASSWORD}/51.ts"):
+            # Flux continu (direct) : 1 Kio toutes les 50 ms pendant 15 s au maximum.
+            type(self).open_streams += 1
+            try:
+                self.send_response(200)
+                self.send_header("Content-Type", "video/mp2t")
+                self.end_headers()
+                for _ in range(300):
+                    self.wfile.write(b"\x47" * 1024)
+                    self.wfile.flush()
+                    time.sleep(0.05)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+            finally:
+                type(self).open_streams -= 1
+            return
         if url.path == f"/movie/{USERNAME}/{PASSWORD}/501.mkv":
             body = bytes(range(256)) * 4  # 1 Kio
             rng = self.headers.get("Range")

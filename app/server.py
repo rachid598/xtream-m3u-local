@@ -25,6 +25,7 @@ from urllib.request import Request, urlopen
 
 from . import __version__
 from .httputil import accepts_gzip, encode_body, etag_matches, etag_of, gzip_stream
+from .streams import EvictedRecently, LimitReached, StreamManager
 from .custom import CATEGORY_RE, UNCATEGORIZED, PlaylistStore, filter_channels, filter_kind, uses
 from .epg import EPG_MODES, EpgCache, EpgUnavailable, normalize_listings, xml_channel_id
 from .vod import KeyedCache, SeriesCache, episode_name, mime_for, normalize_movie, normalize_series
@@ -59,6 +60,19 @@ def _epg_source() -> str:
     value = os.environ.get("EPG_SOURCE", "").strip().lower() or "auto"
     if value not in EPG_MODES:
         raise ValueError("EPG_SOURCE doit valoir auto, xmltv ou api")
+    return value
+
+
+def _max_connections() -> int:
+    raw = os.environ.get("MAX_CONNECTIONS", "").strip().lower()
+    if raw in ("", "auto"):
+        return -1
+    try:
+        value = int(raw)
+    except ValueError:
+        raise ValueError("MAX_CONNECTIONS doit valoir auto, 0 (illimité) ou un nombre") from None
+    if value < 0:
+        raise ValueError("MAX_CONNECTIONS doit valoir auto, 0 (illimité) ou un nombre")
     return value
 
 
@@ -115,6 +129,8 @@ class Config:
     epg_url: str = ""
     epg_fetch_seconds: int = 15
     epg_api_max_channels: int = 1000
+    max_connections: int = -1        # -1 = auto (valeur de l'abonnement), 0 = illimité
+    stream_takeover: bool = True
     series_fetch_seconds: int = 20
 
     @classmethod
@@ -158,6 +174,8 @@ class Config:
             epg_url=_epg_url(),
             epg_fetch_seconds=max(0, _env_int("EPG_FETCH_SECONDS", 15)),
             epg_api_max_channels=max(0, _env_int("EPG_API_MAX_CHANNELS", 1000)),
+            max_connections=_max_connections(),
+            stream_takeover=_env_bool("STREAM_TAKEOVER", True),
             series_fetch_seconds=max(0, _env_int("SERIES_FETCH_SECONDS", 20)),
         )
 
@@ -220,6 +238,7 @@ GROUP_PREFIX = {"live": "", "vod": "vod:", "series": "series:"}
 class _KindState:
     def __init__(self) -> None:
         self.items: list[dict] | None = None
+        self.by_id: dict[str, dict] = {}
         self.categories: dict[str, str] = {}
         self.category_meta: dict[str, dict] = {}
         self.raw_categories: list = []
@@ -362,6 +381,7 @@ class XtreamAPI:
                 st.raw_streams = streams
                 st.categories_error = categories_error
                 st.items = items
+                st.by_id = {item["stream_id"]: item for item in items}
                 st.categories = categories
                 st.expires_at = now + self.config.cache_seconds
                 st.retry_at = 0.0
@@ -375,6 +395,20 @@ class XtreamAPI:
                 st.retry_at = now + self.RETRY_AFTER_FAILURE
                 LOG.warning("Using stale %s catalog because upstream refresh failed", kind)
             return st.items, st.categories
+
+    def lookup(self, kind: str, item_id: str) -> dict | None:
+        """Élément déjà en cache (sans appel réseau) : nom d'une chaîne ou d'un film pour l'affichage."""
+        return self._kinds[kind].by_id.get(item_id)
+
+    def max_connections_hint(self) -> int:
+        """Nombre de connexions autorisées par l'abonnement (0 si inconnu), sans attendre le réseau."""
+        if self._account is None and time.monotonic() >= self._account_expires:
+            self._account_expires = time.monotonic() + 30
+            threading.Thread(target=self.account, daemon=True).start()
+        try:
+            return int((self._account or {}).get("max_connections") or 0)
+        except ValueError:
+            return 0
 
     def account(self) -> dict | None:
         """Résumé de l'abonnement (sans identifiants) ; ``None`` si indisponible."""
@@ -584,6 +618,7 @@ class Handler(BaseHTTPRequestHandler):
     config: Config
     epg: EpgCache
     series: SeriesCache
+    streams: StreamManager
 
     def log_message(self, format: str, *args: object) -> None:
         # Ne jamais journaliser la query string (ACCESS_TOKEN).
@@ -682,7 +717,35 @@ class Handler(BaseHTTPRequestHandler):
             raise ValueError("En-tête Host invalide : définir PUBLIC_BASE_URL")
         return "http://" + host
 
-    def relay(self, upstream_url: str, *, head_only: bool, default_type: str = "video/mp2t") -> None:
+    def open_session(self, kind: str, item_id: str, label: str, *, virtual: bool = False, provider: str = "1"):
+        """Réserve une connexion fournisseur. Retourne la session, ou ``None`` après avoir répondu (409/503)."""
+        try:
+            return self.streams.acquire(kind=kind, item_id=item_id, client=self.client_address[0],
+                                        label=label, virtual=virtual, provider=provider)
+        except EvictedRecently:
+            self._error(409, "Lecture arrêtée : la connexion au fournisseur a été donnée à un autre appareil "
+                             "(réessaie dans 30 secondes ou choisis une autre chaîne)", head_only=False)
+        except LimitReached as exc:
+            self._error(503, f"Limite de {exc.args[0]} connexion(s) simultanée(s) atteinte : arrête une autre "
+                             "lecture (interface Web, onglet Système)", head_only=False)
+        return None
+
+    def item_label(self, kind: str, item_id: str) -> str:
+        catalog_kind = {"movie": "vod", "timeshift": "live", "hls": "live"}.get(kind, kind)
+        if catalog_kind in KINDS:
+            item = self.api.lookup(catalog_kind, item_id)
+            if item:
+                return item["name"]
+        return {"series": "Épisode", "movie": "Film"}.get(kind, "Chaîne") + f" {item_id}"
+
+    def relay(self, upstream_url: str, *, head_only: bool, default_type: str = "video/mp2t",
+              track: tuple[str, str] | None = None) -> None:
+        """Relaie un flux fournisseur. ``track=(type, id)`` : lecture comptée dans la limite de connexions."""
+        session = None
+        if track and not head_only:
+            session = self.open_session(track[0], track[1], self.item_label(*track))
+            if session is None:
+                return
         headers = {"User-Agent": self.config.user_agent, "Accept": "*/*"}
         for h in ("Range", "If-Range"):
             if self.headers.get(h):
@@ -691,6 +754,8 @@ class Handler(BaseHTTPRequestHandler):
         headers_sent = False
         try:
             with urlopen(request, timeout=45) as upstream:
+                if session is not None:
+                    session.attach(upstream.close)
                 self.send_response(upstream.status)
                 for key in ("Content-Type", "Content-Length", "Content-Range", "Accept-Ranges",
                             "Last-Modified", "ETag"):
@@ -706,13 +771,22 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 reader = getattr(upstream, "read1", upstream.read)
                 while True:
-                    chunk = reader(64 * 1024)
+                    if session is not None and session.cancelled.is_set():
+                        break
+                    try:
+                        chunk = reader(64 * 1024)
+                    except Exception:
+                        if session is not None and session.cancelled.is_set():
+                            break  # connexion fermée depuis un autre thread (coupure volontaire)
+                        raise
                     if not chunk:
                         break
                     try:
                         self.wfile.write(chunk)
                     except (BrokenPipeError, ConnectionResetError, socket.timeout):
                         break
+                    if session is not None:
+                        session.touch(len(chunk))
         except HTTPError as exc:
             LOG.warning("Upstream stream error status=%s", exc.code)
             if not headers_sent:
@@ -730,6 +804,8 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 self.close_connection = True
         finally:
+            if session is not None:
+                self.streams.release(session)
             if headers_sent:
                 self.close_connection = True
 
@@ -845,7 +921,7 @@ class Handler(BaseHTTPRequestHandler):
             kind, item_id, ext = vod.group(1), vod.group(2), vod.group(3).lower()
             # Films et épisodes : Range transmis (avance rapide) ; HEAD relayé pour la taille du fichier.
             return self.relay(self.api.direct_url(kind, item_id, ext), head_only=head_only,
-                              default_type=mime_for(ext))
+                              default_type=mime_for(ext), track=(kind, item_id))
         match = STREAM_RE.fullmatch(path)
         if match:
             if head_only:
@@ -855,7 +931,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_header("Cache-Control", "no-store")
                 self.end_headers()
                 return
-            return self.relay(self.api.direct_stream(match.group(1)), head_only=False)
+            return self.relay(self.api.direct_stream(match.group(1)), head_only=False,
+                              track=("live", match.group(1)))
         if path in ("/epg.xml", "/xmltv.php") and self.config.enable_epg:
             # /xmltv.php : adresse « à la Xtream » que certains lecteurs utilisent d'office pour le guide
             # (les paramètres username/password éventuels sont ignorés).
@@ -888,19 +965,28 @@ def make_epg(config: Config, api: XtreamAPI) -> EpgCache:
     return epg
 
 
+def make_streams(config: Config, api: XtreamAPI) -> StreamManager:
+    def limit_for(_provider: str) -> int:
+        return config.max_connections if config.max_connections >= 0 else api.max_connections_hint()
+    return StreamManager(limit_for, takeover=config.stream_takeover)
+
+
 def make_series(config: Config, api: XtreamAPI) -> SeriesCache:
     return SeriesCache(api.series_info, config.data_dir, max_age=config.series_cache_hours * 3600)
 
 
 def make_server(config: Config, *, host: str = "0.0.0.0", port: int | None = None,
                 api: XtreamAPI | None = None, store: PlaylistStore | None = None,
-                epg: EpgCache | None = None, series: SeriesCache | None = None) -> ThreadingHTTPServer:
+                epg: EpgCache | None = None, series: SeriesCache | None = None,
+                streams: StreamManager | None = None) -> ThreadingHTTPServer:
     api = api or XtreamAPI(config)
     store = store or PlaylistStore(config.data_dir)
     epg = epg or make_epg(config, api)
     series = series or make_series(config, api)
+    streams = streams or make_streams(config, api)
     handler = type("ConfiguredHandler", (Handler,),
-                   {"api": api, "config": config, "store": store, "epg": epg, "series": series})
+                   {"api": api, "config": config, "store": store, "epg": epg, "series": series,
+                    "streams": streams})
     server = ThreadingHTTPServer((host, config.port if port is None else port), handler)
     server.daemon_threads = True
     return server
@@ -954,8 +1040,9 @@ def main() -> None:
     store = PlaylistStore(config.data_dir)
     epg = make_epg(config, api)
     series = make_series(config, api)
-    server = make_server(config, api=api, store=store, epg=epg, series=series)
-    web = make_web_server(config, api, store, epg=epg, series=series)
+    streams = make_streams(config, api)
+    server = make_server(config, api=api, store=store, epg=epg, series=series, streams=streams)
+    web = make_web_server(config, api, store, epg=epg, series=series, streams=streams)
     worker = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.5}, daemon=True)
     worker.start()
     LOG.info("Xtream M3U Local %s : playlists sur le port %d, interface Web sur le port %d",
@@ -982,6 +1069,7 @@ def _on_sigterm(*_args: object) -> None:
 
 def _warmup(api: XtreamAPI) -> None:
     """Précharge les catalogues (direct d'abord, puis films et séries) pour une interface rapide."""
+    api.account()  # limite de connexions de l'abonnement
     for kind in KINDS:
         try:
             api.catalog(kind=kind)
