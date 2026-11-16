@@ -21,7 +21,8 @@
   </div>
   <nav class="views" aria-label="Vues">
     <button type="button" class="view-btn" id="view-btn-playlists" aria-pressed="true">Mes playlists</button>
-    <button type="button" class="view-btn" id="view-btn-catalog" aria-pressed="false">Catalogue fournisseur</button>
+    <button type="button" class="view-btn" id="view-btn-catalog" aria-pressed="false">Catalogue<span class="hide-sm"> fournisseur</span></button>
+    <button type="button" class="view-btn" id="view-btn-devices" aria-pressed="false">Appareils</button>
     <button type="button" class="view-btn" id="view-btn-system" aria-pressed="false">Système</button>
   </nav>
   <div class="top-actions">
@@ -61,9 +62,9 @@
 
     <section class="card" id="token-card" hidden>
       <h2 class="h3">Token de lecture</h2>
-      <p class="muted small">ACCESS_TOKEN est activé : saisis-le ici pour qu'il soit ajouté aux URL copiées. Il reste dans ce navigateur.</p>
+      <p class="muted small">Un code est exigé sur le port 7777 : saisis ACCESS_TOKEN ou le code d'un appareil (onglet Appareils) pour qu'il soit ajouté aux URL copiées. Il reste dans ce navigateur.</p>
       <label class="sr-only" for="token">Token de lecture</label>
-      <input id="token" type="password" autocomplete="off" placeholder="Valeur de ACCESS_TOKEN">
+      <input id="token" type="password" autocomplete="off" placeholder="ACCESS_TOKEN ou code d'appareil">
     </section>
 
     <section class="card help">
@@ -291,6 +292,35 @@
       <div id="prov-results"></div>
       <div id="provider-tree" class="tree"></div>
     </section>
+  </main>
+</div>
+
+<div class="layout single" id="view-devices" hidden>
+  <main class="main">
+    <section class="card">
+      <div class="card-head">
+        <div>
+          <h2>Appareils</h2>
+          <p class="muted small">Un code par TV ou téléphone : chaque appareil reçoit ses adresses (mode M3U) et ses identifiants (mode Xtream Codes), limités à la playlist choisie. Supprimer un appareil coupe son accès sans toucher aux autres.</p>
+        </div>
+      </div>
+      <form class="device-form" id="device-form">
+        <div class="field">
+          <label for="device-name">Nom de l'appareil</label>
+          <input id="device-name" type="text" maxlength="60" placeholder="Ex. TV du salon" autocomplete="off">
+        </div>
+        <div class="field">
+          <label for="device-playlist">Playlist</label>
+          <select id="device-playlist"></select>
+        </div>
+        <button type="submit" class="btn primary">+ Ajouter l'appareil</button>
+      </form>
+    </section>
+    <section class="card">
+      <label class="check-row"><input type="checkbox" id="require-token"> <span><strong>Exiger un code d'appareil</strong> pour les playlists, le guide et les flux (port 7777). Recommandé si d'autres personnes utilisent ton réseau.</span></label>
+      <p class="hint" id="require-token-hint"></p>
+    </section>
+    <div id="devices-list" class="devices-list"></div>
   </main>
 </div>
 

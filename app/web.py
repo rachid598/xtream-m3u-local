@@ -18,9 +18,11 @@ from .epg import EpgCache
 import threading
 import time
 
-from .custom import SLUG_RE, filter_channels, filter_kind, uses
+from .builder import select_items
+from .custom import SLUG_RE, filter_kind, uses
 from .epg import EpgUnavailable
 from .server import KINDS, Config, UpstreamError, XtreamAPI, redact
+from .devices import DeviceStore, InvalidDevice
 from .streams import StreamManager
 from .vod import SeriesCache
 
@@ -35,6 +37,7 @@ STATIC_FILES = {
 }
 SLUG_API = re.compile(r"^/api/playlists/([a-z0-9][a-z0-9_-]{0,59})$")
 SERIES_API = re.compile(r"^/api/series/([0-9]{1,12})$")
+DEVICE_API = re.compile(r"^/api/devices/([A-Za-z0-9_-]{1,16})$")
 STREAM_STOP_API = re.compile(r"^/api/streams/([0-9]{1,9})/stop$")
 CSP = (
     "default-src 'none'; style-src 'self'; script-src 'self'; connect-src 'self'; "
@@ -52,6 +55,7 @@ class WebHandler(BaseHTTPRequestHandler):
     epg: EpgCache | None = None
     series: SeriesCache | None = None
     streams: StreamManager | None = None
+    devices: DeviceStore | None = None
 
     def log_message(self, format: str, *args: object) -> None:
         LOG.info("%s %s %s", self.client_address[0], self.command, urlsplit(self.path).path)
@@ -156,6 +160,8 @@ class WebHandler(BaseHTTPRequestHandler):
             return self.json(200, catalog_payload(items, categories, self.api, kind))
         if path == "/api/streams":
             return self.json(200, self.streams_status())
+        if path == "/api/devices":
+            return self.devices_status()
         if path == "/api/epg":
             return self.epg_status(qs.get("slug", [""])[0] or None)
         series_match = SERIES_API.fullmatch(path)
@@ -165,6 +171,51 @@ class WebHandler(BaseHTTPRequestHandler):
                 return self.json(502, {"error": "Épisodes indisponibles (get_series_info)"})
             return self.json(200, {"series_id": series_match.group(1), "episodes": episodes})
         return self.json(404, {"error": "Route introuvable"})
+
+    # ------------------------------------------------------------ appareils
+    def devices_status(self) -> None:
+        if self.devices is None:
+            return self.json(200, {"require_token": False, "access_token_env": False, "devices": []})
+        try:
+            devices = self.devices.list()
+            require = self.devices.require_token
+        except RuntimeError:
+            return self.json(500, {"error": "devices.json illisible : vérifie le dossier /data"})
+        for device in devices:
+            seen = self.devices.last_seen.get(device["id"])
+            device["last_seen"] = int(seen) if seen else None
+        return self.json(200, {"require_token": require, "access_token_env": bool(self.config.access_token),
+                               "devices": devices})
+
+    def device_write(self, method: str, device_id: str | None) -> None:
+        if self.devices is None:
+            return self.json(404, {"error": "Gestion des appareils indisponible"})
+        if method == "DELETE":
+            if not self.same_origin():
+                return
+            try:
+                if self.devices.delete(device_id):
+                    return self.json(200, {"deleted": True})
+                return self.json(404, {"error": "Appareil introuvable"})
+            except RuntimeError as exc:
+                return self.json(500, {"error": str(exc)})
+        body = self.read_payload()
+        if body is None:
+            return
+        try:
+            if device_id == "settings":
+                self.devices.set_require_token(bool(body.get("require_token")))
+                return self.devices_status()
+            if method == "POST":
+                return self.json(201, self.devices.create(body.get("name"), body.get("playlist", ""),
+                                                          body.get("username")))
+            return self.json(200, self.devices.update(device_id, body))
+        except KeyError:
+            return self.json(404, {"error": "Appareil introuvable"})
+        except InvalidDevice as exc:
+            return self.json(400, {"error": str(exc)})
+        except RuntimeError as exc:
+            return self.json(500, {"error": str(exc)})
 
     def streams_status(self) -> dict:
         if self.streams is None:
@@ -223,7 +274,7 @@ class WebHandler(BaseHTTPRequestHandler):
             "playlist_port": self.config.port,
             "public_base_url": self.config.public_base_url,
             "epg_enabled": self.config.enable_epg,
-            "token_required": bool(self.config.access_token),
+            "token_required": bool(self.config.access_token) or bool(self.devices and self.devices.require_token),
             "web_auth": bool(self.config.web_password),
             "catalog_updated_at": int(self.api.updated_at) if self.api.updated_at else None,
             "catalog_error": self.api.last_error,
@@ -269,6 +320,8 @@ class WebHandler(BaseHTTPRequestHandler):
         path = urlsplit(self.path).path
         if path == "/api/epg/refresh":
             return self.refresh_epg()
+        if path == "/api/devices":
+            return self.device_write("POST", None)
         stop = STREAM_STOP_API.fullmatch(path)
         if stop:
             if not self.same_origin():
@@ -294,6 +347,9 @@ class WebHandler(BaseHTTPRequestHandler):
     def do_PUT(self) -> None:
         if not self.check_auth():
             return
+        device = DEVICE_API.fullmatch(urlsplit(self.path).path)
+        if device:
+            return self.device_write("PUT", device.group(1))
         match = SLUG_API.fullmatch(urlsplit(self.path).path)
         if not match:
             return self.json(404, {"error": "Route introuvable"})
@@ -331,8 +387,7 @@ class WebHandler(BaseHTTPRequestHandler):
 
     # ----------------------------------------------------------------- EPG
     def playlist_channels(self, saved: dict) -> list[dict]:
-        channels, _ = self.api.catalog()
-        return [c for c, _ in filter_channels(channels, saved)]
+        return [c for c, _ in select_items(self.api, saved, "live")[0]]
 
     def epg_status(self, slug: str | None) -> None:
         if self.epg is None:
@@ -411,6 +466,9 @@ class WebHandler(BaseHTTPRequestHandler):
     def do_DELETE(self) -> None:
         if not self.check_auth():
             return
+        device = DEVICE_API.fullmatch(urlsplit(self.path).path)
+        if device:
+            return self.device_write("DELETE", device.group(1))
         match = SLUG_API.fullmatch(urlsplit(self.path).path)
         if not match:
             return self.json(404, {"error": "Route introuvable"})
@@ -470,10 +528,12 @@ def catalog_payload(channels: list[dict], categories: dict[str, str], api: Xtrea
 
 def make_web_server(config: Config, api: XtreamAPI, store: PlaylistStore, *, host: str = "0.0.0.0",
                     port: int | None = None, epg: EpgCache | None = None,
-                    series: SeriesCache | None = None, streams: StreamManager | None = None) -> ThreadingHTTPServer:
+                    series: SeriesCache | None = None, streams: StreamManager | None = None,
+                    devices: DeviceStore | None = None) -> ThreadingHTTPServer:
+    devices = devices if devices is not None else DeviceStore(config.data_dir)
     handler = type("ConfiguredWebHandler", (WebHandler,),
                    {"config": config, "api": api, "store": store, "epg": epg, "series": series,
-                    "streams": streams})
+                    "streams": streams, "devices": devices})
     server = ThreadingHTTPServer((host, config.web_port if port is None else port), handler)
     server.daemon_threads = True
     return server

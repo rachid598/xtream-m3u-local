@@ -27,10 +27,13 @@ from urllib.request import Request, urlopen
 
 from . import __version__
 from .httputil import accepts_gzip, encode_body, etag_matches, etag_of, gzip_stream
+from .builder import FAVORITES_GROUP, GROUP_PREFIX, add_favorites, select_items
+from .devices import DeviceStore
 from .hls import MAX_MANIFEST_BYTES, SEGMENT_MIME, HlsRegistry, rewrite_manifest, segment_ext
 from .streams import EvictedRecently, LimitReached, StreamManager
 from .custom import CATEGORY_RE, UNCATEGORIZED, PlaylistStore, filter_channels, filter_kind, uses
 from .epg import EPG_MODES, EpgCache, EpgUnavailable, normalize_listings, xml_channel_id
+from .xtream_emu import EMPTY_AUTH, XtreamEmulator
 from .vod import KeyedCache, SeriesCache, episode_name, mime_for, normalize_movie, normalize_series
 
 LOG = logging.getLogger("xtream-m3u-local")
@@ -39,6 +42,10 @@ STREAM_RE = re.compile(r"^/stream/([0-9]{1,12})\.ts$")
 HLS_LIVE_RE = re.compile(r"^/hls/([0-9]{1,12})\.m3u8$")
 HLS_SUB_RE = re.compile(r"^/hls/v/([A-Za-z0-9_-]{16,32})\.m3u8$")
 HLS_SEG_RE = re.compile(r"^/hls/s/([A-Za-z0-9_-]{16,32})\.([A-Za-z0-9]{1,5})$")
+XC_STREAM_RE = re.compile(r"^/(live|movie|series)/([A-Za-z0-9_.-]{1,64})/([A-Za-z0-9_-]{1,64})/([0-9]{1,12})\.([A-Za-z0-9]{1,5})$")
+XC_TIMESHIFT_RE = re.compile(r"^/timeshift/([A-Za-z0-9_.-]{1,64})/([A-Za-z0-9_-]{1,64})/([0-9]{1,4})/"
+                             r"([0-9]{4}-[0-9]{2}-[0-9]{2}:[0-9]{2}-[0-9]{2})/([0-9]{1,12})\.ts$")
+START_RE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}:[0-9]{2}-[0-9]{2}$")
 TIMESHIFT_RE = re.compile(r"^/timeshift/([0-9]{1,12})\.ts$")
 VOD_RE = re.compile(r"^/(movie|series)/([0-9]{1,12})\.([A-Za-z0-9]{1,5})$")
 CUSTOM_RE = re.compile(r"^/p/([a-z0-9][a-z0-9_-]{0,59})\.(m3u|xml)$")
@@ -256,15 +263,14 @@ KINDS = {
     "vod": ("get_vod_categories", "get_vod_streams", normalize_movie, "films"),
     "series": ("get_series_categories", "get_series", normalize_series, "séries"),
 }
-# Préfixe des groupes dans les playlists : les identifiants de catégories des films et séries
 # peuvent coïncider avec ceux du direct ; le direct reste sans préfixe (compatibilité V2).
-GROUP_PREFIX = {"live": "", "vod": "vod:", "series": "series:"}
 
 
 class _KindState:
     def __init__(self) -> None:
         self.items: list[dict] | None = None
         self.by_id: dict[str, dict] = {}
+        self.raw_by_id: dict[str, dict] = {}
         self.categories: dict[str, str] = {}
         self.category_meta: dict[str, dict] = {}
         self.raw_categories: list = []
@@ -408,6 +414,8 @@ class XtreamAPI:
                 st.categories_error = categories_error
                 st.items = items
                 st.by_id = {item["stream_id"]: item for item in items}
+                id_field = "series_id" if kind == "series" else "stream_id"
+                st.raw_by_id = {str(e.get(id_field)).strip(): e for e in streams if isinstance(e, dict)}
                 st.categories = categories
                 st.expires_at = now + self.config.cache_seconds
                 st.retry_at = 0.0
@@ -435,8 +443,16 @@ class XtreamAPI:
 
     def timeshift_url(self, stream_id: str, start_epoch: int, minutes: int) -> str:
         start = datetime.fromtimestamp(start_epoch, self.provider_timezone()).strftime("%Y-%m-%d:%H-%M")
+        return self.timeshift_raw_url(stream_id, minutes, start)
+
+    def timeshift_raw_url(self, stream_id: str, minutes: int, start: str) -> str:
+        """``start`` déjà au format Xtream ``AAAA-MM-JJ:HH-MM`` (fuseau du fournisseur)."""
         return (f"{self.config.xtream_url}/timeshift/{quote(self.config.username, safe='')}/"
                 f"{quote(self.config.password, safe='')}/{minutes}/{start}/{stream_id}.ts")
+
+    def raw_action(self, action: str, **params: str) -> object:
+        """Réponse brute d'une action ``player_api.php`` (fiches détaillées, guide court)."""
+        return self._fetch(self.api_url(action, **params), f"action={action}")
 
     def lookup(self, kind: str, item_id: str) -> dict | None:
         """Élément déjà en cache (sans appel réseau) : nom d'une chaîne ou d'un film pour l'affichage."""
@@ -491,10 +507,14 @@ def order_entries(entries: list[tuple[dict, str]], categories: dict[str, str],
     big = len(custom_rank)
 
     def key(item: tuple[int, tuple[dict, str]]):
-        index, (_, gid) = item
+        index, (element, gid) = item
+        # Dans un groupe : chaînes numérotées d'abord (par numéro), puis ordre du fournisseur.
+        number = (0, int(element["num"])) if element.get("custom_num") else (1, 0)
+        if gid == FAVORITES_GROUP:
+            return (-1, 0, 0, (0, 0), index)
         if gid in custom_rank:
-            return (0, custom_rank[gid], 0, index)
-        return (1 if custom_rank else 0, big, provider_rank.get(gid, len(provider_rank)), index)
+            return (0, custom_rank[gid], 0, number, index)
+        return (1 if custom_rank else 0, big, provider_rank.get(gid, len(provider_rank)), number, index)
 
     return [entry for _, entry in sorted(enumerate(entries), key=key)]
 
@@ -527,24 +547,25 @@ def escape_title(value: object) -> str:
     return str(value or "Sans nom").replace("\r", " ").replace("\n", " ").strip() or "Sans nom"
 
 
-def with_token(url: str, config: Config) -> str:
-    if not config.access_token:
+def with_token(url: str, token: str) -> str:
+    if not token:
         return url
-    return url + ("&" if "?" in url else "?") + urlencode({"token": config.access_token})
+    return url + ("&" if "?" in url else "?") + urlencode({"token": token})
 
 
 def playlist(config: Config, entries: list[tuple[dict, str]], categories: dict[str, str], base: str,
              *, mode: str = "proxy", fmt: str = "ts", epg_path: str | None = "/epg.xml",
              group_names: dict[str, str] | None = None, api_epg_ids: bool = False,
-             live_format: str = "ts", catchup: bool = True) -> bytes:
+             live_format: str = "ts", catchup: bool = True, token: str | None = None) -> bytes:
     """Build an M3U (extended) document.
 
     ``entries`` = ``[(élément, clé_de_groupe), ...]`` où l'élément est une chaîne (``kind`` absent ou ``live``),
     un film (``movie``) ou un épisode (``episode``) ; ``epg_path`` = chemin local du guide XMLTV.
     """
+    token = config.access_token if token is None else token
     header = "#EXTM3U"
     if config.enable_epg and epg_path:
-        epg = escape_attribute(with_token(f"{base}{epg_path}", config))
+        epg = escape_attribute(with_token(f"{base}{epg_path}", token))
         header += f' url-tvg="{epg}" x-tvg-url="{epg}"'
     lines = [header]
     for channel, group_id in entries:
@@ -566,7 +587,7 @@ def playlist(config: Config, entries: list[tuple[dict, str]], categories: dict[s
             attrs.append(f'tvg-chno="{channel["num"]}"')
         if catchup and kind == "live" and channel.get("archive") and mode == "proxy":
             # Replay : le lecteur remplace {utc}/{utcend} par le début et la fin du programme (secondes UTC).
-            source = with_token(f"{base}/timeshift/{stream_id}.ts?start={{utc}}&end={{utcend}}", config)
+            source = with_token(f"{base}/timeshift/{stream_id}.ts?start={{utc}}&end={{utcend}}", token)
             attrs.append(f'catchup="default" catchup-days="{channel["archive"]}" '
                          f'catchup-source="{escape_attribute(source)}" tvg-rec="{channel["archive"]}"')
         attrs.append(f'group-title="{escape_attribute(group)}"')
@@ -578,7 +599,7 @@ def playlist(config: Config, entries: list[tuple[dict, str]], categories: dict[s
                 local = f"hls/{stream_id}.m3u8" if live_format == "hls" else f"stream/{stream_id}.ts"
             else:
                 local = f"{path}/{stream_id}.{ext}"
-            target = with_token(f"{base}/{local}", config)
+            target = with_token(f"{base}/{local}", token)
         else:
             target = (
                 f"{config.xtream_url}/{path}/"
@@ -601,7 +622,7 @@ def parse_content(raw: str | None, default: tuple[str, ...]) -> tuple[str, ...]:
     return tuple(kind for kind in KINDS if kind in wanted)
 
 
-def playlists_live_ids(store: PlaylistStore, channels: list[dict], limit: int) -> set[str]:
+def playlists_live_ids(api: XtreamAPI, store: PlaylistStore, limit: int) -> set[str]:
     """Chaînes du direct présentes dans au moins une playlist personnalisée (au plus ``limit``)."""
     try:
         playlists = store.list()
@@ -610,7 +631,11 @@ def playlists_live_ids(store: PlaylistStore, channels: list[dict], limit: int) -
     ids: list[str] = []
     seen: set[str] = set()
     for saved in playlists:
-        for channel, _ in filter_channels(channels, saved):
+        try:
+            selected = select_items(api, saved, "live")[0]
+        except UpstreamError:
+            continue
+        for channel, _ in selected:
             if channel["stream_id"] not in seen:
                 seen.add(channel["stream_id"])
                 ids.append(channel["stream_id"])
@@ -633,18 +658,15 @@ def collect_entries(api: XtreamAPI, series: "SeriesCache", saved: dict, kinds: t
         if not uses(saved, kind):
             continue
         attempted += 1
-        prefix = GROUP_PREFIX[kind]
         try:
-            items, categories = api.catalog(refresh=refresh, kind=kind)
+            selected, kind_groups = select_items(api, saved, kind, refresh=refresh)
         except UpstreamError as exc:
             LOG.warning("Catalogue %s indisponible pour la playlist %s", kind, saved.get("slug"))
             errors.append(exc)
             if kind == "series":
                 incomplete += len(saved.get("series_category_ids", [])) + len(saved.get("included_series_ids", []))
             continue
-        for cid, name in categories.items():
-            groups[prefix + cid] = name
-        selected = filter_kind(items, saved, kind, prefix)
+        groups.update(kind_groups)
         if kind != "series":
             entries.extend(selected)
             continue
@@ -655,6 +677,7 @@ def collect_entries(api: XtreamAPI, series: "SeriesCache", saved: dict, kinds: t
                 entries.append(({
                     "kind": "episode", "stream_id": ep["id"], "name": episode_name(show["name"], ep),
                     "logo": show["logo"] or ep["logo"], "ext": ep["ext"], "epg_id": "", "num": "",
+                    "series_id": show["stream_id"],
                 }, group))
     if attempted and len(errors) == attempted:
         raise errors[-1]
@@ -674,6 +697,8 @@ class Handler(BaseHTTPRequestHandler):
     series: SeriesCache
     streams: StreamManager
     hls: HlsRegistry
+    devices: "DeviceStore | None" = None
+    emulator: XtreamEmulator
     request_token: str = ""
 
     def log_message(self, format: str, *args: object) -> None:
@@ -759,11 +784,19 @@ class Handler(BaseHTTPRequestHandler):
                 self.close_connection = True
 
     def authorized(self, qs: dict[str, list[str]]) -> bool:
-        expected = self.config.access_token
-        if not expected:
-            return True
+        """``?token=`` : ``ACCESS_TOKEN`` ou code d'un appareil. Exigé si ACCESS_TOKEN est défini
+        ou si l'option « exiger un code » est active. Le code reçu est repris dans les liens générés."""
         received = qs.get("token", [""])[0]
-        return hmac.compare_digest(received.encode(), expected.encode())
+        expected = self.config.access_token
+        self.request_token = ""
+        if received and expected and hmac.compare_digest(received.encode(), expected.encode()):
+            self.request_token = received
+            return True
+        if received and self.devices is not None and self.devices.find_by_token(received):
+            self.request_token = received
+            return True
+        required = bool(expected) or (self.devices is not None and self.devices.require_token)
+        return not required
 
     def public_base(self) -> str:
         if self.config.public_base_url:
@@ -867,6 +900,141 @@ class Handler(BaseHTTPRequestHandler):
             if headers_sent:
                 self.close_connection = True
 
+    def build_custom_m3u(self, saved: dict, qs: dict[str, list[str]], *, epg_path: str, refresh: bool = False,
+                         head_only: bool = False, default_kinds: tuple[str, ...] = tuple(KINDS)) -> tuple[bytes, int]:
+        """M3U d'une playlist personnalisée (aussi utilisé par ``get.php`` d'un appareil)."""
+        kinds = parse_content(qs.get("content", [""])[0], default_kinds)
+        entries, groups, incomplete = collect_entries(
+            self.api, self.series, saved, kinds, refresh=refresh,
+            budget=0 if head_only else self.config.series_fetch_seconds)
+        entries = order_entries(add_favorites(entries, groups, saved), groups, saved.get("group_order"))
+        has_live = "live" in kinds and uses(saved, "live")
+        fmt = qs.get("format", [""])[0] or {"m3u8": "m3u8", "ts": "ts"}.get(qs.get("output", [""])[0], "")
+        if fmt not in ("", "ts", "m3u8"):
+            raise ValueError("format=ts|m3u8")
+        live_format = {"ts": "ts", "m3u8": "hls"}.get(fmt, saved.get("live_format", "ts"))
+        content = playlist(self.config, entries, groups, self.public_base(),
+                           epg_path=epg_path if has_live else None,
+                           group_names=saved.get("group_names"),
+                           api_epg_ids=self.config.enable_epg and self.config.epg_source != "xmltv",
+                           live_format=live_format, catchup=saved.get("catchup", True),
+                           token=self.request_token)
+        return content, incomplete
+
+    # ------------------------------------------------------- Xtream local
+    def device_from(self, username: str, password: str) -> dict | None:
+        if self.devices is None or not username or not password:
+            return None
+        return self.devices.authenticate(username, password)
+
+    def send_json(self, data: object, *, head_only: bool, status: int = 200) -> None:
+        body = json.dumps(data, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        self.response(status, body, "application/json; charset=utf-8", head_only=head_only)
+
+    def handle_player_api(self, qs: dict[str, list[str]], *, head_only: bool) -> None:
+        arg = lambda name: qs.get(name, [""])[0]  # noqa: E731
+        device = self.device_from(arg("username"), arg("password"))
+        if device is None:
+            return self.send_json(EMPTY_AUTH, head_only=head_only)
+        self.request_token = device["password"]
+        action = arg("action")
+        emu = self.emulator
+        kind_of = {"get_live_categories": "live", "get_vod_categories": "vod", "get_series_categories": "series",
+                   "get_live_streams": "live", "get_vod_streams": "vod", "get_series": "series"}
+        try:
+            if not action:
+                base = urlsplit(self.public_base())
+                data = emu.account(device, base.hostname or "", str(base.port or 80))
+            elif action.endswith("_categories") and action in kind_of:
+                data = emu.categories(device, kind_of[action])
+            elif action in kind_of:
+                data = emu.items(device, kind_of[action], arg("category_id") or None,
+                                 api_epg_ids=self.config.enable_epg and self.config.epg_source != "xmltv")
+            elif action == "get_series_info" and arg("series_id").isdigit():
+                data = (emu.passthrough("get_series_info", series_id=arg("series_id"))
+                        if emu.allows(device, "series", arg("series_id")) else {})
+            elif action == "get_vod_info" and arg("vod_id").isdigit():
+                data = (emu.passthrough("get_vod_info", vod_id=arg("vod_id"))
+                        if emu.allows(device, "vod", arg("vod_id")) else {})
+            elif action in ("get_short_epg", "get_simple_data_table") and arg("stream_id").isdigit():
+                params = {"stream_id": arg("stream_id")}
+                if arg("limit").isdigit():
+                    params["limit"] = arg("limit")
+                data = (emu.passthrough(action, **params)
+                        if emu.allows(device, "live", arg("stream_id")) else {"epg_listings": []})
+            else:
+                data = []
+        except UpstreamError as exc:
+            return self.send_json({"error": str(exc)}, head_only=head_only, status=502)
+        except ValueError as exc:
+            return self.send_json({"error": str(exc)}, head_only=head_only, status=400)
+        return self.send_json(data, head_only=head_only)
+
+    def handle_xc_stream(self, kind: str, username: str, password: str, item_id: str, ext: str, *,
+                         head_only: bool) -> None:
+        device = self.device_from(username, password)
+        if device is None:
+            return self._error(403, "Identifiants d'appareil invalides", head_only=head_only)
+        self.request_token = device["password"]
+        catalog_kind = {"live": "live", "movie": "vod", "series": "series"}[kind]
+        if kind != "series" and not self.emulator.allows(device, catalog_kind, item_id):
+            return self._error(404, "Contenu absent de la playlist de cet appareil", head_only=head_only)
+        ext = ext.lower()
+        if kind == "live":
+            if ext == "m3u8":
+                self.handle_hls(f"/hls/{item_id}.m3u8", head_only=head_only)
+                return None
+            if head_only:
+                return self.response(200, b"", "video/mp2t", head_only=True)
+            return self.relay(self.api.direct_stream(item_id), head_only=False, track=("live", item_id))
+        return self.relay(self.api.direct_url(kind, item_id, ext), head_only=head_only,
+                          default_type=mime_for(ext), track=(kind, item_id))
+
+    def handle_xc_timeshift(self, username: str, password: str, minutes: str, start: str, stream_id: str, *,
+                            head_only: bool) -> None:
+        device = self.device_from(username, password)
+        if device is None:
+            return self._error(403, "Identifiants d'appareil invalides", head_only=head_only)
+        if not START_RE.fullmatch(start) or not minutes.isdigit() or not 1 <= int(minutes) <= 24 * 60:
+            return self._error(400, "Période de replay invalide", head_only=head_only)
+        if not self.emulator.allows(device, "live", stream_id):
+            return self._error(404, "Chaîne absente de la playlist de cet appareil", head_only=head_only)
+        return self.relay(self.api.timeshift_raw_url(stream_id, int(minutes), start), head_only=head_only,
+                          track=("timeshift", stream_id))
+
+    def handle_device_files(self, path: str, qs: dict[str, list[str]], *, head_only: bool, refresh: bool) -> None:
+        """``get.php`` / ``xmltv.php`` avec identifiants d'appareil : playlist ou guide de l'appareil."""
+        username, password = qs.get("username", [""])[0], qs.get("password", [""])[0]
+        device = self.device_from(username, password)
+        if device is None:
+            return self._error(403, "Identifiants d'appareil invalides", head_only=head_only)
+        self.request_token = device["password"]
+        saved = self.emulator.saved_for(device)
+        try:
+            if path == "/xmltv.php":
+                if not self.config.enable_epg:
+                    return self._error(404, "EPG désactivé (ENABLE_EPG=false)", head_only=head_only)
+                if not device.get("playlist"):
+                    guide = self.full_guide(refresh=refresh, budget=0 if head_only else self.config.epg_fetch_seconds)
+                else:
+                    channels = [c for c, _ in self.emulator.entries(device, "live")[0]]
+                    guide, _ = self.epg.playlist_guide(f"dev-{device['username']}", channels,
+                                                       budget=0 if head_only else self.config.epg_fetch_seconds)
+                return self.send_file(guide, "application/xml; charset=utf-8", head_only=head_only,
+                                      filename="epg.xml")
+            epg_path = "/xmltv.php?" + urlencode({"username": username, "password": password})
+            kinds = tuple(KINDS) if device.get("playlist") else ("live", "vod")
+            content, incomplete = self.build_custom_m3u(saved, qs, epg_path=epg_path, refresh=refresh,
+                                                        head_only=head_only, default_kinds=kinds)
+        except EpgUnavailable as exc:
+            return self._error(502, str(exc), head_only=head_only)
+        except ValueError as exc:
+            return self._error(400, str(exc), head_only=head_only)
+        except UpstreamError as exc:
+            return self._error(502, f"Impossible de générer la playlist : {exc}", head_only=head_only)
+        return self.response(200, content, "audio/x-mpegurl; charset=utf-8", head_only=head_only,
+                             filename=f"{device['username']}.m3u", cacheable=not incomplete)
+
     def handle_timeshift(self, stream_id: str, qs: dict[str, list[str]], *, head_only: bool) -> None:
         """Replay : ``/timeshift/<id>.ts?start=<epoch>&end=<epoch>`` (ou ``&duration=<minutes>``)."""
         try:
@@ -966,7 +1134,7 @@ class Handler(BaseHTTPRequestHandler):
         except UpstreamError:
             return self.epg.ensure(refresh=refresh)
         path, _ = self.epg.playlist_guide("_all", channels, budget=budget, refresh=refresh,
-                                          api_ids=playlists_live_ids(self.store, channels,
+                                          api_ids=playlists_live_ids(self.api, self.store,
                                                                      self.config.epg_api_max_channels))
         return path
 
@@ -984,9 +1152,23 @@ class Handler(BaseHTTPRequestHandler):
                 "Playlists personnalisees : /p/<nom>.m3u (gestion sur le port de l'interface Web)\n"
             )
             return self.response(HTTPStatus.OK, text.encode(), "text/plain; charset=utf-8", head_only=head_only)
+        # Serveur Xtream local : authentification par identifiants d'appareil (pas de ?token=).
+        if path == "/player_api.php":
+            return self.handle_player_api(qs, head_only=head_only)
+        xc = XC_STREAM_RE.fullmatch(path)
+        if xc:
+            return self.handle_xc_stream(*xc.groups(), head_only=head_only)
+        xts = XC_TIMESHIFT_RE.fullmatch(path)
+        if xts:
+            return self.handle_xc_timeshift(*xts.groups(), head_only=head_only)
+        if path == "/streaming/timeshift.php":
+            arg = lambda name: qs.get(name, [""])[0]  # noqa: E731
+            return self.handle_xc_timeshift(arg("username"), arg("password"), arg("duration"), arg("start"),
+                                            arg("stream"), head_only=head_only)
+        if path in ("/get.php", "/xmltv.php") and qs.get("username") and self.devices is not None and self.devices.list():
+            return self.handle_device_files(path, qs, head_only=head_only, refresh=refresh)
         if not self.authorized(qs):
             return self._error(HTTPStatus.FORBIDDEN, "Token requis ou invalide (?token=...)", head_only=head_only)
-        self.request_token = qs.get("token", [""])[0] if self.config.access_token else ""
         if path.startswith("/hls/") and self.handle_hls(path, head_only=head_only):
             return
         if path in ("/playlist.m3u", "/get.php"):
@@ -1011,7 +1193,7 @@ class Handler(BaseHTTPRequestHandler):
                 content = playlist(self.config, entries, groups, base, mode=mode, fmt=fmt,
                                    epg_path="/epg.xml" if "live" in kinds else None,
                                    api_epg_ids=self.config.enable_epg and self.config.epg_source != "xmltv",
-                                   live_format="hls" if fmt == "m3u8" else "ts")
+                                   live_format="hls" if fmt == "m3u8" else "ts", token=self.request_token)
             except ValueError as exc:
                 return self._error(400, str(exc), head_only=head_only)
             except UpstreamError as exc:
@@ -1033,27 +1215,13 @@ class Handler(BaseHTTPRequestHandler):
             incomplete = 0
             try:
                 if ext == "xml":
-                    channels, _ = self.api.catalog(refresh=refresh)
-                    selected = [c for c, _ in filter_channels(channels, saved)]
+                    selected = [c for c, _ in select_items(self.api, saved, "live", refresh=refresh)[0]]
                     path_out, _ = self.epg.playlist_guide(
                         slug, selected, budget=0 if head_only else self.config.epg_fetch_seconds)
                     return self.send_file(path_out, "application/xml; charset=utf-8",
                                           head_only=head_only, filename=f"{slug}.xml")
-                kinds = parse_content(qs.get("content", [""])[0], tuple(KINDS))
-                entries, groups, incomplete = collect_entries(
-                    self.api, self.series, saved, kinds, refresh=refresh,
-                    budget=0 if head_only else self.config.series_fetch_seconds)
-                entries = order_entries(entries, groups, saved.get("group_order"))
-                has_live = "live" in kinds and uses(saved, "live")
-                fmt = qs.get("format", [""])[0]
-                if fmt not in ("", "ts", "m3u8"):
-                    raise ValueError("format=ts|m3u8")
-                live_format = {"ts": "ts", "m3u8": "hls"}.get(fmt, saved.get("live_format", "ts"))
-                content = playlist(self.config, entries, groups, self.public_base(),
-                                   epg_path=f"/p/{slug}.xml" if has_live else None,
-                                   group_names=saved.get("group_names"),
-                                   api_epg_ids=self.config.enable_epg and self.config.epg_source != "xmltv",
-                                   live_format=live_format, catchup=saved.get("catchup", True))
+                content, incomplete = self.build_custom_m3u(saved, qs, epg_path=f"/p/{slug}.xml",
+                                                            refresh=refresh, head_only=head_only)
             except EpgUnavailable as exc:
                 return self._error(502, str(exc), head_only=head_only)
             except ValueError as exc:
@@ -1131,15 +1299,18 @@ def make_series(config: Config, api: XtreamAPI) -> SeriesCache:
 def make_server(config: Config, *, host: str = "0.0.0.0", port: int | None = None,
                 api: XtreamAPI | None = None, store: PlaylistStore | None = None,
                 epg: EpgCache | None = None, series: SeriesCache | None = None,
-                streams: StreamManager | None = None, hls: HlsRegistry | None = None) -> ThreadingHTTPServer:
+                streams: StreamManager | None = None, hls: HlsRegistry | None = None,
+                devices: DeviceStore | None = None) -> ThreadingHTTPServer:
     api = api or XtreamAPI(config)
     store = store or PlaylistStore(config.data_dir)
     epg = epg or make_epg(config, api)
     series = series or make_series(config, api)
     streams = streams or make_streams(config, api)
+    devices = devices if devices is not None else DeviceStore(config.data_dir)
+    emulator = XtreamEmulator(api, store, config, streams, redact=lambda value: redact(value, config))
     handler = type("ConfiguredHandler", (Handler,),
                    {"api": api, "config": config, "store": store, "epg": epg, "series": series,
-                    "streams": streams, "hls": hls or HlsRegistry()})
+                    "streams": streams, "hls": hls or HlsRegistry(), "devices": devices, "emulator": emulator})
     server = ThreadingHTTPServer((host, config.port if port is None else port), handler)
     server.daemon_threads = True
     return server
@@ -1194,8 +1365,9 @@ def main() -> None:
     epg = make_epg(config, api)
     series = make_series(config, api)
     streams = make_streams(config, api)
-    server = make_server(config, api=api, store=store, epg=epg, series=series, streams=streams)
-    web = make_web_server(config, api, store, epg=epg, series=series, streams=streams)
+    devices = DeviceStore(config.data_dir)
+    server = make_server(config, api=api, store=store, epg=epg, series=series, streams=streams, devices=devices)
+    web = make_web_server(config, api, store, epg=epg, series=series, streams=streams, devices=devices)
     worker = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.5}, daemon=True)
     worker.start()
     LOG.info("Xtream M3U Local %s : playlists sur le port %d, interface Web sur le port %d",

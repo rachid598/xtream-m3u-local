@@ -10,6 +10,7 @@ from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 from app.custom import PlaylistStore
+from app.devices import DeviceStore
 from app.server import Config, XtreamAPI, make_epg, make_series, make_server, make_streams
 from app.web import make_web_server
 
@@ -28,10 +29,11 @@ class Stack:
         self.epg = make_epg(self.config, self.api)
         self.series = make_series(self.config, self.api)
         self.streams = make_streams(self.config, self.api)
+        self.devices = DeviceStore(data_dir)
         self.proxy = make_server(self.config, host="127.0.0.1", port=0, api=self.api, store=self.store,
-                                 epg=self.epg, series=self.series, streams=self.streams)
+                                 epg=self.epg, series=self.series, streams=self.streams, devices=self.devices)
         self.web = make_web_server(self.config, self.api, self.store, host="127.0.0.1", port=0,
-                                   epg=self.epg, series=self.series, streams=self.streams)
+                                   epg=self.epg, series=self.series, streams=self.streams, devices=self.devices)
         for srv in (self.proxy, self.web):
             threading.Thread(target=srv.serve_forever, daemon=True).start()
         self.proxy_base = f"http://127.0.0.1:{self.proxy.server_address[1]}"

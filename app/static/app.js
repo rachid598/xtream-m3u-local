@@ -899,7 +899,7 @@
   }
 
   // ------------------------------------------------ catalogue fournisseur
-  const VIEWS = { playlists: '#', catalog: '#catalogue', system: '#systeme' };
+  const VIEWS = { playlists: '#', catalog: '#catalogue', devices: '#appareils', system: '#systeme' };
 
   function switchView(view) {
     if (!VIEWS[view]) view = 'playlists';
@@ -913,7 +913,84 @@
     document.body.classList.toggle('no-actionbar', view !== 'playlists');
     if (view === 'catalog') renderProvider();
     if (view === 'system') loadSystem();
+    if (view === 'devices') loadDevices();
     try { history.replaceState(null, '', VIEWS[view]); } catch (_) { /* ignore */ }
+  }
+
+  // ------------------------------------------------------------ appareils
+  let devicesData = null;
+
+  function credRow(label, value, { secret = false } = {}) {
+    const code = h('code', { class: secret ? 'secret' : null, text: value });
+    return h('div', { class: 'cred' }, h('span', { class: 'k', text: label }), code,
+      h('button', { type: 'button', class: 'btn small', text: 'Copier', onclick: () => copyText(value) }));
+  }
+
+  function renderDevicePlaylistSelect(select, value) {
+    select.replaceChildren(h('option', { value: '', text: 'Tout le catalogue (sans séries en M3U)' }));
+    for (const p of [...state.playlists].sort((a, b) => collator.compare(a.name, b.name))) {
+      select.append(h('option', { value: p.slug, text: `${p.name} (/p/${p.slug}.m3u)` }));
+    }
+    if (value && !state.playlists.some((p) => p.slug === value)) {
+      select.append(h('option', { value, text: `${value} (playlist supprimée !)` }));
+    }
+    select.value = value || '';
+  }
+
+  function deviceCard(d) {
+    const base = baseUrl();
+    const server = base.replace(/\/$/, '');
+    const qs = new URLSearchParams({ username: d.username, password: d.password });
+    const m3u = d.playlist ? `${server}/p/${d.playlist}.m3u?token=${encodeURIComponent(d.password)}`
+      : `${server}/get.php?${qs}&type=m3u_plus&output=ts`;
+    const epg = d.playlist ? `${server}/p/${d.playlist}.xml?token=${encodeURIComponent(d.password)}` : `${server}/xmltv.php?${qs}`;
+    const select = h('select', { 'aria-label': `Playlist de ${d.name}` });
+    renderDevicePlaylistSelect(select, d.playlist);
+    select.addEventListener('change', async () => {
+      try { await request(`/api/devices/${d.id}`, 'PUT', { playlist: select.value }); toast('Playlist de l\'appareil modifiée'); loadDevices(); }
+      catch (error) { toast(error.message, 'error'); }
+    });
+    const seen = d.last_seen ? `vu le ${new Date(d.last_seen * 1000).toLocaleString('fr-FR', { dateStyle: 'short', timeStyle: 'short' })}` : 'jamais utilisé depuis le démarrage';
+    return h('section', { class: 'card device-card' },
+      h('div', { class: 'card-head' },
+        h('div', null, h('h3', { text: d.name }), h('p', { class: 'muted small', text: `Identifiant ${d.username} · ${seen}` })),
+        h('div', { class: 'btn-row' },
+          h('button', { type: 'button', class: 'btn small', text: 'Renommer', onclick: async () => {
+            const name = await ask({ title: 'Renommer l\'appareil', okLabel: 'Renommer', input: { label: 'Nom', value: d.name } });
+            if (!name) return;
+            try { await request(`/api/devices/${d.id}`, 'PUT', { name }); loadDevices(); } catch (error) { toast(error.message, 'error'); }
+          } }),
+          h('button', { type: 'button', class: 'btn small', text: 'Nouveau code', onclick: async () => {
+            if (!(await ask({ title: 'Générer un nouveau code ?', text: `L'ancien code de « ${d.name} » ne fonctionnera plus : il faudra mettre à jour l'appareil.`, okLabel: 'Générer', danger: true }))) return;
+            try { await request(`/api/devices/${d.id}`, 'PUT', { regenerate: true }); toast('Nouveau code généré'); loadDevices(); } catch (error) { toast(error.message, 'error'); }
+          } }),
+          h('button', { type: 'button', class: 'btn small danger', text: 'Supprimer', onclick: async () => {
+            if (!(await ask({ title: 'Supprimer l\'appareil ?', text: `« ${d.name} » perdra immédiatement l'accès.`, okLabel: 'Supprimer', danger: true }))) return;
+            try { await request(`/api/devices/${d.id}`, 'DELETE'); toast('Appareil supprimé'); loadDevices(); } catch (error) { toast(error.message, 'error'); }
+          } }))),
+      h('div', { class: 'field' }, h('label', { text: 'Playlist de cet appareil' }), select),
+      h('div', { class: 'device-grid' },
+        h('div', { class: 'device-mode' },
+          h('h4', { text: '📺 Mode « Playlist M3U » (VLC, TiviMate, Android TV…)' }),
+          credRow('Playlist', m3u), credRow('Guide (EPG)', epg)),
+        h('div', { class: 'device-mode' },
+          h('h4', { text: '🔐 Mode « Xtream Codes » (TiviMate, IPTV Smarters…)' }),
+          credRow('Serveur', server), credRow('Identifiant', d.username), credRow('Mot de passe', d.password, { secret: true }),
+          h('p', { class: 'hint', text: 'Rubriques Direct / Films / Séries natives du lecteur, guide et replay inclus.' }))));
+  }
+
+  async function loadDevices() {
+    try { devicesData = await request('/api/devices'); } catch (error) { showError(error.message); return; }
+    renderDevicePlaylistSelect($('device-playlist'), $('device-playlist').value);
+    $('require-token').checked = devicesData.require_token;
+    $('require-token-hint').textContent = devicesData.access_token_env
+      ? 'ACCESS_TOKEN est défini dans la configuration : un code est toujours exigé (ACCESS_TOKEN ou code d\'appareil).'
+      : devicesData.require_token
+        ? 'Les URL sans code (ou avec un code supprimé) sont refusées. Les liens générés reprennent le code de l\'appareil.'
+        : 'Option désactivée : les playlists restent accessibles sans code sur ton réseau local. Les identifiants Xtream restent toujours nécessaires.';
+    const list = $('devices-list');
+    list.replaceChildren(...devicesData.devices.map(deviceCard));
+    if (!devicesData.devices.length) list.append(h('p', { class: 'empty', text: 'Aucun appareil pour le moment. Ajoute ta première TV ci-dessus.' }));
   }
 
   // ------------------------------------------------------------- système
@@ -1200,6 +1277,34 @@
   $('view-btn-playlists').addEventListener('click', () => switchView('playlists'));
   $('view-btn-catalog').addEventListener('click', () => switchView('catalog'));
   $('view-btn-system').addEventListener('click', () => switchView('system'));
+  $('view-btn-devices').addEventListener('click', () => switchView('devices'));
+  $('device-form').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const name = $('device-name').value.trim();
+    if (!name) { $('device-name').focus(); return; }
+    try {
+      const device = await request('/api/devices', 'POST', { name, playlist: $('device-playlist').value });
+      $('device-name').value = '';
+      toast(`Appareil « ${device.name} » ajouté`);
+      loadDevices();
+    } catch (error) { toast(error.message, 'error'); }
+  });
+  $('require-token').addEventListener('change', async () => {
+    const value = $('require-token').checked;
+    if (value && devicesData && !devicesData.devices.length && !devicesData.access_token_env
+        && !(await ask({ title: 'Aucun appareil', text: 'Sans appareil (ni ACCESS_TOKEN), plus aucun lecteur ne pourra lire tes playlists. Continuer ?', okLabel: 'Activer', danger: true }))) {
+      $('require-token').checked = false;
+      return;
+    }
+    try {
+      await request('/api/devices/settings', 'PUT', { require_token: value });
+      const status = await request('/api/status');
+      state.status = status;
+      $('token-card').hidden = !(status.token_required && !status.access_token);
+      toast(value ? 'Code d\'appareil exigé' : 'Code d\'appareil facultatif');
+      loadDevices();
+    } catch (error) { toast(error.message, 'error'); $('require-token').checked = !value; }
+  });
   $('streams-pill').addEventListener('click', () => switchView('system'));
   $('streams-refresh').addEventListener('click', loadStreams);
   document.addEventListener('visibilitychange', () => { if (!document.hidden) loadStreams(); });

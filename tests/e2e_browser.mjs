@@ -214,6 +214,29 @@ try {
   assert((await fetchText(url)).status === 200, 'salon toujours servie');
   assert((await fetchText(url.replace('salon', 'chambre'))).status === 404, 'chambre supprimée');
 
+  // Appareils : création, identifiants Xtream fonctionnels, suppression
+  await page.click('#view-btn-devices');
+  await page.fill('#device-name', 'TV du salon');
+  await page.selectOption('#device-playlist', 'salon');
+  await page.click('#device-form button[type=submit]');
+  await page.waitForSelector('.device-card');
+  const creds = await page.locator('.device-card .device-mode').nth(1).locator('code').allInnerTexts();
+  const [server, user, pass] = creds;
+  assert(user === 'tv-du-salon' && /^[a-z2-9]{10}$/.test(pass), `identifiants ${creds}`);
+  const account = JSON.parse((await fetchText(`${server}/player_api.php?username=${user}&password=${pass}`)).text);
+  assert(account.user_info.auth === 1, 'connexion Xtream locale');
+  const liveStreams = JSON.parse((await fetchText(`${server}/player_api.php?username=${user}&password=${pass}&action=get_live_streams`)).text);
+  assert(liveStreams.length > 0 && liveStreams.every((c) => typeof c.stream_id === 'number'), 'chaînes en mode Xtream');
+  const deviceM3u = await page.locator('.device-card .device-mode').first().locator('code').first().innerText();
+  assert(deviceM3u.endsWith(`/p/salon.m3u?token=${pass}`), `URL M3U appareil ${deviceM3u}`);
+  if (shots) await page.screenshot({ path: join(shots, 'desktop-devices.png') });
+  await page.locator('.device-card button', { hasText: 'Supprimer' }).click();
+  await page.click('#dialog-ok');
+  await waitFor(async () => (await page.locator('.device-card').count()) === 0, 'appareil supprimé');
+  const revoked = JSON.parse((await fetchText(`${server}/player_api.php?username=${user}&password=${pass}`)).text);
+  assert(revoked.user_info.auth === 0, 'accès révoqué');
+  await page.click('#view-btn-playlists');
+
   // Mise en page responsive
   for (const [width, height, name] of [[390, 844, 'mobile'], [768, 1024, 'tablette'], [1920, 1080, 'large']]) {
     const p2 = await browser.newPage({ viewport: { width, height }, deviceScaleFactor: 2 });

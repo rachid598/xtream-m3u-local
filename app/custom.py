@@ -73,6 +73,70 @@ def _group_names(value: object) -> dict[str, str]:
     return result
 
 
+ITEM_KEY_RE = re.compile(r"^(?:vod:|series:)?[0-9]{1,12}$")
+RULE_MATCHES = ("prefix", "contains", "exact")
+MAX_RULES = 50
+MAX_ITEMS_CUSTOM = 20_000
+
+
+def _text(value: object, label: str, max_len: int = 100) -> str:
+    if not isinstance(value, str) or any(ch in value for ch in "\r\n\t\x00"):
+        raise InvalidPlaylist(f"{label} invalide")
+    value = value.strip()
+    if len(value) > max_len:
+        raise InvalidPlaylist(f"{label} trop long ({max_len} caractères maximum)")
+    return value
+
+
+def _item_names(value: object) -> dict[str, str]:
+    """Noms personnalisés ``{clé: nom}`` (clé = id du direct, ``vod:id`` ou ``series:id``)."""
+    if value is None:
+        return {}
+    if not isinstance(value, dict) or len(value) > MAX_ITEMS_CUSTOM:
+        raise InvalidPlaylist("Noms personnalisés : objet attendu")
+    result = {}
+    for key, name in value.items():
+        if not isinstance(key, str) or not ITEM_KEY_RE.fullmatch(key):
+            raise InvalidPlaylist("Identifiant d'élément invalide")
+        name = _text(name, "Nom personnalisé")
+        if name:
+            result[key] = name
+    return result
+
+
+def _item_numbers(value: object) -> dict[str, int]:
+    """Numéros de chaînes ``{id_du_direct: numéro}`` (1 à 99 999) ; servent aussi à l'ordre."""
+    if value is None:
+        return {}
+    if not isinstance(value, dict) or len(value) > MAX_ITEMS_CUSTOM:
+        raise InvalidPlaylist("Numéros de chaînes : objet attendu")
+    result = {}
+    for key, number in value.items():
+        if not isinstance(key, str) or not key.isdigit() or len(key) > 12:
+            raise InvalidPlaylist("Identifiant de chaîne invalide (numéros)")
+        if isinstance(number, bool) or not isinstance(number, int) or not 1 <= number <= 99_999:
+            raise InvalidPlaylist("Numéro de chaîne : entier de 1 à 99 999")
+        result[key] = number
+    return result
+
+
+def _rules(value: object) -> list[dict]:
+    """Règles automatiques : catégories dont le nom correspond, ajoutées à la sélection."""
+    if value is None:
+        return []
+    if not isinstance(value, list) or len(value) > MAX_RULES:
+        raise InvalidPlaylist(f"Règles : liste attendue ({MAX_RULES} maximum)")
+    result = []
+    for rule in value:
+        if not isinstance(rule, dict) or rule.get("kind") not in SELECTION_FIELDS or rule.get("match") not in RULE_MATCHES:
+            raise InvalidPlaylist("Règle invalide (type de contenu ou condition)")
+        text = _text(rule.get("value"), "Texte de la règle")
+        if not text:
+            raise InvalidPlaylist("Texte de la règle obligatoire")
+        result.append({"kind": rule["kind"], "match": rule["match"], "value": text})
+    return result
+
+
 def validate_playlist(payload: object, *, slug: str | None = None) -> dict:
     if not isinstance(payload, dict):
         raise InvalidPlaylist("Objet JSON attendu")
@@ -101,6 +165,15 @@ def validate_playlist(payload: object, *, slug: str | None = None) -> dict:
         raise InvalidPlaylist("Format des chaînes : ts ou hls")
     result["live_format"] = live_format
     result["catchup"] = bool(payload.get("catchup", True))
+    result["dedupe"] = bool(payload.get("dedupe", False))
+    result["rules"] = _rules(payload.get("rules"))
+    result["item_names"] = _item_names(payload.get("item_names"))
+    result["item_numbers"] = _item_numbers(payload.get("item_numbers"))
+    favorites = _ids(payload.get("favorites"), pattern=ITEM_KEY_RE, label="favori")
+    if len(favorites) > MAX_ITEMS_CUSTOM:
+        raise InvalidPlaylist("Trop de favoris")
+    result["favorites"] = favorites
+    result["favorites_name"] = _text(payload.get("favorites_name", "★ Favoris"), "Nom du groupe des favoris") or "★ Favoris"
     updated = payload.get("updated_at")
     if isinstance(updated, (int, float)) and not isinstance(updated, bool):
         result["updated_at"] = int(updated)
@@ -110,7 +183,8 @@ def validate_playlist(payload: object, *, slug: str | None = None) -> dict:
 def uses(saved: dict, kind: str) -> bool:
     """La playlist contient-elle des éléments de ce type (catégories cochées ou ajouts) ?"""
     cats, included, _ = SELECTION_FIELDS[kind]
-    return bool(saved.get(cats) or saved.get(included))
+    return bool(saved.get(cats) or saved.get(included)
+                or any(rule.get("kind") == kind for rule in saved.get("rules") or []))
 
 
 def filter_kind(items: list[dict], saved: dict, kind: str, prefix: str = "") -> list[tuple[dict, str]]:

@@ -398,8 +398,8 @@ dialog .field { margin-bottom: 16px; }
 }
 @media (max-width: 640px) {
   .topbar { padding: 10px 16px; position: static; }
-  .views { order: 3; width: 100%; }
-  .view-btn { flex: 1; padding: 8px 6px; }
+  .views { order: 3; width: 100%; max-width: 100%; overflow-x: auto; scrollbar-width: none; }
+  .view-btn { flex: 1 0 auto; padding: 8px 8px; font-size: 12.5px; }
   .tree-body { padding-left: 12px; }
   .tree-node > summary { flex-wrap: wrap; }
   .tree-node .t-meta { width: 100%; justify-content: flex-start; padding-left: 20px; }
@@ -453,3 +453,23 @@ dialog .field { margin-bottom: 16px; }
 .option-row select, .option-row input[type=text] { max-width: 520px; }
 .check-row { display: flex; align-items: flex-start; gap: 10px; font-weight: 500; color: var(--text); margin: 0; cursor: pointer; }
 .check-row input { width: 18px; height: 18px; accent-color: var(--accent); margin-top: 2px; flex: none; }
+
+/* ------------------------------------------------------------ devices */
+.device-form { display: grid; grid-template-columns: 1fr 1fr auto; gap: 12px; align-items: end; }
+.device-form select { width: 100%; }
+.devices-list { display: flex; flex-direction: column; gap: 16px; }
+.device-card .card-head { margin-bottom: 8px; }
+.device-card h3 { font-size: 16px; }
+.device-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 10px; }
+.device-mode { border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 12px; background: var(--bg-soft); display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.device-mode h4 { margin: 0; font-size: 13.5px; }
+.cred { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.cred .k { font-size: 12px; color: var(--text-faint); min-width: 92px; flex: none; }
+.cred code { flex: 1; min-width: 0; overflow-wrap: anywhere; font-size: 12.5px; background: var(--bg-elev); border: 1px solid var(--border); border-radius: 8px; padding: 6px 8px; }
+.cred .btn { flex: none; }
+.secret { letter-spacing: .05em; }
+@media (max-width: 760px) {
+  .device-form, .device-grid { grid-template-columns: 1fr; }
+  .cred { flex-wrap: wrap; }
+  .cred .k { min-width: 100%; }
+}

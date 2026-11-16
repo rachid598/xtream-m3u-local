@@ -164,6 +164,14 @@ class FakeXtream(BaseHTTPRequestHandler):
                 data = SERIES_CATEGORIES
             elif action == "get_series":
                 data = SERIES
+            elif action == "get_vod_info":
+                vid = args.get("vod_id", [""])[0]
+                data = {"info": {"name": f"Film {vid}", "plot": "Résumé", "rating": "7.4"},
+                        "movie_data": {"stream_id": int(vid) if vid.isdigit() else 0, "container_extension": "mkv",
+                                       "direct_source": f"http://cdn.invalid/movie/{USERNAME}/{PASSWORD}/{vid}.mkv"}}
+            elif action == "get_short_epg":
+                sid = args.get("stream_id", [""])[0]
+                data = SIMPLE_EPG.get(sid, {"epg_listings": []})
             elif action == "get_simple_data_table":
                 sid = args.get("stream_id", [""])[0]
                 type(self).simple_epg_calls.append(sid)

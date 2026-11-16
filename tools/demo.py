@@ -16,7 +16,8 @@ import threading
 import time
 
 from app.custom import PlaylistStore
-from app.server import Config, XtreamAPI, make_epg, make_series, make_server
+from app.devices import DeviceStore
+from app.server import Config, XtreamAPI, make_epg, make_series, make_server, make_streams
 from app.web import make_web_server
 from tests import fake_xtream
 
@@ -124,8 +125,12 @@ def main() -> None:
     store = PlaylistStore(args.data)
     epg = make_epg(config, api)
     series = make_series(config, api)
-    proxy = make_server(config, host=args.host, api=api, store=store, epg=epg, series=series)
-    web = make_web_server(config, api, store, host=args.host, epg=epg, series=series)
+    streams = make_streams(config, api)
+    devices = DeviceStore(args.data)
+    proxy = make_server(config, host=args.host, api=api, store=store, epg=epg, series=series,
+                        streams=streams, devices=devices)
+    web = make_web_server(config, api, store, host=args.host, epg=epg, series=series,
+                          streams=streams, devices=devices)
     threading.Thread(target=proxy.serve_forever, daemon=True).start()
     print(f"Démo : interface http://{args.host}:{args.web_port}/  —  lecteurs http://{args.host}:{args.port}/")
     try:
