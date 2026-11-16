@@ -202,6 +202,7 @@
       data[incField] = list(sel.included);
       data[excField] = sorted ? excluded.sort() : excluded;
     }
+    data.live_format = $('opt-live-format').value;
     data.group_order = [...state.groupOrder];
     data.group_names = cleanGroupNames();
     return data;
@@ -435,6 +436,11 @@
     } finally {
       setTimeout(() => { $('epg-refresh').disabled = false; }, 3000);
     }
+  }
+
+  function renderOptionsPill() {
+    const parts = [$('opt-live-format').value === 'hls' ? 'HLS' : 'MPEG-TS'];
+    $('options-pill-text').textContent = parts.join(' · ');
   }
 
   async function loadSummary(force = false) {
@@ -792,6 +798,8 @@
         excluded: new Set(p ? p[excField] || [] : []),
       };
     }
+    $('opt-live-format').value = (p && p.live_format) || 'ts';
+    renderOptionsPill();
     state.groupOrder = p && p.group_order ? [...p.group_order] : [];
     state.groupNames = p && p.group_names ? { ...p.group_names } : {};
     state.slugTouched = Boolean(p);
@@ -1181,6 +1189,7 @@
     $('name').focus();
   });
   $('save').addEventListener('click', save);
+  $('opt-live-format').addEventListener('change', () => { renderOptionsPill(); renderStats(); });
   $('epg-refresh').addEventListener('click', refreshEpg);
   document.querySelectorAll('[data-kind]').forEach((btn) => btn.addEventListener('click', () => switchKind(btn.dataset.kind)));
   $('view-btn-playlists').addEventListener('click', () => switchView('playlists'));

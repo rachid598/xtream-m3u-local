@@ -25,6 +25,7 @@ from urllib.request import Request, urlopen
 
 from . import __version__
 from .httputil import accepts_gzip, encode_body, etag_matches, etag_of, gzip_stream
+from .hls import MAX_MANIFEST_BYTES, SEGMENT_MIME, HlsRegistry, rewrite_manifest, segment_ext
 from .streams import EvictedRecently, LimitReached, StreamManager
 from .custom import CATEGORY_RE, UNCATEGORIZED, PlaylistStore, filter_channels, filter_kind, uses
 from .epg import EPG_MODES, EpgCache, EpgUnavailable, normalize_listings, xml_channel_id
@@ -33,6 +34,9 @@ from .vod import KeyedCache, SeriesCache, episode_name, mime_for, normalize_movi
 LOG = logging.getLogger("xtream-m3u-local")
 DEFAULT_USER_AGENT = f"XtreamM3ULocal/{__version__}"
 STREAM_RE = re.compile(r"^/stream/([0-9]{1,12})\.ts$")
+HLS_LIVE_RE = re.compile(r"^/hls/([0-9]{1,12})\.m3u8$")
+HLS_SUB_RE = re.compile(r"^/hls/v/([A-Za-z0-9_-]{16,32})\.m3u8$")
+HLS_SEG_RE = re.compile(r"^/hls/s/([A-Za-z0-9_-]{16,32})\.([A-Za-z0-9]{1,5})$")
 VOD_RE = re.compile(r"^/(movie|series)/([0-9]{1,12})\.([A-Za-z0-9]{1,5})$")
 CUSTOM_RE = re.compile(r"^/p/([a-z0-9][a-z0-9_-]{0,59})\.(m3u|xml)$")
 HOST_RE = re.compile(r"^[a-zA-Z0-9.\-:\[\]]+$")
@@ -490,7 +494,8 @@ def with_token(url: str, config: Config) -> str:
 
 def playlist(config: Config, entries: list[tuple[dict, str]], categories: dict[str, str], base: str,
              *, mode: str = "proxy", fmt: str = "ts", epg_path: str | None = "/epg.xml",
-             group_names: dict[str, str] | None = None, api_epg_ids: bool = False) -> bytes:
+             group_names: dict[str, str] | None = None, api_epg_ids: bool = False,
+             live_format: str = "ts") -> bytes:
     """Build an M3U (extended) document.
 
     ``entries`` = ``[(élément, clé_de_groupe), ...]`` où l'élément est une chaîne (``kind`` absent ou ``live``),
@@ -523,8 +528,11 @@ def playlist(config: Config, entries: list[tuple[dict, str]], categories: dict[s
         path, ext = {"movie": ("movie", channel.get("ext", "mp4")),
                      "episode": ("series", channel.get("ext", "mp4"))}.get(kind, ("live", fmt))
         if mode == "proxy":
-            local = "stream" if path == "live" else path
-            target = with_token(f"{base}/{local}/{stream_id}.{'ts' if path == 'live' else ext}", config)
+            if path == "live":
+                local = f"hls/{stream_id}.m3u8" if live_format == "hls" else f"stream/{stream_id}.ts"
+            else:
+                local = f"{path}/{stream_id}.{ext}"
+            target = with_token(f"{base}/{local}", config)
         else:
             target = (
                 f"{config.xtream_url}/{path}/"
@@ -619,6 +627,8 @@ class Handler(BaseHTTPRequestHandler):
     epg: EpgCache
     series: SeriesCache
     streams: StreamManager
+    hls: HlsRegistry
+    request_token: str = ""
 
     def log_message(self, format: str, *args: object) -> None:
         # Ne jamais journaliser la query string (ACCESS_TOKEN).
@@ -739,7 +749,7 @@ class Handler(BaseHTTPRequestHandler):
         return {"series": "Épisode", "movie": "Film"}.get(kind, "Chaîne") + f" {item_id}"
 
     def relay(self, upstream_url: str, *, head_only: bool, default_type: str = "video/mp2t",
-              track: tuple[str, str] | None = None) -> None:
+              track: tuple[str, str] | None = None, touch=None) -> None:
         """Relaie un flux fournisseur. ``track=(type, id)`` : lecture comptée dans la limite de connexions."""
         session = None
         if track and not head_only:
@@ -787,6 +797,8 @@ class Handler(BaseHTTPRequestHandler):
                         break
                     if session is not None:
                         session.touch(len(chunk))
+                    elif touch is not None:
+                        touch.touch(len(chunk))
         except HTTPError as exc:
             LOG.warning("Upstream stream error status=%s", exc.code)
             if not headers_sent:
@@ -808,6 +820,75 @@ class Handler(BaseHTTPRequestHandler):
                 self.streams.release(session)
             if headers_sent:
                 self.close_connection = True
+
+    def token_suffix(self) -> str:
+        return f"?{urlencode({'token': self.request_token})}" if self.request_token else ""
+
+    def hls_manifest(self, upstream_url: str, session, *, head_only: bool) -> None:
+        """Télécharge un manifeste HLS chez le fournisseur et le réécrit vers des adresses locales."""
+        request = Request(upstream_url, headers={"User-Agent": self.config.user_agent, "Accept": "*/*"})
+        try:
+            with urlopen(request, timeout=20) as upstream:
+                raw = upstream.read(MAX_MANIFEST_BYTES + 1)
+                final_url = upstream.geturl()
+        except HTTPError as exc:
+            LOG.warning("Upstream HLS error status=%s", exc.code)
+            hint = " (limite de connexions simultanées atteinte ?)" if exc.code in (403, 429, 458, 503, 509) else ""
+            return self._error(502, f"Le fournisseur a renvoyé HTTP {exc.code}{hint}", head_only=head_only)
+        except (URLError, TimeoutError, OSError, HTTPException, ValueError):
+            LOG.warning("Upstream HLS network failure")
+            return self._error(502, "Flux HLS du fournisseur inaccessible", head_only=head_only)
+        if len(raw) > MAX_MANIFEST_BYTES:
+            return self._error(502, "Manifeste HLS trop volumineux", head_only=head_only)
+        suffix = self.token_suffix()
+
+        def link(url: str, is_playlist: bool) -> str:
+            if is_playlist:
+                return f"/hls/v/{self.hls.register(url, 'p', session)}.m3u8{suffix}"
+            return f"/hls/s/{self.hls.register(url, 's', session)}.{segment_ext(url)}{suffix}"
+
+        try:
+            body = rewrite_manifest(raw.decode("utf-8", "replace"), final_url, link)
+        except ValueError as exc:
+            return self._error(502, str(exc), head_only=head_only)
+        if session is not None:
+            session.touch(len(raw))
+        return self.response(200, body.encode("utf-8"), "application/vnd.apple.mpegurl", head_only=head_only)
+
+    def handle_hls(self, path: str, *, head_only: bool) -> bool:
+        """Routes /hls/... ; retourne False si le chemin n'est pas une route HLS."""
+        live = HLS_LIVE_RE.fullmatch(path)
+        if live:
+            stream_id = live.group(1)
+            if head_only:
+                self.response(200, b"", "application/vnd.apple.mpegurl", head_only=True)
+                return True
+            session = self.open_session("hls", stream_id, self.item_label("hls", stream_id), virtual=True)
+            if session is not None:
+                self.hls_manifest(self.api.direct_url("live", stream_id, "m3u8"), session, head_only=False)
+            return True
+        sub = HLS_SUB_RE.fullmatch(path)
+        seg = HLS_SEG_RE.fullmatch(path)
+        if not sub and not seg:
+            return False
+        resolved = self.hls.resolve((sub or seg).group(1), "p" if sub else "s")
+        if resolved is None:
+            self._error(404, "Lien HLS expiré : relance la chaîne", head_only=head_only)
+            return True
+        url, session = resolved
+        if session is not None and session.cancelled.is_set():
+            self._error(409, "Lecture arrêtée : la connexion au fournisseur a été donnée à un autre appareil",
+                        head_only=head_only)
+            return True
+        if session is not None:
+            session.touch()
+        if sub:
+            self.hls_manifest(url, session, head_only=head_only)
+        else:
+            ext = seg.group(2).lower()
+            self.relay(url, head_only=head_only, default_type=SEGMENT_MIME.get(ext, "application/octet-stream"),
+                       touch=session)
+        return True
 
     def full_guide(self, *, refresh: bool = False, budget: float = 15) -> Path:
         """Guide de toutes les chaînes du compte.
@@ -843,13 +924,14 @@ class Handler(BaseHTTPRequestHandler):
             return self.response(HTTPStatus.OK, text.encode(), "text/plain; charset=utf-8", head_only=head_only)
         if not self.authorized(qs):
             return self._error(HTTPStatus.FORBIDDEN, "Token requis ou invalide (?token=...)", head_only=head_only)
+        self.request_token = qs.get("token", [""])[0] if self.config.access_token else ""
+        if path.startswith("/hls/") and self.handle_hls(path, head_only=head_only):
+            return
         if path in ("/playlist.m3u", "/get.php"):
             mode = qs.get("mode", ["proxy"])[0]
             fmt = qs.get("format", ["ts"])[0]
             if mode not in ("proxy", "direct") or fmt not in ("ts", "m3u8"):
                 return self._error(400, "mode=proxy|direct et format=ts|m3u8", head_only=head_only)
-            if mode == "proxy" and fmt != "ts":
-                return self._error(400, "Le proxy prend en charge TS ; utiliser mode=direct pour HLS", head_only=head_only)
             try:
                 kinds = parse_content(qs.get("content", [""])[0], ("live",))
                 if "series" in kinds:
@@ -866,7 +948,8 @@ class Handler(BaseHTTPRequestHandler):
                 entries = order_entries(entries, groups)
                 content = playlist(self.config, entries, groups, base, mode=mode, fmt=fmt,
                                    epg_path="/epg.xml" if "live" in kinds else None,
-                                   api_epg_ids=self.config.enable_epg and self.config.epg_source != "xmltv")
+                                   api_epg_ids=self.config.enable_epg and self.config.epg_source != "xmltv",
+                                   live_format="hls" if fmt == "m3u8" else "ts")
             except ValueError as exc:
                 return self._error(400, str(exc), head_only=head_only)
             except UpstreamError as exc:
@@ -900,10 +983,15 @@ class Handler(BaseHTTPRequestHandler):
                     budget=0 if head_only else self.config.series_fetch_seconds)
                 entries = order_entries(entries, groups, saved.get("group_order"))
                 has_live = "live" in kinds and uses(saved, "live")
+                fmt = qs.get("format", [""])[0]
+                if fmt not in ("", "ts", "m3u8"):
+                    raise ValueError("format=ts|m3u8")
+                live_format = {"ts": "ts", "m3u8": "hls"}.get(fmt, saved.get("live_format", "ts"))
                 content = playlist(self.config, entries, groups, self.public_base(),
                                    epg_path=f"/p/{slug}.xml" if has_live else None,
                                    group_names=saved.get("group_names"),
-                                   api_epg_ids=self.config.enable_epg and self.config.epg_source != "xmltv")
+                                   api_epg_ids=self.config.enable_epg and self.config.epg_source != "xmltv",
+                                   live_format=live_format)
             except EpgUnavailable as exc:
                 return self._error(502, str(exc), head_only=head_only)
             except ValueError as exc:
@@ -978,7 +1066,7 @@ def make_series(config: Config, api: XtreamAPI) -> SeriesCache:
 def make_server(config: Config, *, host: str = "0.0.0.0", port: int | None = None,
                 api: XtreamAPI | None = None, store: PlaylistStore | None = None,
                 epg: EpgCache | None = None, series: SeriesCache | None = None,
-                streams: StreamManager | None = None) -> ThreadingHTTPServer:
+                streams: StreamManager | None = None, hls: HlsRegistry | None = None) -> ThreadingHTTPServer:
     api = api or XtreamAPI(config)
     store = store or PlaylistStore(config.data_dir)
     epg = epg or make_epg(config, api)
@@ -986,7 +1074,7 @@ def make_server(config: Config, *, host: str = "0.0.0.0", port: int | None = Non
     streams = streams or make_streams(config, api)
     handler = type("ConfiguredHandler", (Handler,),
                    {"api": api, "config": config, "store": store, "epg": epg, "series": series,
-                    "streams": streams})
+                    "streams": streams, "hls": hls or HlsRegistry()})
     server = ThreadingHTTPServer((host, config.port if port is None else port), handler)
     server.daemon_threads = True
     return server

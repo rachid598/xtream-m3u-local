@@ -139,6 +139,19 @@
           </div>
         </div>
       </details>
+      <details class="epg-box options-box" id="options-box">
+        <summary><span class="epg-title"><span aria-hidden="true">⚙️</span> Options de la playlist</span><span class="pill" id="options-pill"><span id="options-pill-text">MPEG-TS</span></span></summary>
+        <div class="epg-body">
+          <div class="option-row">
+            <label for="opt-live-format">Format des chaînes en direct</label>
+            <select id="opt-live-format">
+              <option value="ts">MPEG-TS (recommandé, une connexion continue)</option>
+              <option value="hls">HLS .m3u8 (petits morceaux : si le TS se fige ou coupe souvent)</option>
+            </select>
+            <p class="hint">Les deux passent par ton serveur, sans identifiants dans la playlist. Pour tester sans changer la playlist : ajoute <code>?format=m3u8</code> à son URL.</p>
+          </div>
+        </div>
+      </details>
       <div class="stats" aria-live="polite">
         <div class="stat"><strong id="stat-channels">0</strong><span id="stat-channels-label">chaînes retenues</span></div>
         <div class="stat"><strong id="stat-vod">0</strong><span>films retenus</span></div>

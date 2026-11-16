@@ -96,6 +96,10 @@ def validate_playlist(payload: object, *, slug: str | None = None) -> dict:
                                 "série" if kind == "series" else "chaîne")
     result["group_order"] = _ids(payload.get("group_order"), pattern=CATEGORY_RE, label="groupe")[:MAX_GROUPS]
     result["group_names"] = _group_names(payload.get("group_names"))
+    live_format = payload.get("live_format", "ts")
+    if live_format not in ("ts", "hls"):
+        raise InvalidPlaylist("Format des chaînes : ts ou hls")
+    result["live_format"] = live_format
     updated = payload.get("updated_at")
     if isinstance(updated, (int, float)) and not isinstance(updated, bool):
         result["updated_at"] = int(updated)

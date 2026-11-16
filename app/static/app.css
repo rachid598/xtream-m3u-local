@@ -446,3 +446,10 @@ dialog .field { margin-bottom: 16px; }
 .stream-item .grow { flex: 1; min-width: 180px; display: flex; flex-direction: column; }
 .stream-item .s-title { font-weight: 650; overflow-wrap: anywhere; }
 .stream-item .s-meta { font-size: 12px; color: var(--text-faint); }
+
+/* ------------------------------------------------------------ options */
+.option-row { display: flex; flex-direction: column; gap: 6px; }
+.option-row + .option-row { border-top: 1px solid var(--border); padding-top: 10px; }
+.option-row select, .option-row input[type=text] { max-width: 520px; }
+.check-row { display: flex; align-items: flex-start; gap: 10px; font-weight: 500; color: var(--text); margin: 0; cursor: pointer; }
+.check-row input { width: 18px; height: 18px; accent-color: var(--accent); margin-top: 2px; flex: none; }

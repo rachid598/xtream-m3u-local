@@ -118,6 +118,7 @@ class FakeXtream(BaseHTTPRequestHandler):
     series_info_calls: list[str] = []
     simple_epg_calls: list[str] = []
     open_streams = 0
+    hls_requests: list[str] = []
     epg_mode = "plain"  # plain | gzip | html | error
     epg_requests = 0
 
@@ -185,6 +186,41 @@ class FakeXtream(BaseHTTPRequestHandler):
             if self.headers.get("Range") == "bytes=3-":
                 return self.send_body(206, body[3:], "video/mp2t", {"Content-Range": "bytes 3-15/16"})
             return self.send_body(200, body, "video/mp2t")
+        if url.path == f"/live/{USERNAME}/{PASSWORD}/42.m3u8":
+            type(self).hls_requests.append(url.path)
+            self.send_response(302)
+            self.send_header("Location", "/hlsgw/tok123/42/master.m3u8")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        if url.path == f"/live/{USERNAME}/{PASSWORD}/43.m3u8":
+            return self.send_body(200, b"<html>pas du HLS</html>", "text/html")
+        if url.path.startswith("/hlsgw/") or url.path.startswith("/keys/"):
+            type(self).hls_requests.append(url.path)
+            host = self.headers.get("Host")
+            files = {
+                "/hlsgw/tok123/42/master.m3u8": (
+                    "#EXTM3U\n"
+                    '#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="aud",NAME="fr",URI="audio/fr.m3u8"\n'
+                    '#EXT-X-STREAM-INF:BANDWIDTH=800000,AUDIO="aud"\n'
+                    "low/index.m3u8?sig=abc\n").encode(),
+                "/hlsgw/tok123/42/low/index.m3u8": (
+                    "#EXTM3U\n#EXT-X-TARGETDURATION:4\n#EXT-X-MEDIA-SEQUENCE:10\n"
+                    '#EXT-X-KEY:METHOD=AES-128,URI="/keys/k1.key",IV=0x01\n'
+                    '#EXT-X-MAP:URI="init.mp4"\n'
+                    "#EXTINF:4.0,\nseg10.ts\n"
+                    f"#EXTINF:4.0,\nhttp://{host}/hlsgw/tok123/42/low/seg11.ts\n").encode(),
+                "/hlsgw/tok123/42/audio/fr.m3u8": b"#EXTM3U\n#EXTINF:4.0,\na10.aac\n",
+                "/hlsgw/tok123/42/low/seg10.ts": b"SEG10",
+                "/hlsgw/tok123/42/low/seg11.ts": b"SEG11",
+                "/hlsgw/tok123/42/low/init.mp4": b"INIT",
+                "/hlsgw/tok123/42/audio/a10.aac": b"AAC10",
+                "/keys/k1.key": b"0123456789abcdef",
+            }
+            if url.path not in files:
+                return self.send_body(404, b"nope", "text/plain")
+            ctype = "application/vnd.apple.mpegurl" if url.path.endswith(".m3u8") else "video/mp2t"
+            return self.send_body(200, files[url.path], ctype)
         if url.path in (f"/live/{USERNAME}/{PASSWORD}/50.ts", f"/live/{USERNAME}/{PASSWORD}/51.ts"):
             # Flux continu (direct) : 1 Kio toutes les 50 ms pendant 15 s au maximum.
             type(self).open_streams += 1
@@ -240,5 +276,6 @@ def reset_fake() -> None:
     FakeXtream.fail_categories = False
     FakeXtream.series_info_calls = []
     FakeXtream.simple_epg_calls = []
+    FakeXtream.hls_requests = []
     FakeXtream.epg_mode = "plain"
     FakeXtream.epg_requests = 0

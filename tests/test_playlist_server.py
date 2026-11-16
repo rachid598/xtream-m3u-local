@@ -69,9 +69,12 @@ class PlaylistServerTests(StackTestCase):
         _, body, _ = self.get(self.stack.proxy_base + "/playlist.m3u?mode=direct&format=m3u8")
         self.assertIn((self.provider_url + "/live/user/pw/42.m3u8").encode(), body)
 
-    def test_proxy_hls_rejected(self):
-        status, _, _ = self.get(self.stack.proxy_base + "/playlist.m3u?mode=proxy&format=m3u8")
-        self.assertEqual(status, 400)
+    def test_proxy_hls_playlist(self):
+        status, body, _ = self.get(self.stack.proxy_base + "/playlist.m3u?mode=proxy&format=m3u8")
+        self.assertEqual(status, 200)
+        self.assertIn(f"{self.stack.proxy_base}/hls/42.m3u8".encode(), body)
+        self.assertNotIn(b"/stream/", body)
+        self.assertNotIn(b"/pw/", body)
         status, _, _ = self.get(self.stack.proxy_base + "/playlist.m3u?mode=evil")
         self.assertEqual(status, 400)
 
