@@ -180,6 +180,15 @@ class CustomGroupTests(unittest.TestCase):
         ordered = [e[0]["name"] for e in order_entries(entries, groups, saved["group_order"]) if e[1] == "g:c"]
         self.assertEqual(ordered, ["FR: TF1 FHD", "|FR| CANAL + 4K", "FR: France 2 HD"])
 
+    def test_dedupe_with_superscripts_and_prefixes(self):
+        # Noms réels d'un fournisseur (capture utilisateur) : qualité en exposant, préfixes VIP/FR/AF.
+        api = StubAPI([ch(1, "VIP: TF1 ᴿᴬᵂ", "1"), ch(2, "VIP: TF1 ᴴᴰ", "1"), ch(3, "FR: TF1", "2"), ch(4, "AF: TF1", "3"),
+                       ch(5, "VIP: FRANCE 2 ᴴᴰ", "1"), ch(6, "FR: FRANCE 2", "2")], {"1": "VIP", "2": "FR", "3": "AF"})
+        saved = validate_playlist({"slug": "s", "name": "S", "category_ids": ["1", "2", "3"], "dedupe": True,
+                                   "custom_groups": [{"id": "b", "name": "Bouquet", "match": "exact", "patterns": ["1: TF1", "2: France 2"]}]})
+        entries, _ = select_items(api, saved, "live")
+        self.assertEqual([(e[0]["name"], e[0]["num"]) for e in entries], [("VIP: TF1 ᴴᴰ", "1"), ("VIP: FRANCE 2 ᴴᴰ", "2")])
+
     def test_dedupe_inside_custom_group(self):
         saved = self.saved(dedupe=True, custom_groups=[{"id": "tnt", "name": "TNT", "match": "exact", "patterns": ["tf1"]}])
         entries, _ = select_items(self.API, saved, "live")

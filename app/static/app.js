@@ -92,7 +92,7 @@
   }
 
   const plural = (n, one, many) => `${n.toLocaleString('fr-FR')} ${n > 1 ? many : one}`;
-  const norm = (text) => String(text || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+  const norm = (text) => String(text || '').normalize('NFKD').replace(/[̀-ͯ]/g, '').toLowerCase();
 
   function slugify(name) {
     return norm(name).replace(/[^a-z0-9_-]+/g, '-').replace(/^[-_]+|-+$/g, '').slice(0, 60);
@@ -362,7 +362,8 @@
       if (separators && isSeparator(c.name)) { kept.push(c.stream_id); continue; }
       if (!dedupe) { best.set(`id\u0000${c.stream_id}`, { q: 0, id: c.stream_id }); kept.push(c.stream_id); continue; }
       const custom = groupAssignment().get(c.stream_id);
-      const key = `${custom ? CG + custom : group}\u0000${baseName(c.name)}`;
+      if (c._core === undefined) c._core = matchName(c.name);
+      const key = `${custom ? CG + custom : group}\u0000${c._core || baseName(c.name)}`;
       const q = qualityOf(c.name);
       const current = best.get(key);
       if (!current || q > current.q) best.set(key, { q, id: c.stream_id });

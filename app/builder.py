@@ -137,7 +137,7 @@ def apply_custom_groups(entries: list[tuple[dict, str]], saved: dict) -> list[tu
 
 
 def normalize(text: str) -> str:
-    text = unicodedata.normalize("NFD", text or "")
+    text = unicodedata.normalize("NFKD", text or "")  # NFKD : « ᴴᴰ » → « hd », « ⁴ᴷ » → « 4k »
     text = "".join(ch for ch in text if not unicodedata.combining(ch))
     return " ".join(text.lower().split())
 
@@ -170,7 +170,8 @@ def dedupe(entries: list[tuple[dict, str]]) -> list[tuple[dict, str]]:
     """Dans chaque groupe, garde la meilleure qualité d'une même chaîne (SD/HD/FHD/4K…)."""
     best: dict[tuple[str, str], tuple[float, int]] = {}
     for index, (item, group) in enumerate(entries):
-        key = (group, base_name(item["name"]))
+        # Même nom comparable que les groupes perso : « VIP: TF1 ᴴᴰ », « FR: TF1 », « AF: TF1 » → « tf1 ».
+        key = (group, match_name(item["name"]) or base_name(item["name"]))
         score = quality(item["name"])
         if key not in best or score > best[key][0]:
             best[key] = (score, index)

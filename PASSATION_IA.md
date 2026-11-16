@@ -1,6 +1,6 @@
 # Passation — Xtream M3U Local
 
-> **État au 16 novembre 2026 — version 3.2.0.** Document à transmettre tel quel à l'IA suivante avec le dépôt.
+> **État au 16 novembre 2026 — version 3.2.1.** Document à transmettre tel quel à l'IA suivante avec le dépôt.
 > Aucun mot de passe, token ni URL fournisseur réelle ne doit être copié ici ni commité sur GitHub.
 
 ## 1. Objectif et contexte utilisateur
@@ -8,7 +8,7 @@
 - Unraid « Tower », appdata sur pool **NVMe**, IP LAN vue sur une capture : `192.168.0.108`. Lecteur Android TV (écran « Playlist M3U via URL » avec champ EPG et « EPG Shift »).
 - Abonnement Xtream Codes : `player_api.php` et les flux `/live/U/P/ID.ts` fonctionnent ; **`get.php` ne donne pas de playlist**.
 - But : redistribuer le catalogue sur le LAN (playlists M3U à URL permanente + serveur Xtream local), avec interface Web, sans exposer les identifiants.
-- Historique des retours réels : la 2.1.0 « fonctionne » sur Tower (direct) ; il manquait la VOD (→ 2.2.0), l'éditeur films/séries n'était pas visible (→ 2.2.1), EPG (→ 2.3.0), le lecteur demandait `http://IP:7777/xmltv.php` (404) (→ 2.3.1). Puis demande « fais tout » de la liste d'améliorations (→ **3.0.0**). Premier diagnostic réel sur Tower (→ **3.0.1**, voir § 5). Demande « ranger la playlist selon les goûts (TNT, Canal+…) pour la partie FR, avec un groupe en premier » (→ **3.1.0**). Puis « un groupe Canal+ avec toutes les chaînes comme le décodeur Canal+ » (→ **3.2.0**).
+- Historique des retours réels : la 2.1.0 « fonctionne » sur Tower (direct) ; il manquait la VOD (→ 2.2.0), l'éditeur films/séries n'était pas visible (→ 2.2.1), EPG (→ 2.3.0), le lecteur demandait `http://IP:7777/xmltv.php` (404) (→ 2.3.1). Puis demande « fais tout » de la liste d'améliorations (→ **3.0.0**). Premier diagnostic réel sur Tower (→ **3.0.1**, voir § 5). Demande « ranger la playlist selon les goûts (TNT, Canal+…) pour la partie FR, avec un groupe en premier » (→ **3.1.0**). Puis « un groupe Canal+ avec toutes les chaînes comme le décodeur Canal+ » (→ **3.2.0**). Capture réelle : groupe avec « VIP: TF1 ᴿᴬᵂ », « VIP: TF1 ᴴᴰ », « FR: TF1 », « AF: TF1 » malgré « Masquer les doublons » (→ **3.2.1**).
 
 ## 2. Architecture
 
@@ -113,13 +113,14 @@ Clés de groupes/éléments : direct sans préfixe, films `vod:`, séries `serie
 - **3.0.1** : premier diagnostic réel sur Tower. Résultats : API OK (expiration 15/11/2027, 1 connexion max) ; 47 408 chaînes / 718 catégories, 102 060 films / 247, 23 725 séries / 195 ; **`xmltv.php` du fournisseur → HTTP 502** (le guide doit donc venir de l'API, mode `EPG_SOURCE=auto`) ; flux TS, HLS, film (avance rapide), épisode et replay OK. Le « Aucun programme » du guide via l'API venait d'un **séparateur** du fournisseur (« #### PRIME … ##### ») choisi comme chaîne de test. Corrigé : le diagnostic ignore les séparateurs, teste le guide API sur 5 chaînes et rétrograde l'erreur `xmltv.php` en avertissement quand l'API compense ; nouvelle option de playlist « Masquer les séparateurs ». L'utilisateur utilisait la playlist complète `/playlist.m3u` (47 k chaînes) : lui recommander une playlist personnalisée `/p/<nom>.m3u` + guide `/p/<nom>.xml` (le guide n'est complété par l'API que pour les chaînes des playlists personnalisées, ≤ `EPG_API_MAX_CHANNELS`).
 - **3.1.0** : groupes personnalisés « Mes groupes de chaînes » (onglet Résumé, modèles TNT/Canal+/Sport/Info/Cinéma/Jeunesse/Documentaires, bouton 📁 par chaîne, nouveau groupe inséré en premier). Liste TNT : chaînes historiques (dont C8 et NRJ 12, retirées de la TNT en 2025) + T18 et Novo19 ; correspondance exacte pour ne pas aspirer « Canal+ Sport » ou « France 24 ».
 - **3.2.0** : modèle « Bouquet Canal+ » (≈190 noms exacts par thème, Canal+ Live 1–19) et motifs numérotés « N: Nom » (`builder.split_pattern`, numéro → `num`/`custom_num`, écrasé par `item_numbers`). **Le plan de service officiel n'a pas pu être lu** : `static.canal-plus.net` a été ajouté aux hôtes autorisés de l'environnement, mais le CDN répond 403 aux requêtes automatiques et les autres tentatives ont été refusées par les permissions de session. Liste construite de mémoire ; seuls 1 TF1, 2 France 2, 3 France 3, 4 Canal+, 5 France 5, 6 M6, 7 Arte sont numérotés. À faire : compléter les numéros depuis `PLAN_DE_SERVICE_CANAL_PLUS_<MOIS>_<ANNÉE>.pdf` (ex. octobre 2026) ou le guide du décodeur de l'utilisateur.
+- **3.2.1** : le fournisseur réel écrit la qualité en exposants Unicode (ᴴᴰ, ᴿᴬᵂ) et préfixe par VIP:/FR:/AF: ; `dedupe` utilise désormais `match_name` (clé (groupe, nom comparable)), `normalize`/`norm` passent en NFKD (exposants → lettres, donc qualité détectée). Les groupes perso ne prennent que les chaînes retenues à l'étape 1/2 : si VIP/AF apparaissent, c'est que ces catégories sont cochées.
 - Faux échec intermittent corrigé en 2.3.0 : un test cherchait « pw » dans une réponse contenant un chemin temporaire aléatoire.
 
 ## 6. Tests et vérifications (16/11/2026)
 
 | Vérification | Résultat |
 |---|---|
-| `python -m unittest discover -s tests -t .` | **163 tests OK** (fichiers : playlist_server, custom, web, epg, config, vod, http, streams, hls, catchup, xtream_emu, builder, system, providers) |
+| `python -m unittest discover -s tests -t .` | **164 tests OK** (fichiers : playlist_server, custom, web, epg, config, vod, http, streams, hls, catchup, xtream_emu, builder, system, providers) |
 | `node --check app/static/app.js` | OK |
 | Scénario Chromium `tests/e2e_browser.mjs` sur `python -m tools.demo` | OK : création, exclusion/ajout, groupes, règle, favori, renommage + numéro, séparateurs masqués, doublons, groupes perso (modèles TNT et Bouquet Canal+ numéroté, nouveau groupe en premier, rangement 📁, vérification du M3U), numérotation, films/séries/épisodes, EPG, appareil (connexion `player_api.php` réelle puis révocation), diagnostic (≥ 9 tests OK), sauvegarde/restauration, catalogue, mise en page 390/768/1366/1920 px sans défilement horizontal, aucune erreur console |
 | Docker 3.0.0 (`docker build` + `run`, dossier `/data` créé par root) | OK : droits abandonnés (UID 99), playlist HLS + favori + replay, appareil → `player_api.php` auth 1 (fuseau Europe/Paris), manifeste HLS réécrit, gzip, replay converti à l'heure de Paris, diagnostic vert (faux flux TS en « warn »), `devices.json` 0600, appareil conservé après recréation du conteneur, healthcheck « healthy », aucun secret dans les journaux |
@@ -141,7 +142,7 @@ Faux fournisseurs de test : `tests/fake_xtream.py` (direct, films, séries, épi
 2. Tester le mode Xtream dans TiviMate avec un appareil ; tester HLS (`?format=m3u8`) et le replay sur une chaîne qui le propose ; vérifier « EPG Shift = 0 ».
 3. GitHub :
    - la branche **`main` existe** (même contenu que `claude/wizardly-keller-bd38ld`) ; la passer en branche par défaut (Settings → General → Default branch), puis supprimer éventuellement l'ancienne branche ;
-   - le **tag de version (`v3.2.0`) n'a pas pu être poussé** depuis l'environnement de l'IA (le push de tags est coupé par son proxy Git, les branches passent). Le créer sur GitHub : Releases → « Draft a new release » → tag `v3.2.0` sur `main` → Publish. Le workflow publiera alors `ghcr.io/rachid598/xtream-m3u-local:3.2.0`, `:3.2` et `:3` ;
+   - le **tag de version (`v3.2.1`) n'a pas pu être poussé** depuis l'environnement de l'IA (le push de tags est coupé par son proxy Git, les branches passent). Le créer sur GitHub : Releases → « Draft a new release » → tag `v3.2.1` sur `main` → Publish. Le workflow publiera alors `ghcr.io/rachid598/xtream-m3u-local:3.2.1`, `:3.2` et `:3` ;
    - **Dependabot** a ouvert des pull requests (actions GitHub, image `python:3.15-alpine`) : à examiner ; la montée de Python est à tester avant fusion ;
    - rendre le package GHCR public si besoin.
 4. Pistes : contrôle d'accès des épisodes par appareil, fusion de plusieurs XMLTV, historique des lectures, notifications Unraid, renommage en masse, import de logos alternatifs.

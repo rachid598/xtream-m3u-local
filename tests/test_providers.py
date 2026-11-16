@@ -112,7 +112,8 @@ class MultiProviderTests(StackTestCase):
         self.assertIn(f"/live/{USERNAME}/{PASSWORD}/42.ts", FakeB.paths[before:])
         before = len(FakeB.paths)
         self.assertEqual(self.get(f"{self.base}/stream/42.ts")[1], b"TS DATA 12345678")
-        self.assertEqual(FakeB.paths[before:], [])                       # fournisseur A
+        # Fournisseur A : aucun flux demandé à B (un rafraîchissement du compte en arrière-plan est permis).
+        self.assertEqual([p for p in FakeB.paths[before:] if not p.startswith("/player_api.php")], [])
         movie = self.get(f"{self.base}/movie/{2 * OFFSET + 501}.mkv")
         self.assertEqual((movie[0], len(movie[1])), (200, 1024))
         self.assertEqual(self.get(f"{self.base}/timeshift/{2 * OFFSET + 42}.ts?start=1794762000&duration=5")[1],

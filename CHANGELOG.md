@@ -2,6 +2,12 @@
 
 Format inspiré de « Keep a Changelog ». Les versions suivent le versionnage sémantique.
 
+## [3.2.1] — 2026-11-16
+
+### Corrigé
+- **Doublons non masqués** chez les fournisseurs qui écrivent la qualité en exposant (« VIP: TF1 ᴴᴰ », « ᴿᴬᵂ ») ou préfixent par VIP/FR/AF : les versions d'une même chaîne sont maintenant reconnues (nom comparable des groupes perso, normalisation NFKD) et seule la meilleure est gardée.
+- Test multi-fournisseurs instable (rafraîchissement du compte en arrière-plan).
+
 ## [3.2.0] — 2026-11-16
 
 ### Ajouté
