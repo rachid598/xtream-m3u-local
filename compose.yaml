@@ -24,6 +24,15 @@ services:
       # Facultatif : guide XMLTV externe à la place de xmltv.php (http(s), .xml ou .xml.gz)
       EPG_URL: "${EPG_URL:-}"
       CACHE_SECONDS: "${CACHE_SECONDS:-1800}"
+      MAX_CONNECTIONS: "${MAX_CONNECTIONS:-auto}"
+      STREAM_TAKEOVER: "${STREAM_TAKEOVER:-true}"
+      PROVIDER_TIMEZONE: "${PROVIDER_TIMEZONE:-}"
+      XTREAM_NAME: "${XTREAM_NAME:-}"
+      # Abonnement supplémentaire facultatif (catalogues fusionnés) ; jusqu'à _9
+      XTREAM_URL_2: "${XTREAM_URL_2:-}"
+      XTREAM_USERNAME_2: "${XTREAM_USERNAME_2:-}"
+      XTREAM_PASSWORD_2: "${XTREAM_PASSWORD_2:-}"
+      XTREAM_NAME_2: "${XTREAM_NAME_2:-}"
       TZ: "${TZ:-Europe/Paris}"
     volumes:
       # Sauvegarde des playlists (/data/playlists.json) et cache EPG.

@@ -8,7 +8,7 @@
   <Privileged>false</Privileged>
   <Support>https://github.com/rachid598/xtream-m3u-local/issues</Support>
   <Project>https://github.com/rachid598/xtream-m3u-local</Project>
-  <Overview>Reconstruit des playlists M3U depuis l'API Xtream (player_api.php) quand get.php ne fonctionne pas. Port 7777 : playlists personnalisées permanentes (/p/salon.m3u) avec TV en direct, films et séries, relais des flux et EPG filtré. Port 7778 : interface Web (catalogue fournisseur, sélection de catégories et de chaînes, plusieurs playlists).</Overview>
+  <Overview>Reconstruit des playlists M3U depuis l'API Xtream (player_api.php) quand get.php ne fonctionne pas. Port 7777 : playlists personnalisées permanentes (/p/salon.m3u) avec TV en direct, films et séries (TS ou HLS), guide EPG, replay, serveur Xtream local par appareil, limite de connexions, plusieurs abonnements. Port 7778 : interface Web (catalogue fournisseur, sélection de catégories et de chaînes, plusieurs playlists).</Overview>
   <Category>MediaApp:Video MediaServer:Video</Category>
   <WebUI>http://[IP]:[PORT:7778]/</WebUI>
   <TemplateURL>https://raw.githubusercontent.com/rachid598/xtream-m3u-local/main/unraid-template.xml</TemplateURL>
@@ -31,6 +31,14 @@
   <Config Name="EPG : chaînes max via API" Target="EPG_API_MAX_CHANNELS" Default="1000" Mode="" Description="Guide complet /xmltv.php : nombre maximal de chaînes complétées par l'API" Type="Variable" Display="advanced" Required="false" Mask="false">1000</Config>
   <Config Name="Cache catalogue (s)" Target="CACHE_SECONDS" Default="1800" Mode="" Description="Durée de cache de la liste des chaînes" Type="Variable" Display="advanced" Required="false" Mask="false">1800</Config>
   <Config Name="Cache épisodes (h)" Target="SERIES_CACHE_HOURS" Default="24" Mode="" Description="Durée de cache disque des épisodes de séries" Type="Variable" Display="advanced" Required="false" Mask="false">24</Config>
+  <Config Name="Connexions simultanées" Target="MAX_CONNECTIONS" Default="auto" Mode="" Description="auto = valeur de l'abonnement, 0 = illimité, ou un nombre" Type="Variable" Display="advanced" Required="false" Mask="false">auto</Config>
+  <Config Name="Reprise du flux" Target="STREAM_TAKEOVER" Default="true" Mode="" Description="Limite atteinte : couper le flux le plus ancien (true) ou refuser (false)" Type="Variable" Display="advanced" Required="false" Mask="false">true</Config>
+  <Config Name="Fuseau du fournisseur" Target="PROVIDER_TIMEZONE" Default="" Mode="" Description="Replay : fuseau du serveur Xtream (vide = automatique), ex. Europe/Paris" Type="Variable" Display="advanced" Required="false" Mask="false"></Config>
+  <Config Name="Nom du fournisseur" Target="XTREAM_NAME" Default="" Mode="" Description="Nom affiché (utile avec plusieurs abonnements)" Type="Variable" Display="advanced" Required="false" Mask="false"></Config>
+  <Config Name="2e abonnement : URL" Target="XTREAM_URL_2" Default="" Mode="" Description="Facultatif : second fournisseur Xtream (catalogues fusionnés)" Type="Variable" Display="advanced" Required="false" Mask="false"></Config>
+  <Config Name="2e abonnement : utilisateur" Target="XTREAM_USERNAME_2" Default="" Mode="" Description="Facultatif" Type="Variable" Display="advanced" Required="false" Mask="false"></Config>
+  <Config Name="2e abonnement : mot de passe" Target="XTREAM_PASSWORD_2" Default="" Mode="" Description="Facultatif" Type="Variable" Display="advanced" Required="false" Mask="true"></Config>
+  <Config Name="2e abonnement : nom" Target="XTREAM_NAME_2" Default="" Mode="" Description="Facultatif" Type="Variable" Display="advanced" Required="false" Mask="false"></Config>
   <Config Name="PUID" Target="PUID" Default="99" Mode="" Description="Utilisateur propriétaire de /data (nobody sur Unraid)" Type="Variable" Display="advanced" Required="false" Mask="false">99</Config>
   <Config Name="PGID" Target="PGID" Default="100" Mode="" Description="Groupe propriétaire de /data (users sur Unraid)" Type="Variable" Display="advanced" Required="false" Mask="false">100</Config>
   <Config Name="Fuseau horaire" Target="TZ" Default="Europe/Paris" Mode="" Description="Fuseau horaire des journaux" Type="Variable" Display="advanced" Required="false" Mask="false">Europe/Paris</Config>

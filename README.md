@@ -1,11 +1,16 @@
 # Xtream M3U Local
 
 Conteneur Docker pour Unraid : **une API Xtream fonctionnelle suffit**, même si le fournisseur ne renvoie rien sur `get.php`.
-Le service lit `player_api.php` — **TV en direct** (`get_live_*`), **films / VOD** (`get_vod_*`) et **séries** (`get_series*`, épisodes via `get_series_info`) —, conserve le catalogue d'origine du fournisseur et publie sur ton réseau local des **playlists M3U personnalisées à URL permanente**, compatibles VLC, TiviMate et lecteurs Android TV.
+Le service lit `player_api.php` — TV en direct, films, séries, guide des programmes — conserve le catalogue d'origine du
+fournisseur et le redistribue sur ton réseau local, **sans jamais exposer tes identifiants** :
+
+- des **playlists M3U personnalisées à URL permanente** (VLC, TiviMate, lecteurs Android TV…) ;
+- un **serveur Xtream Codes local** : chaque TV se connecte en mode « Xtream » avec ses propres identifiants et retrouve
+  les rubriques natives Direct / Films / Séries, le guide et le replay, limités à la playlist choisie.
 
 | Port | Rôle | Exemples |
 |---|---|---|
-| **7777** | Lecteurs IPTV | `http://IP_UNRAID:7777/p/salon.m3u` · `/playlist.m3u` · `/stream/<id>.ts` · `/movie/<id>.mkv` · `/series/<id>.mkv` · `/p/salon.xml` (EPG) |
+| **7777** | Lecteurs IPTV | `http://IP_UNRAID:7777/p/salon.m3u` · `/p/salon.xml` · `player_api.php` · `/stream/<id>.ts` · `/hls/<id>.m3u8` |
 | **7778** | Interface Web de gestion | `http://IP_UNRAID:7778/` |
 
 Aucun abonnement n'est fourni : utilise uniquement des flux pour lesquels tu disposes des droits.
@@ -20,133 +25,151 @@ docker compose up -d --build
 ```
 
 1. Ouvre `http://IP_UNRAID:7778/`.
-2. **+ Nouvelle** → nomme la playlist (« Salon »), coche des catégories dans **TV en direct**, **Films** et/ou **Séries**, affine élément par élément si besoin, **Créer la playlist**.
-3. Copie l'URL affichée (`http://IP_UNRAID:7777/p/salon.m3u`) dans VLC, TiviMate ou ton lecteur Android TV.
-4. Pour modifier la playlist : reviens sur l'interface, change la sélection, **Enregistrer**. L'URL ne change pas ; actualise simplement la playlist dans le lecteur.
+2. **Mes playlists → + Nouvelle** : nomme la playlist (« Salon »), choisis le contenu (tuiles **TV en direct / Films / Séries**), coche des catégories, affine élément par élément, **Créer la playlist**.
+3. **Appareils → Ajouter** : « TV du salon » avec la playlist « Salon ». L'interface affiche, prêts à copier :
+   - **mode « Playlist M3U »** : URL de la playlist et du guide ;
+   - **mode « Xtream Codes »** : serveur `http://IP_UNRAID:7777`, identifiant, mot de passe.
+4. Saisis l'un des deux dans le lecteur. Une modification de la playlist dans l'interface est prise en compte au prochain rechargement, **sans changer d'URL**.
 
-Les données (`playlists.json` + cache EPG) sont écrites dans `./data` (ou `DATA_PATH`), monté sur `/data` dans le conteneur. Elles survivent aux redémarrages, mises à jour et recréations du conteneur.
+Les données (`playlists.json`, `devices.json`, caches EPG et séries) sont dans `./data` (ou `DATA_PATH`), monté sur `/data`.
+Elles survivent aux redémarrages, mises à jour et recréations du conteneur.
 
 ### Variantes d'installation
 
 - **Un seul fichier à modifier** : `cp compose.single.example.yaml compose.single.yaml`, remplir les 3 valeurs `XTREAM_*`, puis `docker compose -f compose.single.yaml up -d --build` (fichier ignoré par Git).
 - **Sans Compose** : `sh docker-create.sh` (build local), `sh docker-create.sh --ghcr` (image GHCR), `--replace` pour recréer en gardant les données.
-- **Image GHCR** (une fois publiée par GitHub Actions) : `docker compose -f compose.ghcr.yaml up -d`. Si le package est privé, faire d'abord `docker login ghcr.io` avec un jeton GitHub `read:packages`, ou rendre le package public dans GitHub → Packages → Package settings.
-- **Template Unraid** : copier `unraid-template.xml` dans `/boot/config/plugins/dockerMan/templates-user/my-xtream-m3u-local.xml`, puis Docker → Add Container → choisir le template.
+- **Image GHCR** (construite par GitHub Actions) : `docker compose -f compose.ghcr.yaml up -d`. Si le package est privé : `docker login ghcr.io` avec un jeton GitHub `read:packages`, ou rendre le package public.
+- **Template Unraid** : copier `unraid-template.xml` dans `/boot/config/plugins/dockerMan/templates-user/my-xtream-m3u-local.xml`, puis Docker → Add Container.
+- **Installation guidée par un agent** : voir `PROMPT_HERMES_UNRAID.md`.
 
 ## Interface Web (port 7778)
 
-Deux vues, entièrement en français, responsives (téléphone, tablette, ordinateur), thème clair/sombre automatique :
+Entièrement en français, responsive (téléphone, tablette, ordinateur), thème clair/sombre automatique. Quatre vues :
 
 **Mes playlists**
-- bloc **« Contenu de la playlist »** avec trois grandes tuiles **TV en direct / Films / Séries** (nombre disponible chez le fournisseur et nombre sélectionné) : clique sur une tuile pour éditer ce type ; un bandeau signale les films et séries de l'abonnement pas encore ajoutés (« Ajouter des films », « Ajouter des séries ») ;
-- chaque type a ses catégories, sa recherche, ses ajouts et exclusions ; une même playlist peut mélanger les trois ;
-- plusieurs playlists nommées (« Salon », « Chambre », « TV française »…) : créer, modifier, dupliquer, supprimer ;
-- toutes les catégories avec leur nombre de chaînes (y compris les vides et les sous-groupes), filtre, tout cocher / décocher ;
-- recherche (sans accents, plusieurs mots, année pour les films), filtre par catégorie et par état, ajout ou exclusion individuelle, actions groupées sur les résultats ; affiches, année et note des films/séries, bouton « Voir les épisodes » ;
-- onglet **Résumé** : ordre des groupes (↑ ↓) et noms de groupes propres à chaque playlist, liste des ajouts et exclusions ;
-- URL permanente avec boutons Copier / Ouvrir, alerte en cas de modifications non enregistrées, raccourci Ctrl+S.
+- tuiles **TV en direct / Films / Séries** (disponible chez le fournisseur / sélectionné) et bandeau « Ajouter des films / séries » ;
+- catégories avec compteurs, filtres, tout cocher / décocher ; **règles automatiques** (« le nom commence par FR | »…) qui ajoutent aussi les futures catégories ;
+- recherche (sans accents, plusieurs mots, année), ajout ou exclusion individuelle, actions groupées, affiches, note, bouton « Voir les épisodes » ;
+- **☆ favoris** (groupe en tête de la playlist), **✎ renommage et numéro de chaîne** (zapping à la télécommande et ordre), **numérotation automatique** ;
+- résumé : ordre et noms des groupes, ajouts, exclusions, favoris, personnalisations ;
+- options : format **MPEG-TS ou HLS**, **replay**, **masquer les doublons SD/HD/FHD/4K**, nom du groupe des favoris ;
+- bloc **Guide des programmes (EPG)** : URL, couverture, chaînes sans programme, actualisation.
 
-**Catalogue fournisseur** (lecture seule, pour le direct, les films et les séries)
-- catégories dans l'**ordre exact** de `get_live_categories` / `get_vod_categories` / `get_series_categories`, avec identifiants, `parent_id` (sous-groupes imbriqués), nombre de chaînes et chaînes associées ;
-- signale les groupes absents de `get_live_categories` et l'échec éventuel de cet appel ;
-- **Exporter le catalogue fournisseur (JSON)** : réponses brutes de `player_api.php`, identifiants remplacés par `***`, pour archiver ou comparer la structure.
+**Catalogue fournisseur** (lecture seule) : ordre exact, identifiants, `parent_id`, chaînes / films / séries, recherche, **export JSON** (identifiants masqués).
 
-> L'API Xtream n'expose que les catégories et chaînes autorisées pour ton compte, pas la configuration administrative du fournisseur.
+**Appareils** : un code par TV ou téléphone, identifiants Xtream locaux, playlist associée, nouveau code, suppression ; option **« exiger un code d'appareil »** pour le port 7777.
+
+**Système** : abonnement (statut, expiration, connexions, fuseau), **lectures en cours** avec bouton « Arrêter », **diagnostic en un clic**, **sauvegarde / restauration**. Un bandeau prévient quand l'abonnement expire dans moins de 14 jours.
+
+## Mode Xtream Codes local
+
+Dans le lecteur (TiviMate, IPTV Smarters…), choisir « Xtream Codes » et saisir l'adresse `http://IP_UNRAID:7777` avec l'identifiant et le mot de passe d'un appareil (vue Appareils).
+
+- `player_api.php` : compte, catégories et listes (direct, films, séries), fiches détaillées (`get_vod_info`, `get_series_info`), guide court ;
+- lecture : `/live|movie|series/<identifiant>/<code>/<id>.<ext>`, replay `/timeshift/…`, `get.php` et `xmltv.php` avec identifiants ;
+- l'appareil ne voit que sa playlist (noms, numéros, ordre et doublons compris) ; sans playlist associée, tout le catalogue.
+
+## Playlists M3U
+
+- **TV en direct** → `/stream/<id>.ts` (ou `/hls/<id>.m3u8` en HLS) ; **films** → `/movie/<id>.<ext>` ; **épisodes** → `/series/<id>.<ext>`, nommés `Série S01 E02 - Titre` ;
+- en-tête `url-tvg` / `x-tvg-url` → guide de la playlist ; attributs `tvg-id`, `tvg-name`, `tvg-logo`, `tvg-chno`, `group-title` ;
+- **replay** : `catchup="default" catchup-days="N" catchup-source="…/timeshift/<id>.ts?start={utc}&end={utcend}"` sur les chaînes qui le proposent ;
+- `?content=live|vod|series` (combinables), `?format=m3u8|ts` sur la même URL ; réponses compressées (gzip) et ETag/304 ;
+- règle de sélection : (catégorie cochée **ou** ajoutée par une règle **ou** élément ajouté) **et** élément non exclu.
+
+## Relais HLS
+
+Option par playlist (ou `?format=m3u8`) : le serveur télécharge le manifeste HLS du fournisseur et **réécrit chaque lien** (segments, variantes de qualité, pistes audio, clés de chiffrement, segment d'initialisation) vers une adresse locale opaque `/hls/s/<code>.ts`. Le lecteur ne voit jamais l'URL du fournisseur. Utile si le flux MPEG-TS se fige ou coupe souvent.
+
+## Limite de connexions
+
+Un abonnement autorise souvent une seule connexion. Le serveur compte les lectures (direct, HLS, films, épisodes, replay) par fournisseur :
+
+- limite = valeur de l'abonnement (`MAX_CONNECTIONS=auto`), un nombre, ou `0` (illimité) ;
+- limite atteinte : le flux **du même appareil** est remplacé (zapping), sinon le plus ancien est coupé (`STREAM_TAKEOVER=true`) ou la nouvelle lecture est refusée (`false`) ;
+- l'appareil coupé ne peut pas reprendre **le même** flux pendant 30 s (sinon les deux TV se couperaient en boucle) ;
+- vue **Système** : lectures en cours, débit transmis, bouton « Arrêter ».
 
 ## Guide des programmes (EPG)
 
-- Chaque playlist annonce son guide dans l'en-tête M3U (`url-tvg` / `x-tvg-url` → `http://IP_UNRAID:7777/p/<nom>.xml`) : TiviMate, VLC et la plupart des lecteurs le chargent automatiquement. Si un lecteur demande une « source EPG » séparée, utiliser cette même adresse.
-- **Mode `auto` (par défaut)** : programmes du guide XMLTV du fournisseur (`xmltv.php`, ou `EPG_URL`) ; les chaînes qui n'y figurent pas — ou toutes, si `xmltv.php` ne fonctionne pas, comme `get.php` chez certains fournisseurs — sont complétées par l'API Xtream chaîne par chaîne (`get_simple_data_table`), avec cache disque (6 h) et préchargement à l'enregistrement de la playlist.
-- Les chaînes sans identifiant EPG fournisseur reçoivent `tvg-id="xtream-<id>"` pour être reliées au guide complété.
-- **Champ « EPG » d'un lecteur** : `http://IP_UNRAID:7777/xmltv.php` (adresse à la Xtream, paramètres `username`/`password` ignorés) ou `/epg.xml` = guide de toutes les chaînes ; il est complété par l'API pour les chaînes présentes dans tes playlists personnalisées (au plus `EPG_API_MAX_CHANNELS`). Pour une playlist personnalisée, préférer `http://IP_UNRAID:7777/p/<nom>.xml`.
-- Dans l'interface, le bloc **« Guide des programmes (EPG) »** de chaque playlist affiche l'URL à copier, la couverture (chaînes avec programmes, via xmltv.php / via l'API), la liste des chaînes sans programme et un bouton **Actualiser le guide**.
+- `EPG_SOURCE=auto` (défaut) : programmes de `xmltv.php` (ou `EPG_URL`), complétés **chaîne par chaîne par l'API Xtream** (`get_simple_data_table`) pour les chaînes absentes — ou toutes si `xmltv.php` ne fonctionne pas ; cache 6 h, préchargement à l'enregistrement ;
+- `/p/<nom>.xml` : guide de la playlist (léger) ; `/epg.xml` ou **`/xmltv.php`** : guide de toutes les chaînes, complété pour les chaînes des playlists (au plus `EPG_API_MAX_CHANNELS`) ;
+- chaînes sans identifiant EPG fournisseur : `tvg-id="xtream-<id>"`.
 
-## Contenu des playlists
+## Plusieurs abonnements
 
-- **TV en direct** → `/stream/<id>.ts` ; **films** → `/movie/<id>.<extension>` ; **épisodes** → `/series/<id>.<extension>`, nommés `Série S01 E02 - Titre` (format reconnu par TiviMate, Smarters…), avec l'affiche de la série et le groupe de sa catégorie ;
-- films et épisodes sont relayés avec l'en-tête `Range` (avance rapide, reprise) ; aucun transcodage ;
-- `?content=live`, `?content=vod`, `?content=series` (ou `live,vod`) sur `/p/<nom>.m3u` : même playlist, limitée à certains types — pratique pour déclarer séparément le direct et la VOD dans un lecteur ;
-
-- `#EXTM3U url-tvg="…" x-tvg-url="…"` : guide EPG (complet pour `/playlist.m3u`, **filtré** pour `/p/<nom>.m3u` → `/p/<nom>.xml`) ;
-- chaque chaîne : `tvg-id` (EPG), `tvg-name`, `tvg-logo`, `tvg-chno`, `group-title` ;
-- groupes dans l'ordre du fournisseur (ou l'ordre personnalisé de la playlist), chaînes dans l'ordre du fournisseur ;
-- règle de sélection : (catégorie cochée **ou** chaîne ajoutée) **et** chaîne non exclue. Une chaîne présente dans plusieurs catégories est rangée dans la première catégorie cochée ;
-- les nouvelles chaînes ajoutées par le fournisseur dans une catégorie cochée apparaissent automatiquement.
+Ajouter `XTREAM_URL_2`, `XTREAM_USERNAME_2`, `XTREAM_PASSWORD_2` (et `XTREAM_NAME_2`), jusqu'à `_9`. Les catalogues sont fusionnés (une catégorie de même nom forme un seul groupe dans les lecteurs) ; chaque flux est relayé vers le bon fournisseur, avec sa limite de connexions et son fuseau. Les identifiants des fournisseurs 2 à 9 sont décalés (`k × 10¹¹ + id`) pour rester numériques et uniques.
 
 ## Adresses du port 7777
 
 | Adresse | Comportement |
 |---|---|
-| `/p/<nom>.m3u` | Playlist personnalisée, URL stable et dynamique (**recommandé**) |
-| `/p/<nom>.xml` | Guide EPG limité aux chaînes de la playlist (xmltv.php + complément API) |
-| `/playlist.m3u` | Toutes les chaînes, liens TS locaux, aucun identifiant fournisseur |
-| `/playlist.m3u?content=vod` (ou `live,vod`) | Tous les films (les séries ne sont proposées qu'en playlist personnalisée : un appel API par série) |
-| `/movie/<id>.<ext>` · `/series/<id>.<ext>` | Relais d'un film / d'un épisode (Range transmis) |
-| `/playlist.m3u?mode=direct&format=ts\|m3u8` | Liens directs fournisseur — **contient tes identifiants** |
-| `/get.php` | Alias de `/playlist.m3u` (ce n'est pas une API Xtream complète) |
-| `/stream/<id>.ts` | Relais MPEG-TS sans transcodage |
-| `/epg.xml` · `/xmltv.php` | Guide de toutes les chaînes (XMLTV fournisseur en cache, complété par l'API pour les chaînes des playlists personnalisées) |
-| `/health` | Sonde de santé (utilisée par le `HEALTHCHECK` Docker) |
-| `…?refresh=1` | Force la relecture du catalogue fournisseur |
+| `/p/<nom>.m3u` | Playlist personnalisée (URL permanente) |
+| `/p/<nom>.xml` | Guide de la playlist |
+| `/player_api.php` | Serveur Xtream local (identifiants d'appareil) |
+| `/get.php?username=…&password=…` | Playlist de l'appareil ; sans identifiants : playlist complète |
+| `/xmltv.php` · `/epg.xml` | Guide complet (avec identifiants d'appareil : guide de sa playlist) |
+| `/playlist.m3u` | Toutes les chaînes ; `?content=vod` films ; `?format=m3u8` HLS ; `?mode=direct` liens fournisseur (**identifiants visibles**) |
+| `/stream/<id>.ts` · `/hls/<id>.m3u8` | Direct (MPEG-TS / HLS) |
+| `/movie/<id>.<ext>` · `/series/<id>.<ext>` | Film / épisode (Range transmis : avance rapide) |
+| `/timeshift/<id>.ts?start=<epoch>&end=<epoch>` | Replay |
+| `/health` | Sonde de santé |
+
+`?token=` : `ACCESS_TOKEN` ou code d'un appareil (exigé si `ACCESS_TOKEN` est défini ou si l'option « exiger un code » est active).
 
 ## Variables d'environnement
 
 | Variable | Défaut | Description |
 |---|---|---|
 | `XTREAM_URL` | **obligatoire** | Adresse de base du fournisseur, ex. `http://serveur:8080` (un `…/player_api.php` collé est accepté) |
-| `XTREAM_USERNAME` | **obligatoire** | Identifiant fournisseur |
-| `XTREAM_PASSWORD` | **obligatoire** | Mot de passe fournisseur |
+| `XTREAM_USERNAME` / `XTREAM_PASSWORD` | **obligatoires** | Identifiants fournisseur |
+| `XTREAM_NAME` | vide | Nom affiché du fournisseur principal |
+| `XTREAM_URL_2…9`, `XTREAM_USERNAME_n`, `XTREAM_PASSWORD_n`, `XTREAM_NAME_n` | vide | Abonnements supplémentaires |
 | `DATA_PATH` | `./data` | (Compose) dossier hôte monté sur `/data` |
-| `WEB_PASSWORD` | vide | Active l'authentification HTTP Basic sur le port 7778 |
-| `WEB_USERNAME` | `admin` | Utilisateur de l'interface Web |
-| `ACCESS_TOKEN` | vide | Exige `?token=…` sur le port 7777 (ajouté automatiquement aux liens générés) |
+| `WEB_PASSWORD` / `WEB_USERNAME` | vide / `admin` | Authentification HTTP Basic de l'interface (port 7778) |
+| `ACCESS_TOKEN` | vide | Code global exigé sur le port 7777 |
 | `PUBLIC_BASE_URL` | auto | Adresse écrite dans les playlists, ex. `http://192.168.1.10:7777` |
-| `ENABLE_EPG` | `true` | Guide XMLTV (`xmltv.php` du fournisseur) |
-| `EPG_CACHE_HOURS` | `12` | Durée de cache du guide XMLTV sur disque |
-| `EPG_SOURCE` | `auto` | `auto` (xmltv.php + API pour les chaînes manquantes), `xmltv` (xmltv.php seul), `api` (API seule) |
-| `EPG_URL` | vide | Guide XMLTV externe (http(s), `.xml` ou `.xml.gz`) à utiliser à la place de `xmltv.php` |
-| `EPG_API_MAX_CHANNELS` | `1000` | Nombre maximal de chaînes complétées par l'API dans le guide complet `/xmltv.php` |
-| `EPG_FETCH_SECONDS` | `15` | Temps maximal passé à compléter le guide par l'API lors d'une demande de `/p/<nom>.xml` |
-| `CACHE_SECONDS` | `1800` | Durée de cache des catalogues (direct, films, séries) en mémoire |
-| `SERIES_CACHE_HOURS` | `24` | Durée de cache disque des épisodes (`/data/cache/series`) |
-| `SERIES_FETCH_SECONDS` | `20` | Temps maximal passé à récupérer des épisodes manquants lors d'une demande de playlist |
-| `XTREAM_USER_AGENT` | `XtreamM3ULocal/2.x` | User-Agent envoyé au fournisseur (si celui-ci filtre les applications) |
+| `MAX_CONNECTIONS` | `auto` | Connexions simultanées : `auto` (abonnement), `0` (illimité) ou un nombre |
+| `STREAM_TAKEOVER` | `true` | Limite atteinte : couper le flux le plus ancien (`true`) ou refuser (`false`) |
+| `PROVIDER_TIMEZONE` | auto | Fuseau du serveur Xtream pour le replay (ex. `Europe/Paris`) |
+| `ENABLE_EPG` | `true` | Guide des programmes |
+| `EPG_SOURCE` | `auto` | `auto`, `xmltv` ou `api` |
+| `EPG_URL` | vide | Guide XMLTV externe à la place de `xmltv.php` |
+| `EPG_CACHE_HOURS` / `EPG_FETCH_SECONDS` / `EPG_API_MAX_CHANNELS` | `12` / `15` / `1000` | Cache du XMLTV, temps max de complément API par requête, chaînes max complétées dans le guide complet |
+| `CACHE_SECONDS` | `1800` | Cache des catalogues |
+| `SERIES_CACHE_HOURS` / `SERIES_FETCH_SECONDS` | `24` / `20` | Cache des épisodes, temps max de récupération par requête |
+| `XTREAM_USER_AGENT` | `XtreamM3ULocal/3.x` | User-Agent envoyé au fournisseur |
 | `PUID` / `PGID` | `99` / `100` | Propriétaire des fichiers de `/data` (nobody/users sur Unraid) |
-| `TZ` | `Europe/Paris` | Fuseau horaire des journaux |
-| `PORT` / `WEB_PORT` / `DATA_DIR` | `7777` / `7778` / `/data` | Ports et dossier **dans** le conteneur (à ne pas changer en général) |
+| `TZ` | `Europe/Paris` | Fuseau des journaux |
 
 ## Vérification
+
+Le plus simple : **Système → Lancer le diagnostic** (API, catalogues, guide, flux TS et HLS, film, épisode, replay ; tests de flux ignorés si une lecture est en cours). En ligne de commande :
 
 ```bash
 curl -i http://IP_UNRAID:7777/health
 curl -s http://IP_UNRAID:7777/p/salon.m3u | head -n 5
-curl -s http://IP_UNRAID:7778/api/catalog?refresh=1 | head -c 600
-curl --max-time 5 -o /dev/null -w '%{http_code} %{size_download}\n' http://IP_UNRAID:7777/stream/12345.ts
+curl -s "http://IP_UNRAID:7777/player_api.php?username=tv-du-salon&password=CODE" | head -c 300
 ```
-
-Si les liens d'une playlist utilisent une mauvaise adresse, définir `PUBLIC_BASE_URL=http://IP_UNRAID:7777` puis recréer le conteneur.
 
 ## Sécurité et limites
 
-- **Réseau local uniquement.** Ne redirige pas 7777/7778 vers Internet. Sur un réseau partagé : `WEB_PASSWORD` (gestion) et `ACCESS_TOKEN` (lecteurs).
-- Les identifiants Xtream restent dans le conteneur : absents des playlists (mode proxy), de l'API Web, de l'export JSON et des journaux.
-- Protection CSRF de l'API (en-tête dédié + contrôle d'`Origin`), CSP stricte sans script inline, validation de toutes les entrées, écritures atomiques avec copie `playlists.json.bak`.
-- Le conteneur démarre en root uniquement pour corriger les droits de `/data`, puis tourne en UID 99 / GID 100.
-- **Pas de transcodage** : chaque lecture ouvre une connexion chez le fournisseur ; la limite de connexions simultanées de l'abonnement s'applique (erreur 502 explicite si atteinte).
-- Le relais du direct est MPEG-TS uniquement ; le HLS n'est disponible qu'en mode direct (identifiants visibles dans le M3U).
-- **Séries** : Xtream ne donne les épisodes que série par série (`get_series_info`). Ils sont préchargés en arrière-plan dès l'enregistrement de la playlist et mis en cache 24 h sur disque. Avec beaucoup de séries, le premier chargement peut être incomplet (en-tête `X-Series-Pending`) : recharger la playlist dans le lecteur quelques minutes plus tard.
-- Une grosse VOD (dizaines de milliers de films) produit un M3U volumineux : préférer des playlists ciblées par catégories.
+- **Réseau local uniquement.** Ne redirige pas 7777/7778 vers Internet. Sur un réseau partagé : `WEB_PASSWORD` (gestion) et l'option « exiger un code d'appareil » (lecteurs).
+- Les identifiants Xtream restent dans le conteneur : absents des playlists (hors `mode=direct`), des manifestes HLS, de l'API Web, des exports et sauvegardes, des journaux et du diagnostic.
+- `devices.json` contient les codes d'appareils (droits 0600). Protection CSRF de l'API, CSP stricte sans script inline, validation de toutes les entrées, écritures atomiques avec copie `.bak`.
+- Démarrage en root uniquement pour corriger les droits de `/data`, puis UID 99 / GID 100.
+- Pas de transcodage : chaque lecture utilise une connexion chez le fournisseur.
 
 ## Développement
 
 ```bash
-python -m unittest discover -s tests -t . -v      # 93 tests, faux fournisseur Xtream local
-python -m tools.demo                               # démo sans abonnement : chaînes, films et séries fictifs
-node tests/e2e_browser.mjs http://127.0.0.1:7778   # scénario navigateur (Playwright pour Node)
+python -m unittest discover -s tests -t . -v      # tests (faux fournisseurs Xtream locaux)
+python -m tools.demo                               # démo sans abonnement : chaînes, films, séries, guide, flux factices
+node tests/e2e_browser.mjs http://127.0.0.1:7778   # scénario navigateur complet (Playwright pour Node)
 ```
 
-Python 3.13, bibliothèque standard uniquement ; interface HTML/CSS/JS sans framework ni CDN.
-Voir `PASSATION_IA.md` pour l'architecture détaillée, les décisions et l'état du projet.
+Python 3.13, bibliothèque standard uniquement ; interface HTML/CSS/JS sans framework ni CDN. GitHub Actions : tests et image multi-architecture en parallèle, étiquettes `latest` / version ajoutées seulement si les tests passent ; Dependabot hebdomadaire.
+Historique : `CHANGELOG.md`. Architecture, décisions et état : `PASSATION_IA.md`.
 
 ## Licence
 

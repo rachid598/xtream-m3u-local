@@ -1,5 +1,8 @@
 name: Tests et image Docker (GHCR)
 
+# Tests et construction de l'image en parallèle. L'image est d'abord poussée sous l'étiquette
+# « sha-<commit> » uniquement ; les étiquettes « latest » / version ne lui sont ajoutées (sans
+# reconstruction) que si les tests ont réussi.
 on:
   push:
     branches: ["**"]
@@ -10,6 +13,15 @@ on:
 permissions:
   contents: read
   packages: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  IMAGE: ghcr.io/${{ github.repository }}
+  # Publication depuis la branche par défaut ou un tag v* (jamais depuis une pull request).
+  PUBLISH: ${{ github.event_name != 'pull_request' && (github.ref == format('refs/heads/{0}', github.event.repository.default_branch) || startsWith(github.ref, 'refs/tags/v')) }}
 
 jobs:
   test:
@@ -27,12 +39,10 @@ jobs:
         run: |
           ! git grep -nIE '[?&](username|password)=[A-Za-z0-9]{6,}' -- ':!tests' ':!*.md' || { echo "Identifiant suspect"; exit 1; }
 
-  docker:
-    needs: test
+  build:
     runs-on: ubuntu-latest
-    env:
-      # Publication uniquement depuis la branche par défaut ou un tag v* (jamais depuis une PR).
-      PUBLISH: ${{ github.event_name != 'pull_request' && (github.ref == format('refs/heads/{0}', github.event.repository.default_branch) || startsWith(github.ref, 'refs/tags/v')) }}
+    outputs:
+      candidate: ${{ steps.candidate.outputs.ref }}
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-qemu-action@v3
@@ -44,23 +54,59 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Étiquette candidate
+        id: candidate
+        run: echo "ref=${IMAGE,,}:sha-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
       - name: Métadonnées
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ github.repository }}
-          tags: |
-            type=raw,value=latest,enable={{is_default_branch}}
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=sha,prefix=sha-
-      - name: Construction (amd64 + arm64) et publication
+          images: ${{ env.IMAGE }}
+      - name: Construction (amd64 + arm64)
         uses: docker/build-push-action@v6
         with:
           context: .
           platforms: linux/amd64,linux/arm64
           push: ${{ env.PUBLISH == 'true' }}
-          tags: ${{ steps.meta.outputs.tags }}
+          tags: ${{ steps.candidate.outputs.ref }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  release:
+    needs: [test, build]
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publication non demandée pour cette branche
+        if: env.PUBLISH != 'true'
+        run: echo "Image testée mais non publiée (branche non par défaut)."
+      - uses: docker/setup-buildx-action@v3
+        if: env.PUBLISH == 'true'
+      - name: Connexion à GHCR
+        if: env.PUBLISH == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Étiquettes finales
+        if: env.PUBLISH == 'true'
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+      - name: Promotion de l'image testée (sans reconstruction)
+        if: env.PUBLISH == 'true' && steps.meta.outputs.tags != ''
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}
+          CANDIDATE: ${{ needs.build.outputs.candidate }}
+        run: |
+          args=()
+          while IFS= read -r tag; do [ -n "$tag" ] && args+=(-t "${tag,,}"); done <<< "$TAGS"
+          docker buildx imagetools create "${args[@]}" "$CANDIDATE"

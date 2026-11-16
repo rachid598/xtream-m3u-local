@@ -19,6 +19,10 @@ services:
       # WEB_PASSWORD: "mot-de-passe-interface"   # protège le port 7778 (utilisateur : admin)
       # ACCESS_TOKEN: "jeton-lecteurs"           # exige ?token=... sur le port 7777
       # PUBLIC_BASE_URL: "http://192.168.1.10:7777"
+      # MAX_CONNECTIONS: "auto"                  # auto | 0 (illimité) | nombre
+      # XTREAM_URL_2: "http://autre:8080"        # 2e abonnement (facultatif)
+      # XTREAM_USERNAME_2: ""
+      # XTREAM_PASSWORD_2: ""
       # EPG_SOURCE: "auto"                       # auto | xmltv | api
       # EPG_URL: "https://exemple/guide.xml.gz"  # guide XMLTV externe (facultatif)
       TZ: "Europe/Paris"

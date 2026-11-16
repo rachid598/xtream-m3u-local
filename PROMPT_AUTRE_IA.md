@@ -1,14 +1,14 @@
 # Prompt à transmettre à l'IA suivante
 
-Tu reprends le projet existant **Xtream M3U Local** (version 2.3.1). **Commence par lire `PASSATION_IA.md`, puis `README.md` et le code (`app/`, `tests/`). Ne repars pas de zéro.**
+Tu reprends le projet existant **Xtream M3U Local** (version 3.0.0). **Commence par lire `PASSATION_IA.md`, puis `README.md` et le code (`app/`, `tests/`). Ne repars pas de zéro.**
 
 ## Contexte
 
 Serveur Unraid « Tower » (appdata sur pool NVMe), abonnement Xtream Codes valide : `player_api.php` fonctionne et la lecture directe `/live/USER/PASS/ID.ts` aussi, mais `get.php` ne donne pas de playlist. Le projet reconstruit les playlists depuis l'API Xtream :
 
 - **un seul conteneur Docker**, Python 3.13 bibliothèque standard, interface HTML/CSS/JS sans framework ;
-- **port 7777** : `/p/<nom>.m3u` (playlists personnalisées à URL permanente : TV en direct, films et séries), `/p/<nom>.xml` (EPG filtré), `/playlist.m3u`, `/stream/<id>.ts`, `/movie/<id>.<ext>`, `/series/<id>.<ext>`, `/epg.xml` ;
-- **port 7778** : interface Web en français, responsive — vue « Mes playlists » (sélecteur direct/films/séries, catégories, éléments, inclusions/exclusions, ordre et noms de groupes, plusieurs playlists) et vue « Catalogue fournisseur » (lecture seule, ordre/IDs/`parent_id` d'origine, export JSON) ;
+- **port 7777** : `/p/<nom>.m3u` (playlists personnalisées à URL permanente : TV en direct, films et séries, TS ou HLS, replay), `/p/<nom>.xml` (EPG complété par l'API), serveur Xtream local `player_api.php` par appareil, relais TS/HLS/VOD avec limite de connexions ;
+- **port 7778** : interface Web en français, responsive — vues « Mes playlists » (direct/films/séries, règles, favoris, noms, numéros, doublons, inclusions/exclusions, ordre et noms de groupes, plusieurs playlists) « Catalogue fournisseur » (lecture seule, export JSON), « Appareils » (codes et identifiants Xtream locaux) et « Système » (lectures en cours, diagnostic, sauvegarde) ;
 - données dans `/data/playlists.json` ; configuration Xtream uniquement par variables d'environnement (Compose / `.env` / template Unraid).
 
 ## Règles

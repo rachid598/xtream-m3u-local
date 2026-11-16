@@ -19,7 +19,7 @@ XTREAM_PASSWORD=<<XTREAM_PASSWORD>>
 
 ## Paramètres fixes
 REPO=https://github.com/rachid598/xtream-m3u-local
-BRANCH=main            # si « main » n'existe pas encore : claude/wizardly-keller-bd38ld (branche par défaut actuelle)
+BRANCH=main            # (ou le tag de version publié, ex. v3.0.0)
 PORTS : 7777 (playlists/lecteurs) et 7778 (interface Web) — ne pas les changer
 CONTENEUR : xtream-m3u-local
 
@@ -102,6 +102,16 @@ Puis attendre 20 s et vérifier :
    curl -s http://IP:7777/p/test-vod.m3u | grep -E '/(movie|series)/' | head -n 4   → liens /movie/<id>.<ext> et /series/<id>.<ext>
    Tester un film : curl -s -r 0-1048575 -o /dev/null -w '%{http_code} %{size_download}\n' "<URL /movie/...>"   → 206 (ou 200) et ~1 Mo
    Supprimer ensuite la playlist test-vod (DELETE comme à l'étape 11).
+8c. Diagnostic intégré (teste API, catalogues, guide, flux TS/HLS, film, épisode, replay ; rien ne doit être en lecture) :
+   curl -s -X POST -H 'X-Requested-With: XtreamM3ULocal' http://IP:7778/api/diagnostic
+   → recopier dans le rapport chaque ligne "label / status / detail" (aucun secret n'y figure).
+8d. Serveur Xtream local : créer un appareil de test lié à test-hermes :
+   curl -s -X POST http://IP:7778/api/devices -H 'X-Requested-With: XtreamM3ULocal' -H 'Content-Type: application/json' \
+     -d '{"name":"Test Hermès","playlist":"test-hermes"}'
+   → noter "username" et "password" (codes LOCAUX, pas ceux du fournisseur), puis :
+   curl -s "http://IP:7777/player_api.php?username=<username>&password=<password>" | head -c 300     → "auth":1
+   curl -s "http://IP:7777/player_api.php?username=<username>&password=<password>&action=get_live_streams" | head -c 300
+   Supprimer ensuite l'appareil : curl -s -X DELETE http://IP:7778/api/devices/<id> -H 'X-Requested-With: XtreamM3ULocal'
 9. Persistance : `docker restart xtream-m3u-local` (ou `docker compose down && docker compose up -d`, SANS -v),
    attendre 15 s, puis vérifier que http://IP:7777/p/test-hermes.m3u répond toujours 200
    et que $DATA_DIR/playlists.json existe (propriétaire 99:100).
@@ -126,6 +136,7 @@ Puis attendre 20 s et vérifier :
     Exemple de playlist : http://IP:7777/p/salon.m3u (à créer dans l'interface)
     Playlist complète : http://IP:7777/playlist.m3u
 - Commandes de mise à jour :  cd INSTALL_DIR && git pull && docker compose up -d --build
+- Résultats du diagnostic intégré (8c) et du test Xtream local (8d).
 - Problèmes rencontrés et actions restant à faire.
 ```
 
