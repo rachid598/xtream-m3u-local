@@ -2,6 +2,16 @@
 
 Format inspiré de « Keep a Changelog ». Les versions suivent le versionnage sémantique.
 
+## [3.1.0] — 2026-11-16
+
+### Ajouté
+- **Mes groupes de chaînes** : groupes personnalisés du direct (« TNT », « Canal+ »…) placés en tête de la playlist, dans le M3U, le guide et le mode Xtream.
+  - Remplissage automatique par noms de chaînes (`custom_groups[].patterns`, correspondance « contient » ou « exacte ») insensible au préfixe de pays, aux accents et à la qualité ; ordre du groupe = ordre des noms.
+  - Rangement manuel par chaîne avec 📁 (`item_groups`), y compris « rester dans le groupe d'origine ».
+  - Modèles : TNT, Canal+, Sport, Info, Cinéma, Jeunesse, Documentaires ; bouton « + Nouveau groupe en premier ».
+  - Les doublons SD/HD/4K sont dédoublonnés à l'intérieur des groupes perso ; filtre « Rangées dans mes groupes ».
+- Démo : quelques chaînes françaises réelles (TF1, France 2, Canal+…) pour essayer les modèles.
+
 ## [3.0.1] — 2026-11-16
 
 Retour du premier diagnostic réel (47 408 chaînes, `xmltv.php` du fournisseur en erreur HTTP 502).

@@ -42,6 +42,9 @@
     itemNames: {},           // noms personnalisés {clé: nom}
     itemNumbers: {},         // numéros des chaînes du direct {id: numéro}
     hiddenCache: null,       // doublons masqués (calculé à la demande)
+    customGroups: [],        // groupes perso du direct [{id, name, match: words|exact, patterns}]
+    itemGroups: {},          // rangements manuels {id_chaîne: id_groupe | "-" (groupe d'origine)}
+    groupCache: null,        // chaînes rangées dans les groupes perso (calculé à la demande)
   };
   // Raccourcis vers le catalogue et la sélection du type affiché (state.categories, state.selected…).
   for (const key of ['categories', 'categoryNames', 'channels', 'channelById', 'channelsByCat', 'catalogLoaded', 'categoriesError']) {
@@ -55,6 +58,10 @@
 
   /** Libellé d'origine d'un groupe de playlist ("12", "vod:3", "series:7"). */
   function groupInfo(key) {
+    if (key.startsWith(CG)) {
+      const group = state.customGroups.find((g) => CG + g.id === key);
+      return { kind: 'live', id: key, name: group ? group.name : 'Groupe supprimé', custom: true };
+    }
     for (const kind of ['vod', 'series']) {
       if (key.startsWith(KIND[kind].prefix)) {
         const id = key.slice(KIND[kind].prefix.length);
@@ -137,7 +144,7 @@
   }
   function clearError() { $('alert').hidden = true; }
 
-  function ask({ title, text, okLabel = 'Confirmer', danger = false, input = null, input2 = null }) {
+  function ask({ title, text, okLabel = 'Confirmer', danger = false, input = null, input2 = null, select = null }) {
     const dialog = $('dialog');
     $('dialog-title').textContent = title;
     $('dialog-text').textContent = text || '';
@@ -153,7 +160,13 @@
       $('dialog-label2').textContent = input2.label;
       $('dialog-input2').value = input2.value || '';
     }
+    $('dialog-field3').hidden = !select;
+    if (select) {
+      $('dialog-label3').textContent = select.label;
+      $('dialog-select').replaceChildren(...select.options.map(([value, label]) => h('option', { value, text: label, selected: value === select.value })));
+    }
     if (typeof dialog.showModal !== 'function') {
+      if (select) return Promise.resolve(null);
       // Navigateur très ancien : repli sur les boîtes natives.
       if (input && input2) {
         const value = window.prompt(`${title}\n${input.label}`, input.value || '');
@@ -166,11 +179,13 @@
       dialog.returnValue = 'cancel';
       dialog.addEventListener('close', () => {
         if (dialog.returnValue !== 'ok') return resolve(null);
-        if (input2) resolve({ value: $('dialog-input').value, value2: $('dialog-input2').value });
+        if (select) resolve($('dialog-select').value);
+        else if (input2) resolve({ value: $('dialog-input').value, value2: $('dialog-input2').value });
         else resolve(input ? $('dialog-input').value : true);
       }, { once: true });
       dialog.showModal();
       if (input) $('dialog-input').select();
+      else if (select) $('dialog-select').focus();
     });
   }
 
@@ -203,6 +218,84 @@
   /** Fausse chaîne servant de titre de section (même règle que le serveur). */
   const isSeparator = (name) => { const t = String(name || '').trim(); return !t || SEPARATOR.test(t) || !/[\p{L}\p{N}]/u.test(t); };
   const squash = (text) => norm(text).split(/\s+/).filter(Boolean).join(' ');
+
+  // ------------------------------------------- groupes personnalisés (même règle que app/builder.py)
+  const CG = 'g:';
+  const COUNTRY = /^[^\p{L}\p{N}_]*[A-Za-z]{2}\s*[:|\-\]●•»◉]+\s*/u;
+  /** Nom comparable : sans pays (« FR: »), accents, ponctuation ni qualité. « FR: TF1 FHD » → « tf1 ». */
+  function matchName(name) {
+    let text = String(name || '').replace(COUNTRY, '').normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase();
+    text = text.replace(/[^\p{L}\p{N}+&]+/gu, ' ').replace(/\s+\+/g, '+');
+    let tokens = text.split(/\s+/).filter(Boolean);
+    if (tokens.length > 1 && (tokens[0] === 'fr' || tokens[0] === 'fra')) tokens = tokens.slice(1);
+    return tokens.join(' ').replace(QUALITY_TAGS, ' ').split(/\s+/).filter(Boolean).join(' ');
+  }
+  const PRESETS = [
+    { name: 'TNT', match: 'exact', hint: 'Chaînes gratuites de la TNT, dans l\'ordre de leurs numéros',
+      patterns: ['TF1', 'France 2', 'France 3', 'Canal+', 'France 5', 'M6', 'Arte', 'C8', 'W9', 'TMC', 'TFX', 'NRJ 12', 'NRJ12',
+        'LCP', 'Public Sénat', 'France 4', 'BFM TV', 'BFMTV', 'CNews', 'CStar', 'C Star', 'Gulli', 'TF1 Séries Films',
+        'L\'Équipe', 'La chaîne L\'Équipe', '6ter', 'RMC Story', 'RMC Découverte', 'Chérie 25', 'LCI', 'franceinfo',
+        'France Info', 'T18', 'Novo19', 'Novo 19'] },
+    { name: 'Canal+', match: 'words', hint: 'Toutes les chaînes dont le nom contient Canal+',
+      patterns: ['Canal+', 'Canal plus'] },
+    { name: 'Sport', match: 'words', hint: 'beIN, RMC Sport, Eurosport, Canal+ Sport…',
+      patterns: ['beIN Sports', 'beIN Sport', 'RMC Sport', 'Eurosport', 'Canal+ Sport', 'Canal+ Foot', 'L\'Équipe', 'Infosport+',
+        'Golf+', 'Automoto', 'DAZN', 'Sport en France', 'Equidia'] },
+    { name: 'Info', match: 'words', hint: 'Chaînes d\'information',
+      patterns: ['BFM TV', 'BFMTV', 'CNews', 'LCI', 'franceinfo', 'France Info', 'France 24', 'Euronews', 'BFM Business', 'i24News',
+        'LCP', 'Public Sénat'] },
+    { name: 'Cinéma', match: 'words', hint: 'Canal+ Cinéma, Ciné+, OCS, TCM…',
+      patterns: ['Canal+ Cinéma', 'Ciné+', 'OCS', 'TCM Cinéma', 'Paramount Channel', 'Polar+'] },
+    { name: 'Jeunesse', match: 'words', hint: 'Gulli, Disney, Nickelodeon…',
+      patterns: ['Gulli', 'TiJi', 'Canal J', 'Disney Channel', 'Disney Junior', 'Nickelodeon', 'Nick Jr', 'Boomerang',
+        'Cartoon Network', 'Cartoonito', 'Piwi+', 'Boing', 'Mangas', 'Game One'] },
+    { name: 'Documentaires', match: 'words', hint: 'Planète+, National Geographic, Discovery…',
+      patterns: ['Planète+', 'National Geographic', 'Nat Geo', 'Discovery', 'Histoire TV', 'Toute l\'Histoire', 'Ushuaïa TV',
+        'Science et Vie TV', 'RMC Découverte', 'Animaux', 'Seasons', 'Trek', 'Museum TV'] },
+  ];
+
+  /** Groupes perso par priorité : ordre des groupes de la playlist, puis ordre de création. */
+  function orderedCustomGroups() {
+    const rank = new Map(state.groupOrder.map((k, i) => [k, i]));
+    return state.customGroups.map((g, i) => ({ g, i }))
+      .sort((a, b) => (rank.get(CG + a.g.id) ?? 1e9) - (rank.get(CG + b.g.id) ?? 1e9) || a.i - b.i)
+      .map(({ g }) => {
+        const patterns = [...new Set((g.patterns || []).map(matchName).filter(Boolean))];
+        return { ...g, _patterns: patterns, _exact: new Map(patterns.map((p, i) => [p, i]).reverse()) };
+      });
+  }
+
+  function groupMatches(core, group) {
+    if (group.match === 'exact') return group._exact.has(core);
+    const padded = ` ${core} `;
+    return group._patterns.some((p) => padded.includes(` ${p} `));
+  }
+
+  /** Chaînes retenues rangées dans un groupe perso : Map id → id du groupe. */
+  function groupAssignment() {
+    if (state.groupCache) return state.groupCache;
+    const result = new Map();
+    const groups = orderedCustomGroups();
+    if (groups.length) {
+      const known = new Set(groups.map((g) => g.id));
+      const sel = state.sel.live;
+      const separators = $('opt-separators').checked;
+      for (const c of state.cat.live.channels) {
+        if (sel.excluded.has(c.stream_id)) continue;
+        if (!sel.included.has(c.stream_id) && !c.category_ids.some((id) => catOn('live', id))) continue;
+        if (separators && isSeparator(c.name)) continue;
+        const manual = state.itemGroups[c.stream_id];
+        if (manual === '-') continue;
+        if (manual && known.has(manual)) { result.set(c.stream_id, manual); continue; }
+        if (c._core === undefined) c._core = matchName(c.name);
+        const group = groups.find((g) => g._patterns.length && groupMatches(c._core, g));
+        if (group) result.set(c.stream_id, group.id);
+      }
+    }
+    state.groupCache = result;
+    return result;
+  }
+  const customName = (id) => (state.customGroups.find((g) => g.id === id) || {}).name || id;
   function qualityOf(name) {
     const n = squash(name);
     for (const [re, score] of QUALITY) if (re.test(n)) return score;
@@ -245,7 +338,8 @@
       if (group == null) continue;
       if (separators && isSeparator(c.name)) { kept.push(c.stream_id); continue; }
       if (!dedupe) { best.set(`id\u0000${c.stream_id}`, { q: 0, id: c.stream_id }); kept.push(c.stream_id); continue; }
-      const key = `${group}\u0000${baseName(c.name)}`;
+      const custom = groupAssignment().get(c.stream_id);
+      const key = `${custom ? CG + custom : group}\u0000${baseName(c.name)}`;
       const q = qualityOf(c.name);
       const current = best.get(key);
       if (!current || q > current.q) best.set(key, { q, id: c.stream_id });
@@ -297,12 +391,17 @@
     data.item_numbers = sortedObject(state.itemNumbers);
     data.group_order = [...state.groupOrder];
     data.group_names = cleanGroupNames();
+    data.custom_groups = state.customGroups.map((g) => ({ id: g.id, name: String(g.name || '').trim() || g.id, match: g.match,
+      patterns: [...new Set((g.patterns || []).map((p) => String(p).trim()).filter(Boolean))] }));
+    const known = new Set(state.customGroups.map((g) => g.id));
+    data.item_groups = sortedObject(Object.fromEntries(Object.entries(state.itemGroups).filter(([, v]) => v === '-' || known.has(v))));
     return data;
   }
 
   function cleanGroupNames() {
     const result = {};
     for (const id of Object.keys(state.groupNames).sort()) {
+      if (id.startsWith(CG)) continue;  // les groupes perso portent leur propre nom
       const name = String(state.groupNames[id] || '').trim();
       if (name && name !== groupInfo(id).name) result[id] = name.slice(0, 100);
     }
@@ -672,6 +771,7 @@
         case 'excluded': return state.excluded.has(c.stream_id);
         case 'favorites': return state.favorites.includes(keyOf(c));
         case 'custom': return Boolean(state.itemNames[keyOf(c)] || (state.kind === 'live' && state.itemNumbers[c.stream_id]));
+        case 'grouped': return state.kind === 'live' && groupAssignment().has(c.stream_id);
         default: return true;
       }
     });
@@ -740,6 +840,9 @@
     const badges = [];
     if (state.included.has(c.stream_id)) badges.push(h('span', { class: 'badge ok', text: K().added }));
     if (state.excluded.has(c.stream_id)) badges.push(h('span', { class: 'badge danger', text: K().excludedLabel }));
+    const grouped = state.kind === 'live' ? groupAssignment().get(c.stream_id) : null;
+    if (grouped) badges.push(h('span', { class: 'badge grp', text: `📁 ${customName(grouped)}`,
+      title: state.itemGroups[c.stream_id] ? 'Rangée à la main dans ce groupe' : 'Rangée automatiquement (nom correspondant)' }));
     if (c.epg) badges.push(h('span', { class: 'badge opt', text: 'EPG', title: 'Identifiant EPG disponible' }));
     if (c.archive) badges.push(h('span', { class: 'badge opt', text: `Replay ${c.archive} j`, title: 'Programmes passés disponibles (catch-up)' }));
     if (state.kind === 'live' && hiddenDuplicates().has(c.stream_id)) {
@@ -778,6 +881,9 @@
   function itemActions(c) {
     const fav = state.favorites.includes(keyOf(c));
     return h('span', { class: 'item-actions' },
+      state.kind === 'live' ? h('button', { type: 'button', class: 'item-btn', text: '📁', title: 'Ranger dans un de mes groupes',
+        'aria-label': `Ranger ${displayName(c)} dans un groupe`,
+        onclick: (event) => { event.preventDefault(); event.stopPropagation(); moveToGroup(c); } }) : null,
       h('button', { type: 'button', class: `item-btn${fav ? ' fav-on' : ''}`, text: fav ? '★' : '☆',
         title: fav ? 'Retirer des favoris' : 'Ajouter aux favoris', 'aria-label': `${fav ? 'Retirer' : 'Ajouter'} ${displayName(c)} ${fav ? 'des' : 'aux'} favoris`,
         onclick: (event) => { event.preventDefault(); event.stopPropagation(); toggleFavorite(c); refresh(); } }),
@@ -822,7 +928,8 @@
         if (sel.excluded.has(c.stream_id) || (kind === 'live' && hiddenDuplicates().has(c.stream_id))) continue;
         const inCat = c.category_ids.find((id) => catOn(kind, id));
         if (!inCat && !sel.included.has(c.stream_id)) continue;
-        const key = KIND[kind].prefix + (inCat || c.category_id);
+        const custom = kind === 'live' ? groupAssignment().get(c.stream_id) : null;
+        const key = custom ? CG + custom : KIND[kind].prefix + (inCat || c.category_id);
         groups.set(key, (groups.get(key) || 0) + 1);
       }
     }
@@ -833,6 +940,7 @@
     // Ordre par défaut : direct, puis films, puis séries, chacun dans l'ordre du fournisseur.
     const provider = new Map();
     KINDS.forEach((kind, k) => state.cat[kind].categories.forEach((cat, i) => provider.set(KIND[kind].prefix + cat.category_id, k * 1e6 + i)));
+    orderedCustomGroups().forEach((g, i) => provider.set(CG + g.id, -1e3 + i));  // groupes perso d'abord
     const custom = new Map(state.groupOrder.map((id, i) => [id, i]));
     const rank = (id) => (custom.has(id) ? [0, custom.get(id)] : [custom.size ? 1 : 0, provider.get(id) ?? 1e9]);
     return [...groups.keys()].sort((a, b) => {
@@ -860,16 +968,23 @@
     order.forEach((id, index) => {
       const info = groupInfo(id);
       const original = info.name;
-      const input = h('input', { type: 'text', maxlength: '100', value: state.groupNames[id] || '', placeholder: original,
-        'aria-label': `Nom du groupe ${original} dans cette playlist`, class: state.groupNames[id] ? 'renamed' : null });
+      const group = info.custom ? state.customGroups.find((g) => CG + g.id === id) : null;
+      const input = group
+        ? h('input', { type: 'text', maxlength: '100', value: group.name, placeholder: group.name, class: 'renamed',
+          'aria-label': `Nom de mon groupe ${original}` })
+        : h('input', { type: 'text', maxlength: '100', value: state.groupNames[id] || '', placeholder: original,
+          'aria-label': `Nom du groupe ${original} dans cette playlist`, class: state.groupNames[id] ? 'renamed' : null });
       input.addEventListener('input', () => {
+        if (group) { if (input.value.trim()) group.name = input.value.trim(); renderStats(); return; }
         state.groupNames[id] = input.value;
         input.classList.toggle('renamed', Boolean(input.value.trim()));
         renderStats();
       });
+      if (group) input.addEventListener('change', () => { input.value = group.name; renderCustomGroups(); });
       gl.append(h('li', { class: 'group-row' },
         h('span', { class: 'pos', text: String(index + 1) }),
-        h('span', { class: `kind-tag ${info.kind}`, text: KIND[info.kind].label, title: `Groupe de ${KIND[info.kind].many}` }),
+        group ? h('span', { class: 'kind-tag mine', text: '📁 Perso', title: 'Mon groupe (rempli par les noms de chaînes et les rangements 📁)' })
+          : h('span', { class: `kind-tag ${info.kind}`, text: KIND[info.kind].label, title: `Groupe de ${KIND[info.kind].many}` }),
         input,
         h('span', { class: 'num', text: groups.get(id).toLocaleString('fr-FR'), title: KIND[info.kind].title }),
         h('button', { type: 'button', class: 'icon-btn', text: '↑', title: 'Monter', 'aria-label': `Monter ${original}`, disabled: index === 0, onclick: () => moveGroup(order, index, -1) }),
@@ -895,9 +1010,128 @@
       }
       if (!total) node.append(h('li', { class: 'empty', text: emptyText }));
     };
+    renderCustomGroups();
     fill($('sum-included'), 'included', 'Aucun ajout hors catégories.');
     fill($('sum-excluded'), 'excluded', 'Aucune exclusion.');
     renderCustomSummary();
+  }
+
+  // ------------------------------------------------------- mes groupes
+  const splitPatterns = (text) => [...new Set(String(text).split(/[,;\n]+/).map((p) => p.trim()).filter(Boolean))].slice(0, 300);
+
+  /** Place les groupes perso (dans cet ordre) en tête de l'ordre des groupes de la playlist. */
+  function setCustomOrder(ids) {
+    state.groupOrder = [...ids.map((id) => CG + id), ...state.groupOrder.filter((k) => !k.startsWith(CG))];
+  }
+
+  async function createGroup(preset = null) {
+    let name = preset ? preset.name : await ask({ title: 'Nouveau groupe', text: 'Il sera placé en premier dans la playlist. Tu pourras le remplir avec des noms de chaînes ou en rangeant des chaînes avec 📁.',
+      okLabel: 'Créer', input: { label: 'Nom du groupe (ex. TNT, Mes chaînes, Canal+)', value: '' } });
+    name = String(name || '').trim().slice(0, 100);
+    if (!name) return null;
+    const existing = state.customGroups.find((g) => norm(g.name) === norm(name));
+    if (existing) { toast(`Le groupe « ${existing.name} » existe déjà.`, 'warn'); return existing; }
+    if (state.customGroups.length >= 50) { toast('50 groupes maximum.', 'warn'); return null; }
+    const base = slugify(name).replace(/[^a-z0-9_-]/g, '').slice(0, 36) || 'groupe';
+    let id = base;
+    for (let n = 2; state.customGroups.some((g) => g.id === id); n += 1) id = `${base}-${n}`;
+    const group = { id, name, match: preset ? preset.match : 'words', patterns: preset ? [...preset.patterns] : [] };
+    state.customGroups.push(group);
+    setCustomOrder([id, ...orderedCustomGroups().map((g) => g.id).filter((g) => g !== id)]);
+    refresh();
+    toast(`Groupe « ${name} » ajouté en tête de la playlist.`);
+    return group;
+  }
+
+  async function moveToGroup(c) {
+    const current = state.itemGroups[c.stream_id] || '';
+    const options = [['', 'Automatique (selon les noms de mes groupes)'], ['-', 'Son groupe d\'origine (catégorie du fournisseur)'],
+      ...orderedCustomGroups().map((g) => [g.id, `📁 ${g.name}`]), ['__new', '+ Nouveau groupe en premier…']];
+    const value = await ask({ title: `Ranger « ${displayName(c)} »`, text: 'Groupe de cette chaîne dans la playlist (le catalogue du fournisseur ne change pas).',
+      okLabel: 'Ranger', select: { label: 'Groupe', options, value: current } });
+    if (value === null) return;
+    let target = value;
+    if (value === '__new') {
+      const group = await createGroup();
+      if (!group) return;
+      target = group.id;
+    }
+    if (target) state.itemGroups[c.stream_id] = target; else delete state.itemGroups[c.stream_id];
+    refresh();
+  }
+
+  function groupMembers() {
+    const members = new Map();
+    const byId = state.cat.live.channelById;
+    for (const [sid, gid] of groupAssignment()) {
+      if (!members.has(gid)) members.set(gid, []);
+      const c = byId.get(sid);
+      if (c && !hiddenDuplicates().has(sid)) members.get(gid).push(displayName(c, 'live'));
+    }
+    return members;
+  }
+
+  function previewText(names) {
+    if (!state.cat.live.catalogLoaded) return 'Chargement du catalogue…';
+    if (!names || !names.length) return 'Aucune chaîne retenue pour l\'instant (coche d\'abord les catégories FR, puis ajoute des noms ou range des chaînes avec 📁).';
+    return `${plural(names.length, 'chaîne', 'chaînes')} : ${names.slice(0, 8).join(', ')}${names.length > 8 ? '…' : ''}`;
+  }
+
+  function renderCustomGroups() {
+    const list = $('cg-list');
+    list.replaceChildren();
+    const ordered = orderedCustomGroups();
+    const members = groupMembers();
+    ordered.forEach((info, index) => {
+      const group = state.customGroups.find((g) => g.id === info.id);
+      const count = h('span', { class: 'num', text: String((members.get(group.id) || []).length) });
+      const preview = h('p', { class: 'hint cg-preview', text: previewText(members.get(group.id)) });
+      const update = () => {
+        state.groupCache = null; state.hiddenCache = null;
+        const names = groupMembers().get(group.id);
+        preview.textContent = previewText(names);
+        count.textContent = String((names || []).length);
+        renderStats();
+      };
+      const name = h('input', { type: 'text', maxlength: '100', value: group.name, 'aria-label': 'Nom du groupe' });
+      name.addEventListener('input', () => { if (name.value.trim()) group.name = name.value.trim(); renderStats(); });
+      name.addEventListener('change', () => { name.value = group.name; refresh(); });
+      const match = h('select', { 'aria-label': `Correspondance du groupe ${group.name}` },
+        h('option', { value: 'words', text: 'Le nom de la chaîne contient l\'un de ces noms', selected: group.match !== 'exact' }),
+        h('option', { value: 'exact', text: 'Le nom de la chaîne est exactement l\'un de ces noms', selected: group.match === 'exact' }));
+      match.addEventListener('change', () => { group.match = match.value; update(); });
+      const patterns = h('textarea', { rows: '2', 'aria-label': `Noms de chaînes du groupe ${group.name}`,
+        placeholder: 'ex. TF1, France 2, M6 — séparés par des virgules (vide = rangement à la main avec 📁)' });
+      patterns.value = (group.patterns || []).join(', ');
+      patterns.addEventListener('input', () => { group.patterns = splitPatterns(patterns.value); update(); });
+      patterns.addEventListener('change', () => refresh());
+      const move = (delta) => {
+        const ids = ordered.map((g) => g.id);
+        const target = index + delta;
+        if (target < 0 || target >= ids.length) return;
+        [ids[index], ids[target]] = [ids[target], ids[index]];
+        setCustomOrder(ids);
+        refresh();
+      };
+      const manual = Object.values(state.itemGroups).filter((v) => v === group.id).length;
+      list.append(h('div', { class: 'cg-card' },
+        h('div', { class: 'cg-head' },
+          h('span', { class: 'pos', text: String(index + 1) }),
+          name, count,
+          h('button', { type: 'button', class: 'icon-btn', text: '↑', title: 'Monter', 'aria-label': `Monter ${group.name}`, disabled: index === 0, onclick: () => move(-1) }),
+          h('button', { type: 'button', class: 'icon-btn', text: '↓', title: 'Descendre', 'aria-label': `Descendre ${group.name}`, disabled: index === ordered.length - 1, onclick: () => move(1) }),
+          h('button', { type: 'button', class: 'icon-btn danger', text: '×', title: 'Supprimer ce groupe', 'aria-label': `Supprimer ${group.name}`,
+            onclick: async () => {
+              if (!await ask({ title: `Supprimer le groupe « ${group.name} » ?`, text: 'Ses chaînes retournent dans leur groupe d\'origine (rien n\'est retiré de la playlist).', okLabel: 'Supprimer', danger: true })) return;
+              state.customGroups = state.customGroups.filter((g) => g !== group);
+              state.groupOrder = state.groupOrder.filter((k) => k !== CG + group.id);
+              for (const [sid, gid] of Object.entries(state.itemGroups)) if (gid === group.id) delete state.itemGroups[sid];
+              refresh();
+            } })),
+        h('div', { class: 'cg-body' }, match, patterns, preview,
+          manual ? h('p', { class: 'hint', text: `${plural(manual, 'chaîne rangée', 'chaînes rangées')} à la main avec 📁.` }) : null)));
+    });
+    if (!ordered.length) list.append(h('p', { class: 'empty', text: 'Aucun groupe pour le moment : choisis un modèle (TNT, Canal+…) ou crée un groupe vide puis range tes chaînes avec 📁.' }));
   }
 
   function itemByKey(key) {
@@ -980,6 +1214,7 @@
   function refresh(options = {}) {
     const { channels = true, row = null, channel = null } = options;
     state.hiddenCache = null;
+    state.groupCache = null;
     renderStats();
     if (state.tab === 'categories' || channels === true) { renderCategories(); renderRules(); }
     if (channels === true) renderChannels();
@@ -1036,6 +1271,9 @@
     renderOptionsPill();
     state.groupOrder = p && p.group_order ? [...p.group_order] : [];
     state.groupNames = p && p.group_names ? { ...p.group_names } : {};
+    state.customGroups = p && p.custom_groups ? p.custom_groups.map((g) => ({ ...g, patterns: [...(g.patterns || [])] })) : [];
+    state.itemGroups = p && p.item_groups ? { ...p.item_groups } : {};
+    state.groupCache = null;
     state.slugTouched = Boolean(p);
     $('name').value = p ? p.name : '';
     $('slug').value = p ? p.slug : '';
@@ -1701,6 +1939,11 @@
     pass();
   });
   $('prov-collapse').addEventListener('click', () => document.querySelectorAll('#view-catalog details.tree-node').forEach((d) => { d.open = false; }));
+  $('cg-add').addEventListener('click', () => createGroup());
+  for (const preset of PRESETS) {
+    $('cg-presets').append(h('button', { type: 'button', class: 'btn small', text: `+ ${preset.name}`, title: preset.hint,
+      onclick: () => createGroup(preset) }));
+  }
   $('reset-groups').addEventListener('click', () => { state.groupOrder = []; state.groupNames = {}; renderSummary(); renderStats(); });
   $('delete').addEventListener('click', remove);
   $('duplicate').addEventListener('click', duplicate);

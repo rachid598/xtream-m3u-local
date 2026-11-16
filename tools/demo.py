@@ -58,6 +58,13 @@ def build_catalog(total: int) -> None:
         streams.insert(0, {"num": 0, "name": f"##### {group.upper()} #####", "stream_type": "live",
                            "stream_id": 900000 + cat_index, "stream_icon": "", "epg_channel_id": "",
                            "category_id": str(cat_index)})
+    # Quelques chaînes françaises « réelles » pour essayer les groupes personnalisés (modèles TNT, Canal+…).
+    known = [("FR: TF1 HD", 1), ("FR: France 2 HD", 1), ("FR: France 3", 1), ("FR: CANAL+ HD", 1), ("FR: M6 HD", 1),
+             ("FR: Arte", 1), ("FR: BFM TV", 2), ("FR: franceinfo", 2), ("FR: CANAL+ SPORT", 3), ("FR: CANAL+ CINEMA", 4),
+             ("FR: Gulli", 6), ("FR: TF1 4K", 25), ("FR: M6 4K", 25)]
+    for index, (name, cat) in enumerate(known, start=1):
+        streams.append({"num": 5000 + index, "name": name, "stream_type": "live", "stream_id": 800000 + index,
+                        "stream_icon": "", "epg_channel_id": "", "category_id": str(cat)})
     fake_xtream.STREAMS[:] = streams
 
     # Guide : ~2/3 des chaînes avec identifiant dans xmltv.php, d'autres seulement via l'API, le reste sans programme.

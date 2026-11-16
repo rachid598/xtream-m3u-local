@@ -12,6 +12,8 @@ from .custom import SELECTION_FIELDS, filter_kind
 
 GROUP_PREFIX = {"live": "", "vod": "vod:", "series": "series:"}
 FAVORITES_GROUP = "★"
+CUSTOM_PREFIX = "g:"       # clé d'un groupe personnalisé du direct : « g:tnt »
+KEEP_ORIGINAL = "-"        # item_groups[id] = "-" : la chaîne reste dans son groupe d'origine
 
 # Qualité déduite du nom de la chaîne (pour ne garder que la meilleure version d'un doublon).
 _QUALITY = [
@@ -36,6 +38,82 @@ def is_separator(name: str) -> bool:
     if _SEPARATOR.match(text):
         return True
     return not any(ch.isalnum() for ch in text)
+
+
+# Préfixe de pays du fournisseur : « FR: », « FR | », « |FR| », « [FR] », « FR - ».
+_COUNTRY = re.compile(r"^\W*[A-Za-z]{2}\s*[:|\-\]●•»◉]+\s*")
+
+
+def match_name(name: str) -> str:
+    """Nom comparable pour les groupes personnalisés : sans pays, accents, ponctuation ni qualité.
+
+    « FR: TF1 FHD » → « tf1 » ; « |FR| CANAL + 4K » → « canal+ » ; « L'Équipe HD » → « l equipe ».
+    """
+    text = _COUNTRY.sub("", name or "", count=1)
+    text = unicodedata.normalize("NFKD", text)
+    text = "".join(ch for ch in text if not unicodedata.combining(ch)).lower()
+    text = re.sub(r"[^\w+&]+|_", " ", text)
+    text = re.sub(r"\s+\+", "+", text)
+    tokens = text.split()
+    if len(tokens) > 1 and tokens[0] in ("fr", "fra"):
+        tokens = tokens[1:]
+    return " ".join(_TAGS.sub(" ", " ".join(tokens)).split())
+
+
+def group_matches(core: str, group: dict) -> int | None:
+    """Rang du premier motif du groupe qui correspond au nom (déjà passé par :func:`match_name`)."""
+    padded = f" {core} "
+    for rank, pattern in enumerate(group.get("_patterns") or ()):
+        if (core == pattern) if group.get("match") == "exact" else (f" {pattern} " in padded):
+            return rank
+    return None
+
+
+def ordered_custom_groups(saved: dict) -> list[dict]:
+    """Groupes personnalisés par priorité : ordre des groupes de la playlist, puis ordre de création."""
+    groups = saved.get("custom_groups") or []
+    rank = {key: i for i, key in enumerate(saved.get("group_order") or [])}
+    ordered = sorted(enumerate(groups), key=lambda e: (rank.get(CUSTOM_PREFIX + e[1]["id"], len(rank)), e[0]))
+    result = []
+    for _, group in ordered:
+        patterns = [p for p in (match_name(v) for v in group.get("patterns") or []) if p]
+        result.append({**group, "_patterns": list(dict.fromkeys(patterns))})
+    return result
+
+
+def apply_custom_groups(entries: list[tuple[dict, str]], saved: dict) -> list[tuple[dict, str]]:
+    """Range les chaînes retenues dans les groupes personnalisés (« TNT », « Canal+ »…).
+
+    Une chaîne rangée à la main (``item_groups``) va dans ce groupe ; sinon dans le premier groupe
+    (le plus haut) dont un motif correspond à son nom. Dans un groupe : ordre des motifs, puis
+    rangements manuels, puis ordre du fournisseur. Les chaînes déplacées quittent leur groupe d'origine.
+    """
+    groups = ordered_custom_groups(saved)
+    if not groups:
+        return entries
+    known = {g["id"] for g in groups}
+    manual = saved.get("item_groups") or {}
+    placed: list[tuple[int, int, int, tuple[dict, str]]] = []
+    rest: list[tuple[dict, str]] = []
+    priority = {g["id"]: i for i, g in enumerate(groups)}
+    for index, (item, group) in enumerate(entries):
+        target = manual.get(item["stream_id"])
+        if target == KEEP_ORIGINAL:
+            rest.append((item, group))
+            continue
+        if target in known:
+            placed.append((priority[target], 10_000, index, (item, CUSTOM_PREFIX + target)))
+            continue
+        core = match_name(item["name"])
+        for g in groups:
+            rank = group_matches(core, g) if g["_patterns"] else None
+            if rank is not None:
+                placed.append((priority[g["id"]], rank, index, (item, CUSTOM_PREFIX + g["id"])))
+                break
+        else:
+            rest.append((item, group))
+    placed.sort(key=lambda e: e[:3])
+    return [entry for *_, entry in placed] + rest
 
 
 def normalize(text: str) -> str:
@@ -107,6 +185,8 @@ def select_items(api, saved: dict, kind: str, *, refresh: bool = False) -> tuple
     entries = filter_kind(items, effective, kind, prefix)
     if kind == "live" and saved.get("hide_separators"):
         entries = [entry for entry in entries if not is_separator(entry[0]["name"])]
+    if kind == "live":
+        entries = apply_custom_groups(entries, saved)
     if kind == "live" and saved.get("dedupe"):
         entries = dedupe(entries)
     names = saved.get("item_names") or {}
@@ -124,7 +204,11 @@ def select_items(api, saved: dict, kind: str, *, refresh: bool = False) -> tuple
                     item["custom_num"] = True
             customized.append((item, group))
         entries = customized
-    return entries, {prefix + cid: name for cid, name in categories.items()}
+    groups = {prefix + cid: name for cid, name in categories.items()}
+    if kind == "live" and saved.get("custom_groups"):
+        # Groupes personnalisés en premier (ordre par défaut, avant ceux du fournisseur).
+        groups = {**{CUSTOM_PREFIX + g["id"]: g["name"] for g in ordered_custom_groups(saved)}, **groups}
+    return entries, groups
 
 
 def add_favorites(entries: list[tuple[dict, str]], groups: dict[str, str], saved: dict) -> list[tuple[dict, str]]:

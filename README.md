@@ -51,6 +51,7 @@ Entièrement en français, responsive (téléphone, tablette, ordinateur), thèm
 - catégories avec compteurs, filtres, tout cocher / décocher ; **règles automatiques** (« le nom commence par FR | »…) qui ajoutent aussi les futures catégories ;
 - recherche (sans accents, plusieurs mots, année), ajout ou exclusion individuelle, actions groupées, affiches, note, bouton « Voir les épisodes » ;
 - **☆ favoris** (groupe en tête de la playlist), **✎ renommage et numéro de chaîne** (zapping à la télécommande et ordre), **numérotation automatique** ;
+- **📁 Mes groupes de chaînes** (onglet « 3. Résumé ») : crée tes propres groupes du direct — « TNT », « Canal+ », « Sport »… — placés **en tête de la playlist**. Modèles prêts (TNT dans l'ordre des numéros, Canal+, Sport, Info, Cinéma, Jeunesse, Documentaires) ou groupe vide « + Nouveau groupe en premier ». Un groupe se remplit tout seul avec les chaînes retenues dont le nom correspond (« contient » ou « est exactement », sans tenir compte du pays « FR: », des accents ni de HD/FHD/4K), et le bouton **📁** d'une chaîne la range à la main dans un groupe (ou la laisse dans son groupe d'origine). Une chaîne rangée quitte son groupe d'origine ; si elle correspond à plusieurs groupes, elle va dans le plus haut ;
 - résumé : ordre et noms des groupes, ajouts, exclusions, favoris, personnalisations ;
 - options : format **MPEG-TS ou HLS**, **replay**, **masquer les doublons SD/HD/FHD/4K**, **masquer les séparateurs** (fausses chaînes « #### PRIME #### » du fournisseur), nom du groupe des favoris ;
 - bloc **Guide des programmes (EPG)** : URL, couverture, chaînes sans programme, actualisation.
@@ -67,7 +68,7 @@ Dans le lecteur (TiviMate, IPTV Smarters…), choisir « Xtream Codes » et sais
 
 - `player_api.php` : compte, catégories et listes (direct, films, séries), fiches détaillées (`get_vod_info`, `get_series_info`), guide court ;
 - lecture : `/live|movie|series/<identifiant>/<code>/<id>.<ext>`, replay `/timeshift/…`, `get.php` et `xmltv.php` avec identifiants ;
-- l'appareil ne voit que sa playlist (noms, numéros, ordre et doublons compris) ; sans playlist associée, tout le catalogue.
+- l'appareil ne voit que sa playlist (noms, numéros, ordre, groupes perso et doublons compris) ; sans playlist associée, tout le catalogue.
 
 ## Playlists M3U
 

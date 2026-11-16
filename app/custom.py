@@ -137,6 +137,59 @@ def _rules(value: object) -> list[dict]:
     return result
 
 
+GROUP_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,39}$")
+GROUP_MATCHES = ("words", "exact")
+MAX_CUSTOM_GROUPS = 50
+MAX_PATTERNS = 300
+
+
+def _custom_groups(value: object) -> list[dict]:
+    """Groupes personnalisés du direct : ``[{id, name, match, patterns}]`` (« TNT », « Canal+ »…)."""
+    if value is None:
+        return []
+    if not isinstance(value, list) or len(value) > MAX_CUSTOM_GROUPS:
+        raise InvalidPlaylist(f"Groupes personnalisés : liste attendue ({MAX_CUSTOM_GROUPS} maximum)")
+    result, seen = [], set()
+    for group in value:
+        if not isinstance(group, dict):
+            raise InvalidPlaylist("Groupe personnalisé invalide")
+        gid = group.get("id")
+        if not isinstance(gid, str) or not GROUP_ID_RE.fullmatch(gid) or gid in seen:
+            raise InvalidPlaylist("Identifiant de groupe personnalisé invalide ou en double")
+        seen.add(gid)
+        name = _text(group.get("name"), "Nom du groupe personnalisé")
+        if not name:
+            raise InvalidPlaylist("Nom du groupe personnalisé obligatoire")
+        match = group.get("match", "words")
+        if match not in GROUP_MATCHES:
+            raise InvalidPlaylist("Groupe personnalisé : correspondance « words » ou « exact »")
+        patterns = group.get("patterns") or []
+        if not isinstance(patterns, list) or len(patterns) > MAX_PATTERNS:
+            raise InvalidPlaylist(f"Groupe personnalisé : {MAX_PATTERNS} noms de chaînes maximum")
+        cleaned = [p for p in (_text(p, "Nom de chaîne du groupe") for p in patterns) if p]
+        result.append({"id": gid, "name": name, "match": match, "patterns": list(dict.fromkeys(cleaned))})
+    return result
+
+
+def _item_groups(value: object, groups: list[dict]) -> dict[str, str]:
+    """Rangements manuels ``{id_du_direct: id_du_groupe | "-"}`` ("-" = rester dans le groupe d'origine)."""
+    if value is None:
+        return {}
+    if not isinstance(value, dict) or len(value) > MAX_ITEMS_CUSTOM:
+        raise InvalidPlaylist("Rangements de chaînes : objet attendu")
+    known = {g["id"] for g in groups}
+    result = {}
+    for key, target in value.items():
+        if not isinstance(key, str) or not key.isdigit() or len(key) > 12:
+            raise InvalidPlaylist("Identifiant de chaîne invalide (rangements)")
+        if target == "-" or target in known:
+            result[key] = target
+        elif not isinstance(target, str):
+            raise InvalidPlaylist("Groupe de destination invalide")
+        # Groupe supprimé entre-temps : le rangement est simplement oublié.
+    return result
+
+
 def validate_playlist(payload: object, *, slug: str | None = None) -> dict:
     if not isinstance(payload, dict):
         raise InvalidPlaylist("Objet JSON attendu")
@@ -170,6 +223,8 @@ def validate_playlist(payload: object, *, slug: str | None = None) -> dict:
     result["rules"] = _rules(payload.get("rules"))
     result["item_names"] = _item_names(payload.get("item_names"))
     result["item_numbers"] = _item_numbers(payload.get("item_numbers"))
+    result["custom_groups"] = _custom_groups(payload.get("custom_groups"))
+    result["item_groups"] = _item_groups(payload.get("item_groups"), result["custom_groups"])
     favorites = _ids(payload.get("favorites"), pattern=ITEM_KEY_RE, label="favori")
     if len(favorites) > MAX_ITEMS_CUSTOM:
         raise InvalidPlaylist("Trop de favoris")

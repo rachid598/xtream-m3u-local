@@ -126,3 +126,76 @@ class SeparatorTests(unittest.TestCase):
         self.assertEqual([e[0]["stream_id"] for e in select_items(api, saved, "live")[0]], ["2"])
         saved["hide_separators"] = False
         self.assertEqual(len(select_items(api, saved, "live")[0]), 3)
+
+
+class CustomGroupTests(unittest.TestCase):
+    API = StubAPI([ch(1, "FR: TF1 FHD", "10"), ch(2, "FR: CANAL+ SPORT", "10"), ch(3, "FR: France 24", "20"),
+                   ch(4, "FR: France 2 HD", "20"), ch(5, "|FR| CANAL + 4K", "10"), ch(6, "FR: TF1 HD", "30"),
+                   ch(7, "FR: Gulli", "30")],
+                  {"10": "FR | Premium", "20": "FR | Info", "30": "FR | 4K"})
+
+    def saved(self, **extra):
+        return validate_playlist({"slug": "s", "name": "S", "category_ids": ["10", "20", "30"], **extra})
+
+    def test_match_name(self):
+        from app.builder import match_name
+        self.assertEqual([match_name(n) for n in ("FR: TF1 FHD", "|FR| CANAL + 4K", "[FR] L'Équipe HD ◉", "FR TF1",
+                                                  "CANAL+ SPORT ᴿᴬᵂ", "BFM - TV")],
+                         ["tf1", "canal+", "l equipe", "tf1", "canal+ sport", "bfm tv"])
+
+    def test_groups_first_ordered_by_patterns(self):
+        saved = self.saved(custom_groups=[
+            {"id": "tnt", "name": "TNT", "match": "exact", "patterns": ["TF1", "France 2", "Canal+"]},
+            {"id": "canal", "name": "Canal+", "match": "words", "patterns": ["canal+"]}])
+        entries, groups = select_items(self.API, saved, "live")
+        self.assertEqual([(e[0]["stream_id"], e[1]) for e in entries],
+                         [("1", "g:tnt"), ("6", "g:tnt"), ("4", "g:tnt"), ("5", "g:tnt"), ("2", "g:canal"),
+                          ("3", "20"), ("7", "30")])
+        self.assertEqual(list(groups)[:2], ["g:tnt", "g:canal"])
+        ordered = order_entries(entries, groups, saved["group_order"])
+        self.assertEqual([e[0]["stream_id"] for e in ordered], ["1", "6", "4", "5", "2", "3", "7"])
+
+    def test_priority_follows_group_order_and_manual_moves(self):
+        saved = self.saved(
+            custom_groups=[{"id": "tnt", "name": "TNT", "match": "exact", "patterns": ["canal+"]},
+                           {"id": "canal", "name": "Canal+", "match": "words", "patterns": ["canal+"]},
+                           {"id": "kids", "name": "Enfants", "patterns": []}],
+            group_order=["g:canal", "g:tnt"], item_groups={"7": "kids", "2": "-", "1": "deleted"})
+        self.assertEqual(saved["item_groups"], {"7": "kids", "2": "-"})
+        entries, _ = select_items(self.API, saved, "live")
+        placed = {e[0]["stream_id"]: e[1] for e in entries}
+        self.assertEqual((placed["5"], placed["2"], placed["7"], placed["1"]), ("g:canal", "10", "g:kids", "10"))
+
+    def test_dedupe_inside_custom_group(self):
+        saved = self.saved(dedupe=True, custom_groups=[{"id": "tnt", "name": "TNT", "match": "exact", "patterns": ["tf1"]}])
+        entries, _ = select_items(self.API, saved, "live")
+        self.assertEqual([e[0]["stream_id"] for e in entries if e[1] == "g:tnt"], ["1"])
+
+    def test_validation(self):
+        for groups in ([{"id": "A B", "name": "x"}], [{"id": "a", "name": ""}], [{"id": "a", "name": "x", "match": "regex"}],
+                       [{"id": "a", "name": "x"}, {"id": "a", "name": "y"}], [{"id": "a", "name": "x", "patterns": "tf1"}]):
+            with self.subTest(groups=groups), self.assertRaises(InvalidPlaylist):
+                self.saved(custom_groups=groups)
+        with self.assertRaises(InvalidPlaylist):
+            self.saved(custom_groups=[{"id": "a", "name": "x"}], item_groups={"abc": "a"})
+        saved = self.saved(custom_groups=[{"id": "a", "name": " TNT ", "patterns": ["tf1", " ", "tf1"]}])
+        self.assertEqual(saved["custom_groups"], [{"id": "a", "name": "TNT", "match": "words", "patterns": ["tf1"]}])
+
+
+class CustomGroupIntegrationTests(StackTestCase):
+    def test_m3u_and_xtream(self):
+        self.create({"slug": "salon", "name": "Salon", "category_ids": ["1", "10"],
+                     "custom_groups": [{"id": "info", "name": "Mes infos", "match": "words", "patterns": ["france info"]}],
+                     "item_groups": {"44": "info"}})
+        infos = [line for line in self.get(self.stack.proxy_base + "/p/salon.m3u")[1].decode().splitlines()
+                 if line.startswith("#EXTINF")]
+        self.assertTrue(infos[0].endswith('group-title="Mes infos",France Info HD'), infos[0])
+        self.assertTrue(infos[1].endswith('group-title="Mes infos",Sport 1'), infos[1])
+        device = self.send(self.stack.web_base + "/api/devices", "POST", {"name": "TV", "playlist": "salon"})[1]
+        q = {"username": device["username"], "password": device["password"]}
+        cats = json.loads(self.get(self.stack.proxy_base + "/player_api.php?" + urlencode({**q, "action": "get_live_categories"}))[1])
+        self.assertEqual(cats[0]["category_name"], "Mes infos")
+        self.assertTrue(cats[0]["category_id"].isdigit())
+        live = json.loads(self.get(self.stack.proxy_base + "/player_api.php?" + urlencode(
+            {**q, "action": "get_live_streams", "category_id": cats[0]["category_id"]}))[1])
+        self.assertEqual([s["stream_id"] for s in live], [42, 44])

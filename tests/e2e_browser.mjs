@@ -189,6 +189,39 @@ try {
   const { text: numbered } = await fetchText(url);
   assert(numbered.includes('tvg-chno="1"') && numbered.includes('tvg-chno="2"'), 'numéros 1, 2… dans le M3U');
   if (shots) await page.screenshot({ path: join(shots, 'desktop-summary.png') });
+
+  // Mes groupes : modèle TNT, nouveau groupe en premier, rangement manuel 📁
+  await page.click('#tab-categories');
+  await catBox(page, 'FR | Généralistes').check();
+  await page.click('#tab-summary');
+  await page.locator('#cg-presets button', { hasText: '+ TNT' }).click();
+  await waitFor(async () => num(await page.locator('#cg-list .cg-card').first().locator('.num').innerText()) >= 6, 'modèle TNT rempli');
+  await page.click('#cg-add');
+  await page.fill('#dialog-input', 'Mes infos');
+  await page.click('#dialog-ok');
+  await waitFor(async () => (await page.locator('#cg-list .cg-card').first().locator('input').inputValue()) === 'Mes infos', 'nouveau groupe en premier');
+  assert((await page.locator('#sum-groups .group-row').first().locator('input').inputValue()) === 'TNT', 'TNT en tête des groupes');
+  await page.click('#tab-channels');
+  await page.fill('#search', 'franceinfo');
+  const fi = page.locator('#channels .channel').filter({ hasText: 'FR: franceinfo' }).first();
+  await waitFor(async () => (await fi.count()) === 1 && (await fi.locator('.badge.grp').innerText()) === '📁 TNT', 'franceinfo rangée dans TNT');
+  await fi.locator('.item-btn', { hasText: '📁' }).click();
+  await page.selectOption('#dialog-select', { label: '📁 Mes infos' });
+  await page.click('#dialog-ok');
+  await waitFor(async () => (await fi.locator('.badge.grp').innerText()) === '📁 Mes infos', 'rangement manuel');
+  await page.fill('#search', '');
+  await page.waitForTimeout(300);
+  await page.click('#tab-summary');
+  if (shots) await page.screenshot({ path: join(shots, 'desktop-groups.png') });
+  await page.click('#save');
+  await waitFor(async () => !(await page.isVisible('#dirty')), 'enregistrement des groupes');
+  const infos = (await fetchText(url)).text.split('\n').filter((l) => l.startsWith('#EXTINF'));
+  const firstOther = infos.find((l) => !l.includes('★ Favoris'));
+  assert(/group-title="Mes infos",FR: franceinfo$/.test(firstOther), `groupe perso en premier : ${firstOther}`);
+  const tnt = infos.filter((l) => l.includes('group-title="TNT"')).map((l) => l.split(',').pop());
+  assert(['FR: TF1 HD', 'FR: France 2 HD', 'FR: M6 HD', 'FR: BFM TV'].every((n) => tnt.includes(n))
+    && tnt.indexOf('FR: TF1 HD') < tnt.indexOf('FR: France 2 HD'), `groupe TNT : ${tnt.join(' | ')}`);
+  assert(infos.filter((l) => l.endsWith(',FR: franceinfo')).length === 1, 'chaîne rangée une seule fois');
   await page.click('#tab-categories');
 
   // Films et séries dans la même playlist (même URL)

@@ -10,9 +10,10 @@ from __future__ import annotations
 
 import logging
 import time
+import zlib
 from datetime import datetime, timezone
 
-from .builder import GROUP_PREFIX, select_items
+from .builder import CUSTOM_PREFIX, GROUP_PREFIX, select_items
 from .custom import UNCATEGORIZED
 
 LOG = logging.getLogger("xtream-m3u-local.xtream")
@@ -28,6 +29,9 @@ def everything() -> dict:
 
 
 def public_category_id(group_key: str, kind: str) -> str:
+    if group_key.startswith(CUSTOM_PREFIX):
+        # Groupe personnalisé : identifiant numérique stable (les lecteurs attendent des nombres).
+        return str(900_000_000 + zlib.crc32(group_key.encode()) % 99_000_000)
     cid = group_key[len(GROUP_PREFIX[kind]):]
     return "0" if cid == UNCATEGORIZED else cid
 

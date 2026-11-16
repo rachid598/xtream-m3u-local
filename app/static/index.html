@@ -257,6 +257,7 @@
             <option value="excluded">Exclusions</option>
             <option value="favorites">★ Favoris</option>
             <option value="custom">Renommés / numérotés</option>
+            <option value="grouped">Rangées dans mes groupes</option>
           </select>
         </div>
         <div class="toolbar between">
@@ -271,6 +272,15 @@
       </div>
 
       <div id="panel-summary" role="tabpanel" aria-labelledby="tab-summary" class="panel" hidden>
+        <section class="cg-box" aria-labelledby="cg-title">
+          <div class="card-head">
+            <h3 id="cg-title">📁 Mes groupes de chaînes</h3>
+            <button type="button" class="btn small primary" id="cg-add">+ Nouveau groupe en premier</button>
+          </div>
+          <p class="hint">Range les chaînes à ton goût (TNT, Canal+, Sport…) : tes groupes passent <strong>en tête de la playlist</strong>. Ils se remplissent tout seuls avec les chaînes retenues dont le nom correspond — sans tenir compte du pays (« FR: »), des accents ni de la qualité (HD, FHD, 4K) — et tu peux y ranger n'importe quelle chaîne avec 📁 dans l'onglet 2. Une chaîne rangée quitte son groupe d'origine.</p>
+          <div class="preset-row" id="cg-presets"><span class="muted small">Modèles prêts :</span></div>
+          <div id="cg-list" class="cg-list"></div>
+        </section>
         <div class="summary-grid">
           <div>
             <div class="card-head"><h3>Groupes dans la playlist</h3><button type="button" class="btn small ghost" id="reset-groups">Ordre et noms du fournisseur</button></div>
@@ -452,6 +462,10 @@
     <div class="field" id="dialog-field2" hidden>
       <label for="dialog-input2" id="dialog-label2"></label>
       <input id="dialog-input2" type="number" min="1" max="99999" step="1" autocomplete="off">
+    </div>
+    <div class="field" id="dialog-field3" hidden>
+      <label for="dialog-select" id="dialog-label3"></label>
+      <select id="dialog-select"></select>
     </div>
     <div class="btn-row end">
       <button type="submit" class="btn ghost" value="cancel">Annuler</button>

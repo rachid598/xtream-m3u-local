@@ -509,3 +509,23 @@ dialog .field { margin-bottom: 16px; }
 .restore-form { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; align-items: end; }
 .restore-form .check-row, .restore-form > .btn { grid-column: span 2; justify-self: start; }
 @media (max-width: 760px) { .restore-form { grid-template-columns: 1fr; } .restore-form .check-row, .restore-form > .btn { grid-column: auto; } }
+
+/* ------------------------------------------------------- mes groupes de chaînes */
+.cg-box { margin-bottom: 22px; padding-bottom: 18px; border-bottom: 1px solid var(--border); }
+.cg-box .card-head { margin: 4px 0 6px; }
+.cg-box .card-head h3 { margin: 0; }
+.preset-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 10px 0 12px; }
+.cg-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 420px), 1fr)); gap: 10px; }
+.cg-list .empty { grid-column: 1 / -1; margin: 0; }
+.cg-card { border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: 12px; background: var(--bg-soft); padding: 10px; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.cg-head { display: flex; align-items: center; gap: 6px; }
+.cg-head .pos { width: 20px; text-align: right; color: var(--text-faint); font-size: 12px; flex: none; font-variant-numeric: tabular-nums; }
+.cg-head input { flex: 1; min-width: 0; min-height: 34px; padding: 6px 10px; font-weight: 700; }
+.cg-head .num { min-width: 30px; text-align: right; font-size: 12px; color: var(--text-faint); font-variant-numeric: tabular-nums; flex: none; }
+.cg-body { display: flex; flex-direction: column; gap: 6px; }
+.cg-body select { width: 100%; min-height: 34px; padding: 6px 10px; font-size: 13px; }
+.cg-body textarea, #dialog select { width: 100%; font: inherit; font-size: 13px; color: var(--text); background: var(--bg); border: 1px solid var(--border-strong); border-radius: var(--radius-sm); padding: 8px 10px; resize: vertical; min-height: 40px; }
+.cg-preview { margin: 0; overflow-wrap: anywhere; }
+.icon-btn.danger:hover { background: var(--danger-soft); color: var(--danger); }
+.badge.grp { background: var(--accent-soft); color: var(--accent-strong); border-color: transparent; }
+.kind-tag.mine { color: var(--accent-strong); border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
