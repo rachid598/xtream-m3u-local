@@ -203,6 +203,7 @@
       data[excField] = sorted ? excluded.sort() : excluded;
     }
     data.live_format = $('opt-live-format').value;
+    data.catchup = $('opt-catchup').checked;
     data.group_order = [...state.groupOrder];
     data.group_names = cleanGroupNames();
     return data;
@@ -440,6 +441,7 @@
 
   function renderOptionsPill() {
     const parts = [$('opt-live-format').value === 'hls' ? 'HLS' : 'MPEG-TS'];
+    if ($('opt-catchup').checked) parts.push('Replay');
     $('options-pill-text').textContent = parts.join(' · ');
   }
 
@@ -627,6 +629,7 @@
     if (state.included.has(c.stream_id)) badges.push(h('span', { class: 'badge ok', text: K().added }));
     if (state.excluded.has(c.stream_id)) badges.push(h('span', { class: 'badge danger', text: K().excludedLabel }));
     if (c.epg) badges.push(h('span', { class: 'badge opt', text: 'EPG', title: 'Identifiant EPG disponible' }));
+    if (c.archive) badges.push(h('span', { class: 'badge opt', text: `Replay ${c.archive} j`, title: 'Programmes passés disponibles (catch-up)' }));
     return badges;
   }
 
@@ -799,6 +802,7 @@
       };
     }
     $('opt-live-format').value = (p && p.live_format) || 'ts';
+    $('opt-catchup').checked = !p || p.catchup !== false;
     renderOptionsPill();
     state.groupOrder = p && p.group_order ? [...p.group_order] : [];
     state.groupNames = p && p.group_names ? { ...p.group_names } : {};
@@ -1190,6 +1194,7 @@
   });
   $('save').addEventListener('click', save);
   $('opt-live-format').addEventListener('change', () => { renderOptionsPill(); renderStats(); });
+  $('opt-catchup').addEventListener('change', () => { renderOptionsPill(); renderStats(); });
   $('epg-refresh').addEventListener('click', refreshEpg);
   document.querySelectorAll('[data-kind]').forEach((btn) => btn.addEventListener('click', () => switchKind(btn.dataset.kind)));
   $('view-btn-playlists').addEventListener('click', () => switchView('playlists'));

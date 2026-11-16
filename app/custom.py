@@ -100,6 +100,7 @@ def validate_playlist(payload: object, *, slug: str | None = None) -> dict:
     if live_format not in ("ts", "hls"):
         raise InvalidPlaylist("Format des chaînes : ts ou hls")
     result["live_format"] = live_format
+    result["catchup"] = bool(payload.get("catchup", True))
     updated = payload.get("updated_at")
     if isinstance(updated, (int, float)) and not isinstance(updated, bool):
         result["updated_at"] = int(updated)

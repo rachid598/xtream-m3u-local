@@ -455,7 +455,7 @@ def catalog_payload(channels: list[dict], categories: dict[str, str], api: Xtrea
             "epg": bool(c["epg_id"]),
             "num": c["num"],
         }
-        for extra in ("ext", "year", "rating"):
+        for extra in ("ext", "year", "rating", "archive"):
             if c.get(extra):
                 entry[extra] = c[extra]
         channel_list.append(entry)

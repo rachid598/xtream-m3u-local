@@ -15,6 +15,8 @@ import socket
 import threading
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from http import HTTPStatus
 from http.client import HTTPException
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -37,6 +39,7 @@ STREAM_RE = re.compile(r"^/stream/([0-9]{1,12})\.ts$")
 HLS_LIVE_RE = re.compile(r"^/hls/([0-9]{1,12})\.m3u8$")
 HLS_SUB_RE = re.compile(r"^/hls/v/([A-Za-z0-9_-]{16,32})\.m3u8$")
 HLS_SEG_RE = re.compile(r"^/hls/s/([A-Za-z0-9_-]{16,32})\.([A-Za-z0-9]{1,5})$")
+TIMESHIFT_RE = re.compile(r"^/timeshift/([0-9]{1,12})\.ts$")
 VOD_RE = re.compile(r"^/(movie|series)/([0-9]{1,12})\.([A-Za-z0-9]{1,5})$")
 CUSTOM_RE = re.compile(r"^/p/([a-z0-9][a-z0-9_-]{0,59})\.(m3u|xml)$")
 HOST_RE = re.compile(r"^[a-zA-Z0-9.\-:\[\]]+$")
@@ -77,6 +80,16 @@ def _max_connections() -> int:
         raise ValueError("MAX_CONNECTIONS doit valoir auto, 0 (illimité) ou un nombre") from None
     if value < 0:
         raise ValueError("MAX_CONNECTIONS doit valoir auto, 0 (illimité) ou un nombre")
+    return value
+
+
+def _timezone_env() -> str:
+    value = os.environ.get("PROVIDER_TIMEZONE", "").strip()
+    if value:
+        try:
+            ZoneInfo(value)
+        except (ZoneInfoNotFoundError, ValueError):
+            raise ValueError("PROVIDER_TIMEZONE doit être un fuseau horaire, ex. Europe/Paris") from None
     return value
 
 
@@ -135,6 +148,7 @@ class Config:
     epg_api_max_channels: int = 1000
     max_connections: int = -1        # -1 = auto (valeur de l'abonnement), 0 = illimité
     stream_takeover: bool = True
+    provider_timezone: str = ""      # vide = fuseau annoncé par le fournisseur (server_info.timezone)
     series_fetch_seconds: int = 20
 
     @classmethod
@@ -180,6 +194,7 @@ class Config:
             epg_api_max_channels=max(0, _env_int("EPG_API_MAX_CHANNELS", 1000)),
             max_connections=_max_connections(),
             stream_takeover=_env_bool("STREAM_TAKEOVER", True),
+            provider_timezone=_timezone_env(),
             series_fetch_seconds=max(0, _env_int("SERIES_FETCH_SECONDS", 20)),
         )
 
@@ -217,6 +232,12 @@ def normalize_channel(entry: object) -> dict | None:
     logo = _clean_text(entry.get("stream_icon"))
     if not logo.lower().startswith(("http://", "https://")):
         logo = ""
+    archive = 0
+    if str(entry.get("tv_archive", "")).strip().lower() in ("1", "true"):
+        try:
+            archive = max(0, min(int(str(entry.get("tv_archive_duration") or 0).strip()), 365))
+        except ValueError:
+            archive = 0
     return {
         "stream_id": sid,
         "name": _clean_text(entry.get("name"), "Sans nom"),
@@ -225,6 +246,7 @@ def normalize_channel(entry: object) -> dict | None:
         "num": num if num.isdigit() else "",
         "category_id": cats[0],
         "category_ids": cats,
+        "archive": archive,
     }
 
 
@@ -400,6 +422,22 @@ class XtreamAPI:
                 LOG.warning("Using stale %s catalog because upstream refresh failed", kind)
             return st.items, st.categories
 
+    def provider_timezone(self):
+        """Fuseau horaire du serveur Xtream (les dates de replay sont exprimées dans ce fuseau)."""
+        name = self.config.provider_timezone or (self._account or {}).get("timezone") or ""
+        if not name and self._account is None:
+            self.account()
+            name = (self._account or {}).get("timezone") or ""
+        try:
+            return ZoneInfo(name) if name else timezone.utc
+        except (ZoneInfoNotFoundError, ValueError):
+            return timezone.utc
+
+    def timeshift_url(self, stream_id: str, start_epoch: int, minutes: int) -> str:
+        start = datetime.fromtimestamp(start_epoch, self.provider_timezone()).strftime("%Y-%m-%d:%H-%M")
+        return (f"{self.config.xtream_url}/timeshift/{quote(self.config.username, safe='')}/"
+                f"{quote(self.config.password, safe='')}/{minutes}/{start}/{stream_id}.ts")
+
     def lookup(self, kind: str, item_id: str) -> dict | None:
         """Élément déjà en cache (sans appel réseau) : nom d'une chaîne ou d'un film pour l'affichage."""
         return self._kinds[kind].by_id.get(item_id)
@@ -430,6 +468,8 @@ class XtreamAPI:
             return self._account
         def text(key: str) -> str:
             return _clean_text(info.get(key))[:40]
+        server = data.get("server_info") if isinstance(data.get("server_info"), dict) else {}
+        tz = _clean_text(server.get("timezone"))[:64]
         exp = text("exp_date")
         self._account = {
             "status": text("status"),
@@ -437,6 +477,7 @@ class XtreamAPI:
             "max_connections": text("max_connections"),
             "active_connections": text("active_cons"),
             "is_trial": text("is_trial") in ("1", "true"),
+            "timezone": tz,
         }
         self._account_expires = now + 600
         return self._account
@@ -495,7 +536,7 @@ def with_token(url: str, config: Config) -> str:
 def playlist(config: Config, entries: list[tuple[dict, str]], categories: dict[str, str], base: str,
              *, mode: str = "proxy", fmt: str = "ts", epg_path: str | None = "/epg.xml",
              group_names: dict[str, str] | None = None, api_epg_ids: bool = False,
-             live_format: str = "ts") -> bytes:
+             live_format: str = "ts", catchup: bool = True) -> bytes:
     """Build an M3U (extended) document.
 
     ``entries`` = ``[(élément, clé_de_groupe), ...]`` où l'élément est une chaîne (``kind`` absent ou ``live``),
@@ -523,6 +564,11 @@ def playlist(config: Config, entries: list[tuple[dict, str]], categories: dict[s
         kind = channel.get("kind", "live")
         if channel.get("num") and kind == "live":
             attrs.append(f'tvg-chno="{channel["num"]}"')
+        if catchup and kind == "live" and channel.get("archive") and mode == "proxy":
+            # Replay : le lecteur remplace {utc}/{utcend} par le début et la fin du programme (secondes UTC).
+            source = with_token(f"{base}/timeshift/{stream_id}.ts?start={{utc}}&end={{utcend}}", config)
+            attrs.append(f'catchup="default" catchup-days="{channel["archive"]}" '
+                         f'catchup-source="{escape_attribute(source)}" tvg-rec="{channel["archive"]}"')
         attrs.append(f'group-title="{escape_attribute(group)}"')
         lines.append("#EXTINF:-1 " + " ".join(attrs) + "," + name)
         path, ext = {"movie": ("movie", channel.get("ext", "mp4")),
@@ -821,6 +867,22 @@ class Handler(BaseHTTPRequestHandler):
             if headers_sent:
                 self.close_connection = True
 
+    def handle_timeshift(self, stream_id: str, qs: dict[str, list[str]], *, head_only: bool) -> None:
+        """Replay : ``/timeshift/<id>.ts?start=<epoch>&end=<epoch>`` (ou ``&duration=<minutes>``)."""
+        try:
+            start = int(qs.get("start", [""])[0])
+            if qs.get("end", [""])[0]:
+                minutes = -(-(int(qs["end"][0]) - start) // 60)
+            else:
+                minutes = int(qs.get("duration", [""])[0])
+        except ValueError:
+            return self._error(400, "Paramètres attendus : start=<horodatage> et end=<horodatage> (ou duration=<minutes>)",
+                               head_only=head_only)
+        if not 946684800 <= start <= 4102444800 or not 1 <= minutes <= 24 * 60:
+            return self._error(400, "Période de replay invalide", head_only=head_only)
+        return self.relay(self.api.timeshift_url(stream_id, start, minutes), head_only=head_only,
+                          track=("timeshift", stream_id))
+
     def token_suffix(self) -> str:
         return f"?{urlencode({'token': self.request_token})}" if self.request_token else ""
 
@@ -991,7 +1053,7 @@ class Handler(BaseHTTPRequestHandler):
                                    epg_path=f"/p/{slug}.xml" if has_live else None,
                                    group_names=saved.get("group_names"),
                                    api_epg_ids=self.config.enable_epg and self.config.epg_source != "xmltv",
-                                   live_format=live_format)
+                                   live_format=live_format, catchup=saved.get("catchup", True))
             except EpgUnavailable as exc:
                 return self._error(502, str(exc), head_only=head_only)
             except ValueError as exc:
@@ -1004,6 +1066,9 @@ class Handler(BaseHTTPRequestHandler):
             return self.response(200, content, "audio/x-mpegurl; charset=utf-8", head_only=head_only,
                                  filename=f"{slug}.m3u", cacheable=not incomplete,
                                  extra={"X-Series-Pending": str(incomplete)} if incomplete else None)
+        shift = TIMESHIFT_RE.fullmatch(path)
+        if shift:
+            return self.handle_timeshift(shift.group(1), qs, head_only=head_only)
         vod = VOD_RE.fullmatch(path)
         if vod:
             kind, item_id, ext = vod.group(1), vod.group(2), vod.group(3).lower()

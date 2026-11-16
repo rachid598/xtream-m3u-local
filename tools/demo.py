@@ -50,6 +50,7 @@ def build_catalog(total: int) -> None:
         streams.append({
             "num": n, "name": name, "stream_type": "live", "stream_id": 1000 + n,
             "stream_icon": "", "epg_channel_id": f"ch{n}.demo" if n % 4 else "", "category_id": str(cat),
+            "tv_archive": 1 if n % 6 == 0 else 0, "tv_archive_duration": 7 if n % 6 == 0 else 0,
         })
     fake_xtream.STREAMS[:] = streams
 

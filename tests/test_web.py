@@ -58,7 +58,7 @@ class WebTests(StackTestCase):
         first = catalog["channels"][0]
         self.assertEqual(first, {"stream_id": "42", "name": "France Info HD", "category_id": "1",
                                  "category_ids": ["1"], "logo": "https://logo.invalid/franceinfo.png",
-                                 "epg": True, "num": "1"})
+                                 "epg": True, "num": "1", "archive": 3})
         raw = body.decode()
         self.assertNotIn('"pw"', raw)
         self.assertNotIn("password", raw)
@@ -114,7 +114,8 @@ class WebTests(StackTestCase):
         self.assertTrue(data["epg_enabled"])
         self.assertFalse(data["token_required"])
         self.assertEqual(data["account"], {"status": "Active", "exp_date": 1893456000, "max_connections": "1",
-                                           "active_connections": "0", "is_trial": False})
+                                           "active_connections": "0", "is_trial": False,
+                                           "timezone": "Europe/Paris"})
         # Le chemin du dossier temporaire (nom aléatoire) peut contenir « pw » : on l'exclut du contrôle.
         self.assertTrue(data.pop("data_file").endswith("playlists.json"))
         raw = json.dumps(data)

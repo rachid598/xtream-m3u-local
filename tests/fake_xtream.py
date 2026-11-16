@@ -22,7 +22,7 @@ CATEGORIES = [
 STREAMS = [
     {"num": 1, "name": "France Info HD", "stream_type": "live", "stream_id": 42,
      "stream_icon": "https://logo.invalid/franceinfo.png", "epg_channel_id": "franceinfo.fr",
-     "category_id": "1", "category_ids": [1],
+     "category_id": "1", "category_ids": [1], "tv_archive": 1, "tv_archive_duration": "3",
      "direct_source": "http://cdn.invalid/live/user/pw/42.ts?username=user&password=pw"},
     {"num": 2, "name": 'Radio "TV"\nHACK', "stream_type": "live", "stream_id": "43",
      "stream_icon": "javascript:alert(1)", "epg_channel_id": None, "category_id": "2"},
@@ -119,6 +119,7 @@ class FakeXtream(BaseHTTPRequestHandler):
     simple_epg_calls: list[str] = []
     open_streams = 0
     hls_requests: list[str] = []
+    timeshift_requests: list[str] = []
     epg_mode = "plain"  # plain | gzip | html | error
     epg_requests = 0
 
@@ -177,7 +178,7 @@ class FakeXtream(BaseHTTPRequestHandler):
                 data = {"user_info": {"username": USERNAME, "password": PASSWORD, "status": "Active",
                                       "exp_date": "1893456000", "max_connections": "1", "active_cons": "0",
                                       "is_trial": "0"},
-                        "server_info": {"url": "fake", "port": "80"}}
+                        "server_info": {"url": "fake", "port": "80", "timezone": "Europe/Paris"}}
             else:
                 data = {"error": "invalid action"}
             return self.send_body(200, json.dumps(data).encode(), "application/json")
@@ -195,6 +196,10 @@ class FakeXtream(BaseHTTPRequestHandler):
             return
         if url.path == f"/live/{USERNAME}/{PASSWORD}/43.m3u8":
             return self.send_body(200, b"<html>pas du HLS</html>", "text/html")
+        if url.path.startswith(f"/timeshift/{USERNAME}/{PASSWORD}/"):
+            parts = url.path.split("/")      # /timeshift/user/pw/<min>/<YYYY-MM-DD:HH-MM>/<id>.ts
+            type(self).timeshift_requests.append("/".join(parts[4:]))
+            return self.send_body(200, f"REPLAY {'/'.join(parts[4:])}".encode(), "video/mp2t")
         if url.path.startswith("/hlsgw/") or url.path.startswith("/keys/"):
             type(self).hls_requests.append(url.path)
             host = self.headers.get("Host")
@@ -277,5 +282,6 @@ def reset_fake() -> None:
     FakeXtream.series_info_calls = []
     FakeXtream.simple_epg_calls = []
     FakeXtream.hls_requests = []
+    FakeXtream.timeshift_requests = []
     FakeXtream.epg_mode = "plain"
     FakeXtream.epg_requests = 0
