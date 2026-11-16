@@ -630,6 +630,7 @@
       fragment.append(h('label', { class: `cat${on ? ' on' : ''}${ruled ? ' ruled' : ''}` },
         box,
         h('span', { class: 'grow' }, h('span', { class: 'name', text: cat.name }),
+          cat.provider ? h('span', { class: 'meta', text: `Fournisseur : ${cat.provider}` }) : null,
           parent ? h('span', { class: 'meta', text: `Sous-groupe de ${parent}` }) : null,
           h('span', { class: `meta${partial ? ' partial' : ''}`, text: metaText })),
         cat.count ? h('button', {
@@ -1287,6 +1288,7 @@
   function providerNode(cat, children, depth) {
     const count = cat.count;
     const meta = h('span', { class: 't-meta' },
+      cat.provider ? h('span', { class: 'badge', text: cat.provider }) : null,
       h('span', { class: 'badge', text: `ID ${cat.category_id}` }),
       cat.parent_id ? h('span', { class: 'badge', text: `parent ${cat.parent_id}`, title: `parent_id = ${cat.parent_id}` }) : null,
       h('span', { class: `badge${count ? '' : ' warn'}`, text: noun(count) }),
@@ -1476,6 +1478,12 @@
       rows.push(['Connexions', `${a.active_connections || 0} active(s) sur ${a.max_connections || '?'} autorisée(s)`]);
       rows.push(['Fuseau du fournisseur', a.timezone || 'non communiqué (UTC)']);
       if (a.is_trial) rows.push(['Type', 'Essai']);
+    }
+    for (const p of (status && status.providers) || []) {
+      const acc = p.account;
+      if (!acc) { rows.push([p.name, 'injoignable']); continue; }
+      const exp = acc.exp_date ? new Date(acc.exp_date * 1000).toLocaleDateString('fr-FR') : 'expiration inconnue';
+      rows.push([p.name, `${acc.status || '?'} · expire le ${exp} · ${acc.active_connections || 0}/${acc.max_connections || '?'} connexion(s)`]);
     }
     facts.replaceChildren(...rows.flatMap(([k, v]) => [h('dt', { text: k }), h('dd', { text: v })]));
     if (status) $('sys-version').textContent = `Xtream M3U Local ${status.version}`;

@@ -342,6 +342,9 @@ class WebHandler(BaseHTTPRequestHandler):
             data["access_token"] = self.config.access_token
         if include_account:
             data["account"] = self.api.account()
+            providers = self.api.accounts()
+            if len(providers) > 1:
+                data["providers"] = providers
         return data
 
     # ----------------------------------------------------------- mutations
@@ -557,9 +560,12 @@ def catalog_payload(channels: list[dict], categories: dict[str, str], api: Xtrea
     category_list = []
     for position, (cid, name) in enumerate(categories.items()):
         info = meta.get(cid, {})
-        category_list.append({"category_id": cid, "name": name, "count": counts.get(cid, 0),
-                              "parent_id": info.get("parent_id", ""), "position": position,
-                              "source": info.get("source", "provider")})
+        entry = {"category_id": cid, "name": name, "count": counts.get(cid, 0),
+                 "parent_id": info.get("parent_id", ""), "position": position,
+                 "source": info.get("source", "provider")}
+        if info.get("provider"):
+            entry["provider"] = info["provider"]
+        category_list.append(entry)
     channel_list = []
     for c in channels:
         entry = {

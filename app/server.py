@@ -14,7 +14,7 @@ import signal
 import socket
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from http import HTTPStatus
@@ -29,6 +29,7 @@ from . import __version__
 from .httputil import accepts_gzip, encode_body, etag_matches, etag_of, gzip_stream
 from .builder import FAVORITES_GROUP, GROUP_PREFIX, add_favorites, select_items
 from .devices import DeviceStore
+from .providers import UnknownProvider
 from .hls import MAX_MANIFEST_BYTES, SEGMENT_MIME, HlsRegistry, rewrite_manifest, segment_ext
 from .streams import EvictedRecently, LimitReached, StreamManager
 from .custom import CATEGORY_RE, UNCATEGORIZED, PlaylistStore, filter_channels, filter_kind, uses
@@ -88,6 +89,22 @@ def _max_connections() -> int:
     if value < 0:
         raise ValueError("MAX_CONNECTIONS doit valoir auto, 0 (illimité) ou un nombre")
     return value
+
+
+def _extra_providers() -> tuple:
+    """Fournisseurs supplémentaires : XTREAM_URL_2 / XTREAM_USERNAME_2 / XTREAM_PASSWORD_2 / XTREAM_NAME_2 … _9."""
+    extras = []
+    for index in range(2, 10):
+        raw_url = os.environ.get(f"XTREAM_URL_{index}", "").strip()
+        if not raw_url:
+            continue
+        user = os.environ.get(f"XTREAM_USERNAME_{index}", "").strip()
+        password = os.environ.get(f"XTREAM_PASSWORD_{index}", "").strip()
+        if not user or not password:
+            raise ValueError(f"XTREAM_USERNAME_{index} et XTREAM_PASSWORD_{index} sont obligatoires avec XTREAM_URL_{index}")
+        name = os.environ.get(f"XTREAM_NAME_{index}", "").strip()[:40] or f"Fournisseur {index}"
+        extras.append((name, normalize_xtream_url(raw_url), user, password))
+    return tuple(extras)
 
 
 def _timezone_env() -> str:
@@ -156,6 +173,13 @@ class Config:
     max_connections: int = -1        # -1 = auto (valeur de l'abonnement), 0 = illimité
     stream_takeover: bool = True
     provider_timezone: str = ""      # vide = fuseau annoncé par le fournisseur (server_info.timezone)
+    provider_name: str = ""          # XTREAM_NAME : nom affiché du fournisseur principal
+    extra_providers: tuple = ()      # ((nom, url, utilisateur, mot de passe), …) : XTREAM_URL_2 … _9
+
+    @property
+    def credentials(self) -> list[tuple[str, str]]:
+        """Identifiants de tous les fournisseurs (pour les masquer partout)."""
+        return [(self.username, self.password)] + [(u, p) for _, _, u, p in self.extra_providers]
     series_fetch_seconds: int = 20
 
     @classmethod
@@ -202,6 +226,8 @@ class Config:
             max_connections=_max_connections(),
             stream_takeover=_env_bool("STREAM_TAKEOVER", True),
             provider_timezone=_timezone_env(),
+            provider_name=os.environ.get("XTREAM_NAME", "").strip()[:40],
+            extra_providers=_extra_providers(),
             series_fetch_seconds=max(0, _env_int("SERIES_FETCH_SECONDS", 20)),
         )
 
@@ -454,11 +480,17 @@ class XtreamAPI:
         """Réponse brute d'une action ``player_api.php`` (fiches détaillées, guide court)."""
         return self._fetch(self.api_url(action, **params), f"action={action}")
 
+    def provider_of(self, item_id: object) -> str:
+        return "1"
+
+    def accounts(self) -> list[dict]:
+        return [{"index": 1, "name": self.config.provider_name or "Fournisseur", "account": self.account()}]
+
     def lookup(self, kind: str, item_id: str) -> dict | None:
         """Élément déjà en cache (sans appel réseau) : nom d'une chaîne ou d'un film pour l'affichage."""
         return self._kinds[kind].by_id.get(item_id)
 
-    def max_connections_hint(self) -> int:
+    def max_connections_hint(self, provider: str = "1") -> int:
         """Nombre de connexions autorisées par l'abonnement (0 si inconnu), sans attendre le réseau."""
         if self._account is None and time.monotonic() >= self._account_expires:
             self._account_expires = time.monotonic() + 30
@@ -520,20 +552,20 @@ def order_entries(entries: list[tuple[dict, str]], categories: dict[str, str],
 
 
 def redact(value: object, config: Config) -> object:
-    """Copie profonde d'une réponse brute du fournisseur sans identifiants (export JSON)."""
-    user, password = config.username, config.password
-    patterns = [f"/{user}/{password}/", f"/{quote(user, safe='')}/{quote(password, safe='')}/"]
+    """Copie profonde d'une réponse brute du fournisseur sans identifiants (tous les fournisseurs)."""
     if isinstance(value, dict):
         return {k: ("***" if str(k).lower() in ("username", "password") else redact(v, config))
                 for k, v in value.items()}
     if isinstance(value, list):
         return [redact(v, config) for v in value]
     if isinstance(value, str):
-        for pattern in patterns:
-            value = value.replace(pattern, "/***/***/")
+        for user, password in config.credentials:
+            for pattern in (f"/{user}/{password}/", f"/{quote(user, safe='')}/{quote(password, safe='')}/"):
+                value = value.replace(pattern, "/***/***/")
         value = re.sub(r"(?i)\b(username|password)=[^&#\s]*", r"\1=***", value)
-        if len(password) >= 4:
-            value = value.replace(password, "***")
+        for _, password in config.credentials:
+            if len(password) >= 4:
+                value = value.replace(password, "***")
         return value
     return value
 
@@ -556,7 +588,8 @@ def with_token(url: str, token: str) -> str:
 def playlist(config: Config, entries: list[tuple[dict, str]], categories: dict[str, str], base: str,
              *, mode: str = "proxy", fmt: str = "ts", epg_path: str | None = "/epg.xml",
              group_names: dict[str, str] | None = None, api_epg_ids: bool = False,
-             live_format: str = "ts", catchup: bool = True, token: str | None = None) -> bytes:
+             live_format: str = "ts", catchup: bool = True, token: str | None = None,
+             direct_url=None) -> bytes:
     """Build an M3U (extended) document.
 
     ``entries`` = ``[(élément, clé_de_groupe), ...]`` où l'élément est une chaîne (``kind`` absent ou ``live``),
@@ -600,6 +633,8 @@ def playlist(config: Config, entries: list[tuple[dict, str]], categories: dict[s
             else:
                 local = f"{path}/{stream_id}.{ext}"
             target = with_token(f"{base}/{local}", token)
+        elif direct_url is not None:
+            target = direct_url(path, stream_id, ext)
         else:
             target = (
                 f"{config.xtream_url}/{path}/"
@@ -709,10 +744,16 @@ class Handler(BaseHTTPRequestHandler):
         LOG.debug("HTTP error: " + format, *args)
 
     def do_HEAD(self) -> None:
-        self.handle_request(head_only=True)
+        self.safe_handle(head_only=True)
 
     def do_GET(self) -> None:
-        self.handle_request(head_only=False)
+        self.safe_handle(head_only=False)
+
+    def safe_handle(self, *, head_only: bool) -> None:
+        try:
+            self.handle_request(head_only=head_only)
+        except UnknownProvider:
+            self._error(404, "Contenu introuvable (fournisseur non configuré)", head_only=head_only)
 
     def response(self, status: int, content: bytes, content_type: str, *, head_only: bool,
                  filename: str | None = None, extra: dict[str, str] | None = None,
@@ -806,8 +847,9 @@ class Handler(BaseHTTPRequestHandler):
             raise ValueError("En-tête Host invalide : définir PUBLIC_BASE_URL")
         return "http://" + host
 
-    def open_session(self, kind: str, item_id: str, label: str, *, virtual: bool = False, provider: str = "1"):
+    def open_session(self, kind: str, item_id: str, label: str, *, virtual: bool = False, provider: str | None = None):
         """Réserve une connexion fournisseur. Retourne la session, ou ``None`` après avoir répondu (409/503)."""
+        provider = provider or self.api.provider_of(item_id)
         try:
             return self.streams.acquire(kind=kind, item_id=item_id, client=self.client_address[0],
                                         label=label, virtual=virtual, provider=provider)
@@ -1193,7 +1235,8 @@ class Handler(BaseHTTPRequestHandler):
                 content = playlist(self.config, entries, groups, base, mode=mode, fmt=fmt,
                                    epg_path="/epg.xml" if "live" in kinds else None,
                                    api_epg_ids=self.config.enable_epg and self.config.epg_source != "xmltv",
-                                   live_format="hls" if fmt == "m3u8" else "ts", token=self.request_token)
+                                   live_format="hls" if fmt == "m3u8" else "ts", token=self.request_token,
+                                   direct_url=self.api.direct_url)
             except ValueError as exc:
                 return self._error(400, str(exc), head_only=head_only)
             except UpstreamError as exc:
@@ -1286,9 +1329,23 @@ def make_epg(config: Config, api: XtreamAPI) -> EpgCache:
     return epg
 
 
+def make_api(config: Config):
+    """Client Xtream : simple, ou façade multi-fournisseurs si XTREAM_URL_2… est défini."""
+    if not config.extra_providers:
+        return XtreamAPI(config)
+    from .providers import ProviderSet
+    base = replace(config, extra_providers=())
+    apis = [XtreamAPI(base)]
+    names = [config.provider_name or "Fournisseur 1"]
+    for name, url, user, password in config.extra_providers:
+        apis.append(XtreamAPI(replace(base, xtream_url=url, username=user, password=password, provider_name=name)))
+        names.append(name)
+    return ProviderSet(apis, names)
+
+
 def make_streams(config: Config, api: XtreamAPI) -> StreamManager:
-    def limit_for(_provider: str) -> int:
-        return config.max_connections if config.max_connections >= 0 else api.max_connections_hint()
+    def limit_for(provider: str) -> int:
+        return config.max_connections if config.max_connections >= 0 else api.max_connections_hint(provider)
     return StreamManager(limit_for, takeover=config.stream_takeover)
 
 
@@ -1301,7 +1358,7 @@ def make_server(config: Config, *, host: str = "0.0.0.0", port: int | None = Non
                 epg: EpgCache | None = None, series: SeriesCache | None = None,
                 streams: StreamManager | None = None, hls: HlsRegistry | None = None,
                 devices: DeviceStore | None = None) -> ThreadingHTTPServer:
-    api = api or XtreamAPI(config)
+    api = api or make_api(config)
     store = store or PlaylistStore(config.data_dir)
     epg = epg or make_epg(config, api)
     series = series or make_series(config, api)
@@ -1360,7 +1417,7 @@ def main() -> None:
         raise SystemExit(2) from None
     prepare_data_dir(config.data_dir)
     from .web import make_web_server
-    api = XtreamAPI(config)
+    api = make_api(config)
     store = PlaylistStore(config.data_dir)
     epg = make_epg(config, api)
     series = make_series(config, api)
@@ -1394,7 +1451,7 @@ def _on_sigterm(*_args: object) -> None:
 
 def _warmup(api: XtreamAPI) -> None:
     """Précharge les catalogues (direct d'abord, puis films et séries) pour une interface rapide."""
-    api.account()  # limite de connexions de l'abonnement
+    api.accounts()  # charge les comptes : limites de connexions de chaque abonnement
     for kind in KINDS:
         try:
             api.catalog(kind=kind)

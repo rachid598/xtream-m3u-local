@@ -64,25 +64,30 @@ def run(api, epg, series, streams, store, config) -> list[dict]:
     results: list[dict] = []
     ua = config.user_agent
 
-    # 1. API du fournisseur ---------------------------------------------------------------
-    started = time.monotonic()
-    try:
-        data = api._fetch(api.api_url(), "user_info")
-        info = data.get("user_info") if isinstance(data, dict) else None
-        ms = int((time.monotonic() - started) * 1000)
-        if not isinstance(info, dict) or str(info.get("auth", "1")) == "0":
-            results.append(_result("account", "Connexion à l'API (player_api.php)", "error",
-                                   "Identifiants refusés par le fournisseur", ms))
-        else:
+    # 1. API de chaque fournisseur ---------------------------------------------------------
+    providers = list(zip(getattr(api, "apis", [api]), getattr(api, "names", [None])))
+    reachable = 0
+    for index, (provider_api, name) in enumerate(providers, start=1):
+        label = "Connexion à l'API (player_api.php)" + (f" — {name}" if len(providers) > 1 else "")
+        test_id = "account" if index == 1 else f"account-{index}"
+        started = time.monotonic()
+        try:
+            data = provider_api._fetch(provider_api.api_url(), "user_info")
+            info = data.get("user_info") if isinstance(data, dict) else None
+            ms = int((time.monotonic() - started) * 1000)
+            if not isinstance(info, dict) or str(info.get("auth", "1")) == "0":
+                results.append(_result(test_id, label, "error", "Identifiants refusés par le fournisseur", ms))
+                continue
             exp = str(info.get("exp_date") or "")
             expires = time.strftime("%d/%m/%Y", time.localtime(int(exp))) if exp.isdigit() else "inconnue"
-            results.append(_result("account", "Connexion à l'API (player_api.php)", "ok",
+            results.append(_result(test_id, label, "ok",
                                    f"Statut {info.get('status') or '?'}, expiration {expires}, "
                                    f"{info.get('active_cons') or 0}/{info.get('max_connections') or '?'} connexion(s)", ms))
-    except UpstreamError as exc:
-        results.append(_result("account", "Connexion à l'API (player_api.php)", "error", str(exc),
-                               int((time.monotonic() - started) * 1000)))
-        return results  # inutile d'aller plus loin
+            reachable += 1
+        except UpstreamError as exc:
+            results.append(_result(test_id, label, "error", str(exc), int((time.monotonic() - started) * 1000)))
+    if not reachable:
+        return results  # aucun fournisseur joignable : inutile d'aller plus loin
 
     # 2. Catalogues -----------------------------------------------------------------------
     labels = {"live": ("Catalogue TV en direct", "chaînes"), "vod": ("Catalogue films", "films"),
