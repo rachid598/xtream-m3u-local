@@ -12,6 +12,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
 from . import __version__
+from .httputil import encode_body
 from .custom import InvalidPlaylist, PlaylistStore
 from .epg import EpgCache
 import threading
@@ -56,7 +57,10 @@ class WebHandler(BaseHTTPRequestHandler):
         LOG.debug("HTTP error: " + format, *args)
 
     def output(self, status: int, data: bytes, content_type: str, *, auth_challenge: bool = False) -> None:
+        data, encoding = encode_body(self.headers, data, content_type)
         self.send_response(status)
+        for key, value in encoding.items():
+            self.send_header(key, value)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(data)))
         self.send_header("Cache-Control", "no-store")

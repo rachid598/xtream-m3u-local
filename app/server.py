@@ -24,6 +24,7 @@ from urllib.parse import parse_qs, quote, urlencode, urlsplit
 from urllib.request import Request, urlopen
 
 from . import __version__
+from .httputil import accepts_gzip, encode_body, etag_matches, etag_of, gzip_stream
 from .custom import CATEGORY_RE, UNCATEGORIZED, PlaylistStore, filter_channels, filter_kind, uses
 from .epg import EPG_MODES, EpgCache, EpgUnavailable, normalize_listings, xml_channel_id
 from .vod import KeyedCache, SeriesCache, episode_name, mime_for, normalize_movie, normalize_series
@@ -598,19 +599,31 @@ class Handler(BaseHTTPRequestHandler):
         self.handle_request(head_only=False)
 
     def response(self, status: int, content: bytes, content_type: str, *, head_only: bool,
-                 filename: str | None = None, extra: dict[str, str] | None = None) -> None:
+                 filename: str | None = None, extra: dict[str, str] | None = None,
+                 cacheable: bool = False) -> None:
+        """Réponse complète ; ``cacheable`` = ETag + 304 (playlists), gzip si le client l'accepte."""
+        etag = etag_of(content) if cacheable and status == 200 else None
+        if etag and etag_matches(self.headers, etag):
+            self.send_response(304)
+            self.send_header("ETag", etag)
+            self.send_header("Cache-Control", "no-cache")
+            self.end_headers()
+            return
+        body, encoding = encode_body(self.headers, content, content_type)
         self.send_response(status)
-        for key, value in (extra or {}).items():
+        for key, value in {**(extra or {}), **encoding}.items():
             self.send_header(key, value)
         self.send_header("Content-Type", content_type)
-        self.send_header("Content-Length", str(len(content)))
-        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-cache" if etag else "no-store")
+        if etag:
+            self.send_header("ETag", etag)
         self.send_header("X-Content-Type-Options", "nosniff")
         if filename:
             self.send_header("Content-Disposition", f'inline; filename="{filename}"')
         self.end_headers()
         if not head_only:
-            self.wfile.write(content)
+            self.wfile.write(body)
 
     def _error(self, status: int, message: str, *, head_only: bool) -> None:
         self.response(status, (message + "\n").encode(), "text/plain; charset=utf-8", head_only=head_only)
@@ -621,17 +634,36 @@ class Handler(BaseHTTPRequestHandler):
         except OSError:
             return self._error(502, "Fichier indisponible", head_only=head_only)
         with handle:
-            size = os.fstat(handle.fileno()).st_size
+            stat = os.fstat(handle.fileno())
+            size = stat.st_size
+            etag = f'"{stat.st_mtime_ns:x}-{size:x}"'
+            if etag_matches(self.headers, etag):
+                self.send_response(304)
+                self.send_header("ETag", etag)
+                self.send_header("Cache-Control", "no-cache")
+                self.end_headers()
+                return
+            compress = size >= 64 * 1024 and accepts_gzip(self.headers)
             self.send_response(200)
             self.send_header("Content-Type", content_type)
-            self.send_header("Content-Length", str(size))
-            self.send_header("Cache-Control", "no-store")
+            if compress:
+                # Taille compressée inconnue à l'avance : fin de réponse = fermeture de la connexion.
+                self.send_header("Content-Encoding", "gzip")
+                self.close_connection = True
+            else:
+                self.send_header("Content-Length", str(size))
+            self.send_header("Vary", "Accept-Encoding")
+            self.send_header("ETag", etag)
+            self.send_header("Cache-Control", "no-cache")
             self.send_header("Content-Disposition", f'inline; filename="{filename}"')
             self.end_headers()
             if head_only:
                 return
             try:
-                shutil_copy(handle, self.wfile)
+                if compress:
+                    gzip_stream(handle, self.wfile.write)
+                else:
+                    shutil_copy(handle, self.wfile)
             except (BrokenPipeError, ConnectionResetError, socket.timeout):
                 self.close_connection = True
 
@@ -765,7 +797,7 @@ class Handler(BaseHTTPRequestHandler):
                 LOG.warning("Cannot build playlist: %s", str(exc))
                 return self._error(502, str(exc), head_only=head_only)
             return self.response(HTTPStatus.OK, content, "audio/x-mpegurl; charset=utf-8",
-                                 head_only=head_only, filename="playlist.m3u")
+                                 head_only=head_only, filename="playlist.m3u", cacheable=True)
         custom_match = CUSTOM_RE.fullmatch(path)
         if custom_match:
             slug, ext = custom_match.groups()
@@ -806,7 +838,7 @@ class Handler(BaseHTTPRequestHandler):
             if incomplete:
                 LOG.info("Playlist %s : épisodes de %d série(s) encore en chargement", slug, incomplete)
             return self.response(200, content, "audio/x-mpegurl; charset=utf-8", head_only=head_only,
-                                 filename=f"{slug}.m3u",
+                                 filename=f"{slug}.m3u", cacheable=not incomplete,
                                  extra={"X-Series-Pending": str(incomplete)} if incomplete else None)
         vod = VOD_RE.fullmatch(path)
         if vod:
