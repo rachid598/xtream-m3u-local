@@ -222,6 +222,14 @@ try {
   assert(['FR: TF1 HD', 'FR: France 2 HD', 'FR: M6 HD', 'FR: BFM TV'].every((n) => tnt.includes(n))
     && tnt.indexOf('FR: TF1 HD') < tnt.indexOf('FR: France 2 HD'), `groupe TNT : ${tnt.join(' | ')}`);
   assert(infos.filter((l) => l.endsWith(',FR: franceinfo')).length === 1, 'chaîne rangée une seule fois');
+  await page.click('#tab-summary');
+  await page.locator('#cg-presets button', { hasText: '+ Bouquet Canal+' }).click();
+  await waitFor(async () => (await page.locator('#cg-list .cg-card').first().locator('input').inputValue()) === 'Bouquet Canal+', 'bouquet Canal+ en premier');
+  await page.click('#save');
+  await waitFor(async () => !(await page.isVisible('#dirty')), 'enregistrement du bouquet');
+  const bouquet = (await fetchText(url)).text.split('\n').filter((l) => l.includes('group-title="Bouquet Canal+"'));
+  assert(bouquet.some((l) => /tvg-chno="4" group-title="Bouquet Canal\+",FR: CANAL\+ HD$/.test(l))
+    && /,FR: TF1 HD$/.test(bouquet[0]), `bouquet Canal+ numéroté comme le décodeur : ${bouquet.slice(0, 3).join(' | ')}`);
   await page.click('#tab-categories');
 
   // Films et séries dans la même playlist (même URL)

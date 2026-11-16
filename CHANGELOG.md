@@ -2,6 +2,15 @@
 
 Format inspiré de « Keep a Changelog ». Les versions suivent le versionnage sémantique.
 
+## [3.2.0] — 2026-11-16
+
+### Ajouté
+- Modèle **« Bouquet Canal+ »** : environ 190 chaînes de l'offre Canal+ rangées par thème comme sur le décodeur (TNT et généralistes, chaînes Canal+, cinéma, sport, séries, découverte, jeunesse, info, musique, Canal+ Live 1 à 19). Liste établie sans le plan de service officiel (inaccessible depuis l'environnement de développement) : numéros 1 à 7 seulement.
+- **Numéros de chaînes dans les groupes** : « 4: Canal+ » range la chaîne et lui donne le numéro 4 (`tvg-chno`, num Xtream), sauf numéro personnalisé ✎.
+
+### Modifié
+- Le modèle « Canal+ » (noms contenant Canal+) s'appelle « Chaînes Canal+ ».
+
 ## [3.1.0] — 2026-11-16
 
 ### Ajouté

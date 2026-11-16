@@ -60,6 +60,17 @@ def match_name(name: str) -> str:
     return " ".join(_TAGS.sub(" ", " ".join(tokens)).split())
 
 
+_NUMBERED = re.compile(r"^\s*(\d{1,5})\s*[:=]\s*(.+)$")
+
+
+def split_pattern(text: str) -> tuple[int | None, str]:
+    """« 4: Canal+ » → (4, « Canal+ ») : numéro de chaîne optionnel (comme sur un décodeur)."""
+    found = _NUMBERED.match(text or "")
+    if found and 1 <= int(found.group(1)) <= 99_999:
+        return int(found.group(1)), found.group(2)
+    return None, text or ""
+
+
 def group_matches(core: str, group: dict) -> int | None:
     """Rang du premier motif du groupe qui correspond au nom (déjà passé par :func:`match_name`)."""
     padded = f" {core} "
@@ -76,8 +87,13 @@ def ordered_custom_groups(saved: dict) -> list[dict]:
     ordered = sorted(enumerate(groups), key=lambda e: (rank.get(CUSTOM_PREFIX + e[1]["id"], len(rank)), e[0]))
     result = []
     for _, group in ordered:
-        patterns = [p for p in (match_name(v) for v in group.get("patterns") or []) if p]
-        result.append({**group, "_patterns": list(dict.fromkeys(patterns))})
+        cores: dict[str, int | None] = {}
+        for value in group.get("patterns") or []:
+            number, text = split_pattern(value)
+            core = match_name(text)
+            if core and core not in cores:
+                cores[core] = number
+        result.append({**group, "_patterns": list(cores), "_numbers": list(cores.values())})
     return result
 
 
@@ -87,6 +103,7 @@ def apply_custom_groups(entries: list[tuple[dict, str]], saved: dict) -> list[tu
     Une chaîne rangée à la main (``item_groups``) va dans ce groupe ; sinon dans le premier groupe
     (le plus haut) dont un motif correspond à son nom. Dans un groupe : ordre des motifs, puis
     rangements manuels, puis ordre du fournisseur. Les chaînes déplacées quittent leur groupe d'origine.
+    Un nom numéroté (« 4: Canal+ ») donne ce numéro à la chaîne, sauf numéro personnalisé (✎).
     """
     groups = ordered_custom_groups(saved)
     if not groups:
@@ -108,6 +125,9 @@ def apply_custom_groups(entries: list[tuple[dict, str]], saved: dict) -> list[tu
         for g in groups:
             rank = group_matches(core, g) if g["_patterns"] else None
             if rank is not None:
+                number = g["_numbers"][rank]
+                if number is not None:
+                    item = {**item, "num": str(number), "custom_num": True}
                 placed.append((priority[g["id"]], rank, index, (item, CUSTOM_PREFIX + g["id"])))
                 break
         else:

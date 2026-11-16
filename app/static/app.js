@@ -230,13 +230,36 @@
     if (tokens.length > 1 && (tokens[0] === 'fr' || tokens[0] === 'fra')) tokens = tokens.slice(1);
     return tokens.join(' ').replace(QUALITY_TAGS, ' ').split(/\s+/).filter(Boolean).join(' ');
   }
+  const NUMBERED = /^\s*(\d{1,5})\s*[:=]\s*(.+)$/;  // « 4: Canal+ » = numéro de chaîne (comme sur le décodeur)
+  const LIVES = Array.from({ length: 19 }, (_, i) => `Canal+ Live ${i + 1}`);
   const PRESETS = [
+    { name: 'Bouquet Canal+', match: 'exact', hint: 'Toutes les chaînes du bouquet Canal+, rangées par thème comme sur le décodeur (TNT, Canal+, cinéma, sport, séries, découverte, jeunesse, info, musique)',
+      patterns: ['1: TF1', '2: France 2', '3: France 3', '4: Canal+', '5: France 5', '6: M6', '7: Arte',
+        'W9', 'TMC', 'TFX', 'NRJ 12', 'NRJ12', 'LCP', 'Public Sénat', 'France 4', 'BFM TV', 'BFMTV', 'CNews', 'CStar', 'C Star', 'Gulli',
+        'TF1 Séries Films', 'L\'Équipe', 'La chaîne L\'Équipe', '6ter', 'RMC Story', 'RMC Découverte', 'Chérie 25', 'LCI', 'franceinfo',
+        'France Info', 'T18', 'Novo19', 'Novo 19', 'Paris Première', 'Téva', 'RTL9', 'TV5Monde', 'TV5 Monde',
+        'Canal+ Cinéma', 'Canal+ Cinémas', 'Canal+ Cinéma(s)', 'Canal+ Sport', 'Canal+ Sport 360', 'Canal+ Foot', 'Canal+ Séries',
+        'Canal+ Docs', 'Canal+ Kids', 'Canal+ Box Office', 'Canal+ Grand Écran', 'Canal+ Premier League', 'Canal+ Magic',
+        'Ciné+ OCS', 'Ciné+ Premier', 'Ciné+ Frisson', 'Ciné+ Émotion', 'Ciné+ Famiz', 'Ciné+ Classic', 'Ciné+ Festival',
+        'OCS', 'OCS Max', 'OCS City', 'OCS Choc', 'OCS Géants', 'TCM Cinéma', 'Paramount Channel', 'Action', 'Polar+', 'Comédie+',
+        'beIN Sports 1', 'beIN Sports 2', 'beIN Sports 3', 'beIN Sports Max 4', 'beIN Sports Max 5', 'beIN Sports Max 6',
+        'beIN Sports Max 7', 'beIN Sports Max 8', 'beIN Sports Max 9', 'beIN Sports Max 10', 'Eurosport 1', 'Eurosport 2',
+        'Infosport+', 'Golf+', 'Automoto', 'Equidia', 'Sport en France', 'MotorVision', 'Trace Sport Stars',
+        'Série Club', '13ème Rue', '13e Rue', 'Syfy', 'Warner TV', 'Paramount Network', 'MTV', 'E!', 'AB1', 'Novelas TV', 'J-One',
+        'Planète+', 'Planète+ Aventure', 'Planète+ Crime', 'Ushuaïa TV', 'Love Nature', 'Histoire TV', 'Toute l\'Histoire',
+        'Discovery Channel', 'Discovery', 'Discovery Investigation', 'National Geographic', 'Nat Geo Wild', 'Dogs & Cats',
+        'Science et Vie TV', 'Animaux', 'Seasons', 'Trek', 'Museum TV', 'Crime District', 'Chasse et Pêche',
+        'Piwi+', 'TiJi', 'Canal J', 'Disney Channel', 'Disney Junior', 'Nickelodeon', 'Nickelodeon Junior', 'Nick Jr',
+        'Nickelodeon Teen', 'Boomerang', 'Cartoon Network', 'Cartoonito', 'Boing', 'Mangas', 'Game One',
+        'CNews Prime', 'France 24', 'Euronews', 'BFM Business', 'BFM Paris', 'i24News', 'Europe 1 TV', 'Le Figaro TV', 'TV Monaco',
+        'MCM', 'M6 Music', 'MTV Hits', 'NRJ Hits', 'CStar Hits', 'RFM TV', 'Trace Urban', 'Mezzo', 'Mezzo Live', 'Melody',
+        'Clubbing TV', ...LIVES] },
     { name: 'TNT', match: 'exact', hint: 'Chaînes gratuites de la TNT, dans l\'ordre de leurs numéros',
       patterns: ['TF1', 'France 2', 'France 3', 'Canal+', 'France 5', 'M6', 'Arte', 'C8', 'W9', 'TMC', 'TFX', 'NRJ 12', 'NRJ12',
         'LCP', 'Public Sénat', 'France 4', 'BFM TV', 'BFMTV', 'CNews', 'CStar', 'C Star', 'Gulli', 'TF1 Séries Films',
         'L\'Équipe', 'La chaîne L\'Équipe', '6ter', 'RMC Story', 'RMC Découverte', 'Chérie 25', 'LCI', 'franceinfo',
         'France Info', 'T18', 'Novo19', 'Novo 19'] },
-    { name: 'Canal+', match: 'words', hint: 'Toutes les chaînes dont le nom contient Canal+',
+    { name: 'Chaînes Canal+', match: 'words', hint: 'Seulement les chaînes dont le nom contient Canal+',
       patterns: ['Canal+', 'Canal plus'] },
     { name: 'Sport', match: 'words', hint: 'beIN, RMC Sport, Eurosport, Canal+ Sport…',
       patterns: ['beIN Sports', 'beIN Sport', 'RMC Sport', 'Eurosport', 'Canal+ Sport', 'Canal+ Foot', 'L\'Équipe', 'Infosport+',
@@ -260,7 +283,7 @@
     return state.customGroups.map((g, i) => ({ g, i }))
       .sort((a, b) => (rank.get(CG + a.g.id) ?? 1e9) - (rank.get(CG + b.g.id) ?? 1e9) || a.i - b.i)
       .map(({ g }) => {
-        const patterns = [...new Set((g.patterns || []).map(matchName).filter(Boolean))];
+        const patterns = [...new Set((g.patterns || []).map((p) => matchName(String(p).replace(NUMBERED, (m, n, rest) => rest))).filter(Boolean))];
         return { ...g, _patterns: patterns, _exact: new Map(patterns.map((p, i) => [p, i]).reverse()) };
       });
   }
@@ -1101,7 +1124,7 @@
         h('option', { value: 'exact', text: 'Le nom de la chaîne est exactement l\'un de ces noms', selected: group.match === 'exact' }));
       match.addEventListener('change', () => { group.match = match.value; update(); });
       const patterns = h('textarea', { rows: '2', 'aria-label': `Noms de chaînes du groupe ${group.name}`,
-        placeholder: 'ex. TF1, France 2, M6 — séparés par des virgules (vide = rangement à la main avec 📁)' });
+        placeholder: 'ex. TF1, France 2, M6 — séparés par des virgules ; « 4: Canal+ » donne aussi le numéro 4 (vide = rangement à la main avec 📁)' });
       patterns.value = (group.patterns || []).join(', ');
       patterns.addEventListener('input', () => { group.patterns = splitPatterns(patterns.value); update(); });
       patterns.addEventListener('change', () => refresh());

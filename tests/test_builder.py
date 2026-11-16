@@ -166,6 +166,20 @@ class CustomGroupTests(unittest.TestCase):
         placed = {e[0]["stream_id"]: e[1] for e in entries}
         self.assertEqual((placed["5"], placed["2"], placed["7"], placed["1"]), ("g:canal", "10", "g:kids", "10"))
 
+    def test_numbered_patterns_like_a_decoder(self):
+        from app.builder import split_pattern
+        self.assertEqual(split_pattern("4: Canal+"), (4, "Canal+"))
+        self.assertEqual(split_pattern("6ter"), (None, "6ter"))
+        self.assertEqual(split_pattern("13ème Rue"), (None, "13ème Rue"))
+        saved = self.saved(dedupe=True, item_numbers={"4": 99}, custom_groups=[
+            {"id": "c", "name": "Bouquet", "match": "exact", "patterns": ["1: TF1", "France 2", "4 = Canal+"]}])
+        entries, groups = select_items(self.API, saved, "live")
+        bouquet = [(e[0]["name"], e[0]["num"]) for e in entries if e[1] == "g:c"]
+        # Numéro du motif, sauf numéro personnalisé (✎) qui reste prioritaire.
+        self.assertEqual(bouquet, [("FR: TF1 FHD", "1"), ("FR: France 2 HD", "99"), ("|FR| CANAL + 4K", "4")])
+        ordered = [e[0]["name"] for e in order_entries(entries, groups, saved["group_order"]) if e[1] == "g:c"]
+        self.assertEqual(ordered, ["FR: TF1 FHD", "|FR| CANAL + 4K", "FR: France 2 HD"])
+
     def test_dedupe_inside_custom_group(self):
         saved = self.saved(dedupe=True, custom_groups=[{"id": "tnt", "name": "TNT", "match": "exact", "patterns": ["tf1"]}])
         entries, _ = select_items(self.API, saved, "live")
