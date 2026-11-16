@@ -74,7 +74,7 @@ class DiagnosticTests(StackTestCase):
         statuses = {k: v["status"] for k, v in results.items()}
         self.assertEqual(statuses, {
             "account": "ok", "catalog-live": "ok", "catalog-vod": "ok", "catalog-series": "ok",
-            "epg-xmltv": "ok", "epg-api": "ok",
+            "epg-xmltv": "ok", "epg-api": "warn",   # 1 chaîne sur 3 a des programmes via l'API
             "stream-ts": "warn",          # le faux flux n'est pas du vrai MPEG-TS
             "stream-hls": "ok", "stream-movie": "ok", "stream-episode": "ok", "stream-replay": "ok"})
         self.assertIn("0/1 connexion", results["account"]["detail"])
@@ -103,3 +103,31 @@ class DiagnosticTests(StackTestCase):
         self.assertEqual(list(results), ["account"])
         self.assertEqual(results["account"]["status"], "error")
         self.assertEqual(self.send(self.stack.web_base + "/api/diagnostic", "POST", headers={})[0], 403)
+
+
+class DiagnosticSamplingTests(StackTestCase):
+    def test_separators_skipped_and_api_compensates_broken_xmltv(self):
+        import tests.fake_xtream as fake
+        original = list(fake.STREAMS)
+        fake.STREAMS.insert(0, {"num": 0, "name": "#### PRIME RAW 60fps #####", "stream_id": 40, "category_id": "1"})
+        FakeXtream.epg_mode = "error"
+        try:
+            status, data = self.send(self.stack.web_base + "/api/diagnostic", "POST")
+            results = {r["id"]: r for r in data["results"]}
+            self.assertNotIn("PRIME", results["stream-ts"]["detail"])
+            self.assertIn("France Info", results["stream-ts"]["detail"])        # vraie chaîne avec EPG
+            self.assertEqual(results["epg-api"]["status"], "warn")              # 1 chaîne sur 3 couverte
+            self.assertIn("1/3 chaînes testées", results["epg-api"]["detail"])
+            self.assertEqual(results["epg-xmltv"]["status"], "warn")            # compensé par l'API
+            self.assertIn("via l'API", results["epg-xmltv"]["detail"])
+            fake.SIMPLE_EPG_BACKUP = dict(fake.SIMPLE_EPG)
+            fake.SIMPLE_EPG.clear()
+            status, data = self.send(self.stack.web_base + "/api/diagnostic", "POST")
+            results = {r["id"]: r for r in data["results"]}
+            self.assertEqual((results["epg-xmltv"]["status"], results["epg-api"]["status"]), ("error", "error"))
+            self.assertIn("EPG_URL", results["epg-api"]["detail"])
+        finally:
+            fake.STREAMS[:] = original
+            if hasattr(fake, "SIMPLE_EPG_BACKUP"):
+                fake.SIMPLE_EPG.update(fake.SIMPLE_EPG_BACKUP)
+                del fake.SIMPLE_EPG_BACKUP

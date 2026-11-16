@@ -24,6 +24,20 @@ _TAGS = re.compile(r"(?<![a-z0-9])(4k|uhd|2160p?|fhd|full ?hd|1080[pi]?|hd|720p?
                    r"h\.?26[45]|x26[45]|hdr|50 ?fps|60 ?fps|25 ?fps|backup|raw|multi|vip)(?![a-z0-9])")
 
 
+_SEPARATOR_EDGE = r"[#=*~_\-|•●◆★☆▬▭━─═\s]"
+_SEPARATOR = re.compile(rf"^{_SEPARATOR_EDGE}*[#=*~_\-•●◆★☆▬▭━─═]{{3,}}.*[#=*~_\-•●◆★☆▬▭━─═]{{3,}}{_SEPARATOR_EDGE}*$")
+
+
+def is_separator(name: str) -> bool:
+    """Fausse chaîne servant de titre de section chez le fournisseur : « #### PRIME ####», « ===== FR ===== »…"""
+    text = (name or "").strip()
+    if not text:
+        return True
+    if _SEPARATOR.match(text):
+        return True
+    return not any(ch.isalnum() for ch in text)
+
+
 def normalize(text: str) -> str:
     text = unicodedata.normalize("NFD", text or "")
     text = "".join(ch for ch in text if not unicodedata.combining(ch))
@@ -91,6 +105,8 @@ def select_items(api, saved: dict, kind: str, *, refresh: bool = False) -> tuple
         extra = [cid for cid, name in categories.items() if any(rule_matches(name, r) for r in rules)]
         effective = {**saved, cats_field: list(dict.fromkeys(list(saved.get(cats_field, [])) + extra))}
     entries = filter_kind(items, effective, kind, prefix)
+    if kind == "live" and saved.get("hide_separators"):
+        entries = [entry for entry in entries if not is_separator(entry[0]["name"])]
     if kind == "live" and saved.get("dedupe"):
         entries = dedupe(entries)
     names = saved.get("item_names") or {}

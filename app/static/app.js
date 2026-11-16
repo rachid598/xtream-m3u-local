@@ -198,6 +198,10 @@
     [/(?<![a-z0-9])(sd|576[pi]?|480[pi]?)(?![a-z0-9])/, 1],
   ];
   const QUALITY_TAGS = /(?<![a-z0-9])(4k|uhd|2160p?|fhd|full ?hd|1080[pi]?|hd|720p?|sd|576[pi]?|480[pi]?|hevc|h\.?26[45]|x26[45]|hdr|50 ?fps|60 ?fps|25 ?fps|backup|raw|multi|vip)(?![a-z0-9])/g;
+  const SEP_CHARS = '#=*~_\\-•●◆★☆▬▭━─═';
+  const SEPARATOR = new RegExp(`^[${SEP_CHARS}|\\s]*[${SEP_CHARS}]{3,}.*[${SEP_CHARS}]{3,}[${SEP_CHARS}|\\s]*$`, 'u');
+  /** Fausse chaîne servant de titre de section (même règle que le serveur). */
+  const isSeparator = (name) => { const t = String(name || '').trim(); return !t || SEPARATOR.test(t) || !/[\p{L}\p{N}]/u.test(t); };
   const squash = (text) => norm(text).split(/\s+/).filter(Boolean).join(' ');
   function qualityOf(name) {
     const n = squash(name);
@@ -229,7 +233,8 @@
 
   /** Chaînes du direct masquées comme doublons (option « Masquer les doublons »). */
   function hiddenDuplicates() {
-    if (!$('opt-dedupe').checked) return EMPTY_SET;
+    const dedupe = $('opt-dedupe').checked, separators = $('opt-separators').checked;
+    if (!dedupe && !separators) return EMPTY_SET;
     if (state.hiddenCache) return state.hiddenCache;
     const sel = state.sel.live;
     const best = new Map();
@@ -238,6 +243,8 @@
       if (sel.excluded.has(c.stream_id)) continue;
       const group = c.category_ids.find((id) => catOn('live', id)) || (sel.included.has(c.stream_id) ? c.category_id : null);
       if (group == null) continue;
+      if (separators && isSeparator(c.name)) { kept.push(c.stream_id); continue; }
+      if (!dedupe) { best.set(`id\u0000${c.stream_id}`, { q: 0, id: c.stream_id }); kept.push(c.stream_id); continue; }
       const key = `${group}\u0000${baseName(c.name)}`;
       const q = qualityOf(c.name);
       const current = best.get(key);
@@ -281,6 +288,7 @@
     data.live_format = $('opt-live-format').value;
     data.catchup = $('opt-catchup').checked;
     data.dedupe = $('opt-dedupe').checked;
+    data.hide_separators = $('opt-separators').checked;
     data.favorites_name = $('opt-fav-name').value.trim() || '★ Favoris';
     data.rules = state.rules.map((r) => ({ ...r }));
     data.favorites = sorted ? [...state.favorites].sort() : [...state.favorites];
@@ -530,6 +538,7 @@
     const parts = [$('opt-live-format').value === 'hls' ? 'HLS' : 'MPEG-TS'];
     if ($('opt-catchup').checked) parts.push('Replay');
     if ($('opt-dedupe').checked) parts.push('Sans doublons');
+    if ($('opt-separators').checked) parts.push('Sans séparateurs');
     $('options-pill-text').textContent = parts.join(' · ');
   }
 
@@ -733,7 +742,11 @@
     if (state.excluded.has(c.stream_id)) badges.push(h('span', { class: 'badge danger', text: K().excludedLabel }));
     if (c.epg) badges.push(h('span', { class: 'badge opt', text: 'EPG', title: 'Identifiant EPG disponible' }));
     if (c.archive) badges.push(h('span', { class: 'badge opt', text: `Replay ${c.archive} j`, title: 'Programmes passés disponibles (catch-up)' }));
-    if (state.kind === 'live' && hiddenDuplicates().has(c.stream_id)) badges.push(h('span', { class: 'badge warn', text: 'Doublon masqué', title: 'Une meilleure qualité de cette chaîne est déjà dans le groupe' }));
+    if (state.kind === 'live' && hiddenDuplicates().has(c.stream_id)) {
+      const sep = $('opt-separators').checked && isSeparator(c.name);
+      badges.push(h('span', { class: 'badge warn', text: sep ? 'Séparateur masqué' : 'Doublon masqué',
+        title: sep ? 'Fausse chaîne servant de titre de section chez le fournisseur' : 'Une meilleure qualité de cette chaîne est déjà dans le groupe' }));
+    }
     return badges;
   }
 
@@ -1013,6 +1026,7 @@
     $('opt-live-format').value = (p && p.live_format) || 'ts';
     $('opt-catchup').checked = !p || p.catchup !== false;
     $('opt-dedupe').checked = Boolean(p && p.dedupe);
+    $('opt-separators').checked = Boolean(p && p.hide_separators);
     $('opt-fav-name').value = (p && p.favorites_name) || '★ Favoris';
     state.rules = p && p.rules ? p.rules.map((r) => ({ ...r })) : [];
     state.favorites = p && p.favorites ? [...p.favorites] : [];
@@ -1586,6 +1600,7 @@
   $('opt-live-format').addEventListener('change', () => { renderOptionsPill(); renderStats(); });
   $('opt-catchup').addEventListener('change', () => { renderOptionsPill(); renderStats(); });
   $('opt-dedupe').addEventListener('change', () => { renderOptionsPill(); refresh(); });
+  $('opt-separators').addEventListener('change', () => { renderOptionsPill(); refresh(); });
   $('opt-fav-name').addEventListener('input', () => renderStats());
   $('rule-value').addEventListener('input', debounce(previewRule, 150));
   $('rule-match').addEventListener('change', previewRule);

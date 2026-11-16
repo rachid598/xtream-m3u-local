@@ -108,3 +108,21 @@ class BuilderIntegrationTests(StackTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SeparatorTests(unittest.TestCase):
+    def test_is_separator(self):
+        from app.builder import is_separator
+        for name in ("#### PRIME ᴿᴬᵂ ⁶⁰ᶠᵖˢ #####", "===== FR =====", "★★★ SPORTS ★★★", "---", "", "   "):
+            with self.subTest(name=name):
+                self.assertTrue(is_separator(name))
+        for name in ("TF1 HD", "FR | Sport", "#1 Hits", "|FR| TF1", "A&E", "UK: BBC ONE LONDON 4K ◉", "M6 ###"):
+            with self.subTest(name=name):
+                self.assertFalse(is_separator(name))
+
+    def test_hide_separators_option(self):
+        api = StubAPI([ch(1, "#### FRANCE ####"), ch(2, "TF1 HD"), ch(3, "===== SPORT =====")], {"1": "FR"})
+        saved = validate_playlist({"slug": "s", "name": "S", "category_ids": ["1"], "hide_separators": True})
+        self.assertEqual([e[0]["stream_id"] for e in select_items(api, saved, "live")[0]], ["2"])
+        saved["hide_separators"] = False
+        self.assertEqual(len(select_items(api, saved, "live")[0]), 3)

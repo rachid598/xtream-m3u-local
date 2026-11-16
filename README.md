@@ -52,7 +52,7 @@ Entièrement en français, responsive (téléphone, tablette, ordinateur), thèm
 - recherche (sans accents, plusieurs mots, année), ajout ou exclusion individuelle, actions groupées, affiches, note, bouton « Voir les épisodes » ;
 - **☆ favoris** (groupe en tête de la playlist), **✎ renommage et numéro de chaîne** (zapping à la télécommande et ordre), **numérotation automatique** ;
 - résumé : ordre et noms des groupes, ajouts, exclusions, favoris, personnalisations ;
-- options : format **MPEG-TS ou HLS**, **replay**, **masquer les doublons SD/HD/FHD/4K**, nom du groupe des favoris ;
+- options : format **MPEG-TS ou HLS**, **replay**, **masquer les doublons SD/HD/FHD/4K**, **masquer les séparateurs** (fausses chaînes « #### PRIME #### » du fournisseur), nom du groupe des favoris ;
 - bloc **Guide des programmes (EPG)** : URL, couverture, chaînes sans programme, actualisation.
 
 **Catalogue fournisseur** (lecture seule) : ordre exact, identifiants, `parent_id`, chaînes / films / séries, recherche, **export JSON** (identifiants masqués).

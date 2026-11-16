@@ -2,6 +2,16 @@
 
 Format inspiré de « Keep a Changelog ». Les versions suivent le versionnage sémantique.
 
+## [3.0.1] — 2026-11-16
+
+Retour du premier diagnostic réel (47 408 chaînes, `xmltv.php` du fournisseur en erreur HTTP 502).
+
+### Ajouté
+- Option **« Masquer les séparateurs »** par playlist (`hide_separators`) : retire les fausses chaînes de titre de section du fournisseur (« #### PRIME ##### », « ===== FR ===== »…) du M3U, du guide et du mode Xtream ; badge « Séparateur masqué » dans l'éditeur.
+
+### Corrigé
+- **Diagnostic** : la chaîne testée n'est plus un séparateur ; le guide via l'API est testé sur 5 chaînes réparties dans le catalogue (« X/5 chaînes ont des programmes ») ; une erreur de `xmltv.php` passe en avertissement quand l'API prend le relais (mode auto).
+
 ## [3.0.0] — 2026-11-16
 
 ### Ajouté

@@ -53,6 +53,11 @@ def build_catalog(total: int) -> None:
             "stream_icon": "", "epg_channel_id": f"ch{n}.demo" if n % 4 else "", "category_id": str(cat),
             "tv_archive": 1 if n % 6 == 0 else 0, "tv_archive_duration": 7 if n % 6 == 0 else 0,
         })
+    # Séparateurs comme chez beaucoup de fournisseurs : « ##### FR | SPORT ##### » en tête de catégorie.
+    for cat_index, group in enumerate(GROUPS[:-1], start=1):
+        streams.insert(0, {"num": 0, "name": f"##### {group.upper()} #####", "stream_type": "live",
+                           "stream_id": 900000 + cat_index, "stream_icon": "", "epg_channel_id": "",
+                           "category_id": str(cat_index)})
     fake_xtream.STREAMS[:] = streams
 
     # Guide : ~2/3 des chaînes avec identifiant dans xmltv.php, d'autres seulement via l'API, le reste sans programme.

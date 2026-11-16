@@ -112,43 +112,66 @@ def run(api, epg, series, streams, store, config) -> list[dict]:
             results.append(_result(f"catalog-{kind}", label, "error", str(exc), int((time.monotonic() - started) * 1000)))
 
     live = catalogs.get("live") or []
-    # Chaîne de test : première chaîne d'une playlist personnalisée, sinon du catalogue.
-    sample = None
+    # Chaînes de test : celles des playlists personnalisées d'abord, sinon du catalogue ;
+    # jamais les « séparateurs » (#### PRIME ####…), de préférence avec un identifiant EPG.
+    from .builder import is_separator, select_items
+    pool: list[dict] = []
     try:
-        from .builder import select_items
         for saved in store.list():
-            entries = select_items(api, saved, "live")[0]
-            if entries:
-                sample = entries[0][0]
+            pool.extend(item for item, _ in select_items(api, saved, "live")[0])
+            if len(pool) > 2000:
                 break
     except Exception:
-        sample = None
-    sample = sample or (live[0] if live else None)
+        pool = []
+    pool = [c for c in (pool or live) if not is_separator(c["name"])] or [c for c in live if not is_separator(c["name"])]
+    sample = next((c for c in pool if c.get("epg_id")), pool[0] if pool else None)
+    with_epg = [c for c in pool if c.get("epg_id")] or pool
+    step = max(1, len(with_epg) // 5)
+    epg_samples = with_epg[::step][:5]
 
     # 3. Guide ---------------------------------------------------------------------------
+    xmltv_result = None
     if config.enable_epg and config.epg_source != "api":
         url = config.epg_url or api.epg_url()
         p = probe(url, ua, read=4096, timeout=20)
         source = "EPG_URL" if config.epg_url else "xmltv.php"
         head = p.head.lstrip()
         if p.error:
-            results.append(_result("epg-xmltv", f"Guide {source}", "error", p.error, p.ms))
+            xmltv_result = _result("epg-xmltv", f"Guide {source}", "error",
+                                   f"{p.error} : le fournisseur ne sert pas de guide XMLTV", p.ms)
         elif head[:2] == b"\x1f\x8b" or head.startswith(b"<") and (b"<tv" in head or b"<?xml" in head):
-            results.append(_result("epg-xmltv", f"Guide {source}", "ok", f"Guide XMLTV valide{_size(p.headers)}", p.ms))
+            xmltv_result = _result("epg-xmltv", f"Guide {source}", "ok", f"Guide XMLTV valide{_size(p.headers)}", p.ms)
         else:
-            results.append(_result("epg-xmltv", f"Guide {source}", "warn",
-                                   "Réponse qui n'est pas un guide XMLTV (le complément par l'API prend le relais en mode auto)", p.ms))
-    if config.enable_epg and config.epg_source != "xmltv" and sample:
+            xmltv_result = _result("epg-xmltv", f"Guide {source}", "error",
+                                   "Réponse qui n'est pas un guide XMLTV", p.ms)
+    api_result = None
+    if config.enable_epg and config.epg_source != "xmltv" and epg_samples:
+        from .epg import normalize_listings
         started = time.monotonic()
-        try:
-            from .epg import normalize_listings
-            listings = normalize_listings(api.simple_epg(sample["stream_id"]))
-            results.append(_result("epg-api", "Guide via l'API (get_simple_data_table)", "ok" if listings else "warn",
-                                   f"{len(listings)} programme(s) pour « {sample['name']} »" if listings
-                                   else f"Aucun programme pour « {sample['name']} »", int((time.monotonic() - started) * 1000)))
-        except UpstreamError as exc:
-            results.append(_result("epg-api", "Guide via l'API (get_simple_data_table)", "error", str(exc),
-                                   int((time.monotonic() - started) * 1000)))
+        covered, total, failures = [], 0, 0
+        for channel in epg_samples:
+            try:
+                total += 1
+                if normalize_listings(api.simple_epg(channel["stream_id"])):
+                    covered.append(channel["name"])
+            except UpstreamError:
+                failures += 1
+        ms = int((time.monotonic() - started) * 1000)
+        label = "Guide via l'API (get_simple_data_table)"
+        if covered:
+            api_result = _result("epg-api", label, "ok" if len(covered) == total else "warn",
+                                 f"{len(covered)}/{total} chaînes testées ont des programmes (ex. « {covered[0]} »)", ms)
+        elif failures == total:
+            api_result = _result("epg-api", label, "error", "L'API ne répond pas pour le guide", ms)
+        else:
+            api_result = _result("epg-api", label, "error",
+                                 f"Aucun programme pour {total} chaînes testées : le fournisseur ne publie pas de guide "
+                                 "par l'API non plus — utilise une source externe (EPG_URL)", ms)
+    if xmltv_result and xmltv_result["status"] == "error" and api_result and api_result["status"] in ("ok", "warn"):
+        # Le complément par l'API compense : ce n'est pas bloquant.
+        xmltv_result["status"] = "warn"
+        xmltv_result["detail"] += " ; le guide est construit chaîne par chaîne via l'API (mode auto)"
+    results.extend(r for r in (xmltv_result, api_result) if r)
 
     # 4. Flux -----------------------------------------------------------------------------
     busy = streams is not None and streams.count() > 0
