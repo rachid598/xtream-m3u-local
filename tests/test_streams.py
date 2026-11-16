@@ -101,6 +101,8 @@ class RelayLimitTests(StackTestCase):
             results[key] = exc
 
     def test_zapping_closes_previous_upstream(self):
+        # Limite « auto » = celle de l'abonnement : la charger d'abord (sinon lue en arrière-plan, course possible).
+        self.assertIsNotNone(self.stack.api.account())
         results = {}
         first = threading.Thread(target=self.read_stream, args=(self.stack.proxy_base + "/stream/50.ts", results, "a"))
         first.start()
