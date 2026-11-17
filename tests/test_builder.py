@@ -250,7 +250,7 @@ class OttPresetTests(unittest.TestCase):
     def test_every_listed_channel_matches_its_own_pattern_in_order(self):
         from app.builder import group_matches, match_name, ordered_custom_groups, is_separator
         patterns = self.patterns()
-        self.assertEqual(len(patterns), 188)   # 531 à 729 sans les 12 séparateurs, + Padel Time TV
+        self.assertEqual(len(patterns), 199)   # 531 à 729 sans les 12 séparateurs, + Padel Time TV, + 11 alias
         group = ordered_custom_groups({"custom_groups": [{"id": "ott", "name": "OTT", "match": "exact", "patterns": patterns}]})[0]
         ranks = []
         for name in self.PROVIDER:
@@ -264,3 +264,17 @@ class OttPresetTests(unittest.TestCase):
         # Une autre version de TF1 (VIP 4K) tombe dans le même groupe : elle devient une version de secours.
         self.assertEqual(group_matches(match_name("VIP: TF1 ᴿᴬᵂ"), group), 0)
         self.assertIsNone(group_matches(match_name("|FR| TF1 SERIES FILMS HD"), {**group, "_patterns": ["tf1"], "_numbers": [None]}))
+
+    def test_aliases_cover_a_second_provider_with_different_wording(self):
+        """Mêmes chaînes écrites autrement chez un 2e fournisseur réel : reconnues grâce aux alias ajoutés."""
+        from app.builder import group_matches, match_name, ordered_custom_groups
+        patterns = self.patterns()
+        group = ordered_custom_groups({"custom_groups": [{"id": "ott", "name": "OTT", "match": "exact", "patterns": patterns}]})[0]
+        second_provider = [
+            "VIP: NATIONAL GEOGRAPHIC ᴴᴰ", "VIP: NAT GEO WILD ᴴᴰ", "VIP: BFM2 ᴿᴬᵂ", "FR: LCP HD",
+            "FR: TECH&ECO", "FR: CANAL+ Cinema 4K", "FR: TV5MONDE EUROPE HEVC", "FR: RMC AFTER FOOT TV HD",
+            "FR: SPORT EN FRANCE", "VO: GINX ESPORTS TV ᴴᴰ", "US: PADELTIME TV",
+        ]
+        for name in second_provider:
+            with self.subTest(name=name):
+                self.assertIsNotNone(group_matches(match_name(name), group), name)

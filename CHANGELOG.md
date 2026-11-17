@@ -2,6 +2,13 @@
 
 Format inspiré de « Keep a Changelog ». Les versions suivent le versionnage sémantique.
 
+## [3.6.2] — 2026-11-17
+
+Comparaison du modèle « OTT » avec un 2ᵉ fournisseur réel (47 411 chaînes) qui écrit les noms autrement.
+
+### Ajouté
+- **11 alias** dans le modèle « OTT » pour les chaînes écrites différemment selon le fournisseur (ex. « National Geographic » en plus de « National Geo », « BFM2 » en plus de « BFM 2 », « LCP », « Sport en France », « Canal+ Cinema », « TV5Monde Europe », « RMC After Foot TV », « Tech&Eco », « Ginx Esports TV », « PadelTime TV »). Couverture du 2ᵉ fournisseur : 123 → 131 chaînes sur 188.
+
 ## [3.6.1] — 2026-11-17
 
 Analyse des exports réels de deux fournisseurs (11 178 et 47 411 chaînes).

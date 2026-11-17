@@ -239,24 +239,24 @@
   const LIVES = Array.from({ length: 19 }, (_, i) => `Canal+ Live ${i + 1}`);
   // Liste « OTT » d'un fournisseur (catégorie « FRANCE HD | OTT »), dans son ordre, sans les séparateurs.
   const OTT = `TF1, France 2, France 3, France 4, France 5, M6, Arte, RTS Un, RTS Deux,
-    Canal+, Canal+ Foot, Canal+ Sport, Canal+ Sport 360, Canal+ Box Office, Canal+ Grand Ecran, Canal+ Cinema(s), Canal+ Docs, Canal+ Kids,
+    Canal+, Canal+ Foot, Canal+ Sport, Canal+ Sport 360, Canal+ Box Office, Canal+ Grand Ecran, Canal+ Cinema(s), Canal+ Cinema, Canal+ Docs, Canal+ Kids,
     Cine+ OCS, Cine+ Frisson, Cine+ Emotion, Cine+ Family, Cine+ Festival, Cine+ Classic, Drive In Movie Channel, Action, TCM Cinema,
     Eurochannel, La Chaine de Noel, Studio Movie 1, Studio Movie 2, Studio Movie 3, Disney+ Marvels, Disney+ Star Wars,
     Canal Play 1, Canal Play 2, Canal Play 3, Canal Play 4, Canal Play 5, Canal Play 6, Canal Play 7, Canal Play 8, Canal Play 9, Canal Play 10,
     13eme Rue, Syfy, Warner TV, Polar+, Serie Club, TV Breizh, RTL9, AB1, Novelas TV, TF1 Series Films, France TV Series, Studio Comedy, Studio Crime,
-    Comedie+, Paris Premiere, Teva, W9, TMC, TFX, CStar, T18, Novo19, 6ter, RMC Story, RMC Life, AB3, Carac 1, TV5 Monde, TV5 Monde Europe,
-    Planete+, Planete+ Crime, Planete+ Aventure, National Geo, National Geo Wild, Discovery Channel, TLC, Discovery ID, RMC Decouverte, Museum,
+    Comedie+, Paris Premiere, Teva, W9, TMC, TFX, CStar, T18, Novo19, 6ter, RMC Story, RMC Life, AB3, Carac 1, TV5 Monde, TV5 Monde Europe, TV5Monde Europe,
+    Planete+, Planete+ Crime, Planete+ Aventure, National Geo, National Geographic, National Geo Wild, Nat Geo Wild, Discovery Channel, TLC, Discovery ID, RMC Decouverte, Museum,
     Ushuaia TV, Histoire, Toute l'Histoire, Seasons, Chasse et Peche, Science & Vie, Crime District, Animaux, Trek, L'Esprit Sorcier, France TV Docs, Imearth,
     Piwi+, Disney Junior, Nickelodeon Junior, Boomerang, Cartoonito, Tiji, Teletoon+, Disney Channel, Nickelodeon, Nickelodeon +1, Canal J,
     Nickelodeon Teen, Cartoon Network, Gulli, Dreamworks, Pitchoun TV, Pitchoun Kids Music, Baby TV, Duck TV,
     Disney+ Pixar [VOD], Les Simpson [VOD], Bob l'Eponge [VOD], Spirit : au galop en toute liberte [VOD], Miraculous [VOD], Masha et Michka [VOD],
     Peppa Pig, Lilo & Stitch [VOD], La Maison de Mickey [VOD], La Garde du Roi Lion [VOD], Elena d'Avalor [VOD], Dora l'exploratrice [VOD],
     Docteur la Peluche [VOD], South Park [VOD], La Pat Patrouille [VOD], A table T'choupi [VOD], T'choupi et Doudou [VOD], T'choupi et ses amis [VOD],
-    MTV, MCM, Bravo, Comedy Central, Warner TV Next, Mangas, ADN, MGG TV, Ginx Esport, Game Toon, Lucky Jack, Gong, Gong Max, Sqool TV,
-    La Chaine Meteo, CNews, CNews Prime, BFM, BFM 2, LCI, France Info, LCP-AN 24/24, Public Sénat, France 24, Euronews, BFM Business, Tech&Co,
+    MTV, MCM, Bravo, Comedy Central, Warner TV Next, Mangas, ADN, MGG TV, Ginx Esport, Ginx Esports TV, Game Toon, Lucky Jack, Gong, Gong Max, Sqool TV,
+    La Chaine Meteo, CNews, CNews Prime, BFM, BFM 2, BFM2, LCI, France Info, LCP-AN 24/24, LCP, Public Sénat, France 24, Euronews, BFM Business, Tech&Co, Tech&Eco,
     B-Smart, Le Media, I24 News, RT France, Bloomberg Europe, CNBC Europe, BBC News, CNN International,
     beIN Sports 1, beIN Sports 2, beIN Sports 3, RMC Sport 1, Infosport+, L'Equipe, Eurosport 1, Eurosport 2, Journal du Golf, Golf+, Automoto,
-    Autoplus, Equidia, Cheval TV, OLTV, After Foot RMC, SportenFrance, Nautical Channel, Motorvision, Motorvision+, Padel Time TV`
+    Autoplus, Equidia, Cheval TV, OLTV, After Foot RMC, RMC After Foot TV, SportenFrance, Sport en France, Nautical Channel, Motorvision, Motorvision+, Padel Time TV, PadelTime TV`
     .split(',').map((p) => p.trim()).filter(Boolean);
   const PRESETS = [
     { name: 'OTT', match: 'exact', hint: 'Ta liste « OTT » (188 chaînes françaises) dans l\'ordre du fournisseur ; les autres versions de chaque chaîne (VIP, 4K, FHD…) deviennent ses secours',
