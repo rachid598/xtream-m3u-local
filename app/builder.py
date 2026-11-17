@@ -30,12 +30,17 @@ _SEPARATOR_EDGE = r"[#=*~_\-|•●◆★☆▬▭━─═\s]"
 _SEPARATOR = re.compile(rf"^{_SEPARATOR_EDGE}*[#=*~_\-•●◆★☆▬▭━─═]{{3,}}.*[#=*~_\-•●◆★☆▬▭━─═]{{3,}}{_SEPARATOR_EDGE}*$")
 
 
+# Générique : au moins 3 symboles (ni lettre, ni chiffre, ni espace) au début ET à la fin du nom :
+# « ♣♦♣----|FR| FRANCE HD |FR|----♣♦♣ », « •●★---|FR| CINEMA HD |FR|---★●• »…
+_SYMBOL_EDGES = re.compile(r"^\s*(?:[^\w\s]|_){3,}.*(?:[^\w\s]|_){3,}\s*$")
+
+
 def is_separator(name: str) -> bool:
     """Fausse chaîne servant de titre de section chez le fournisseur : « #### PRIME ####», « ===== FR ===== »…"""
     text = (name or "").strip()
     if not text:
         return True
-    if _SEPARATOR.match(text):
+    if _SEPARATOR.match(text) or _SYMBOL_EDGES.match(text):
         return True
     return not any(ch.isalnum() for ch in text)
 

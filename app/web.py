@@ -549,6 +549,9 @@ class WebHandler(BaseHTTPRequestHandler):
             info = {"id": channel["stream_id"], "name": channel["name"], "logo": channel.get("logo", ""),
                     "group": names.get(group) or group_names.get(group, ""), "num": channel.get("num", ""),
                     "mine": group.startswith(CUSTOM_PREFIX) or channel["stream_id"] in favorites}
+            if channel.get("alternates"):
+                # Versions de secours de la chaîne (doublons masqués), dans l'ordre d'essai de la bascule.
+                info["backups"] = [(self.api.lookup("live", sid) or {}).get("name") or sid for sid in channel["alternates"]]
             if query:
                 for start, stop, title, desc in programmes:
                     if stop < at or start > at + 7 * 86400:

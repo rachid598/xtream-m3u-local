@@ -242,6 +242,20 @@ try {
   const m3uLines = (await fetchText(url)).text.split('\n');
   const tf1Url = m3uLines[m3uLines.findIndex((l) => l.endsWith(',FR: TF1 4K')) + 1];
   assert(/\/stream\/800012\.ts\?alt=800001(&|$)/.test(tf1Url), `URL avec version de secours : ${tf1Url}`);
+  // Chaîne virtuelle : ses versions de secours sont visibles dans la liste
+  await showTab('channels');
+  await page.fill('#search', 'FR: TF1');
+  const tf1Row = page.locator('#channels .channel').filter({ hasText: 'FR: TF1 4K' }).first();
+  await waitFor(async () => (await tf1Row.locator('.alt-list summary').count()) === 1, 'liste des secours');
+  assert(/1 version de secours/.test(await tf1Row.locator('.alt-list summary').innerText()), 'nombre de secours');
+  const wasOn = await tf1Row.locator('input').isChecked();
+  await tf1Row.locator('.alt-list summary').click();
+  assert(/FR: TF1 HD/.test(await tf1Row.locator('.alt-list ol').innerText()), 'secours listé');
+  assert((await tf1Row.locator('input').isChecked()) === wasOn, 'déplier ne coche/décoche pas la chaîne');
+  const hdRow = page.locator('#channels .channel').filter({ hasText: 'FR: TF1 HD' }).first();
+  assert((await hdRow.locator('.badge.warn').innerText()) === 'Secours 1/1', 'badge Secours 1/1');
+  await page.fill('#search', '');
+  await page.waitForTimeout(300);
   await showTab('categories');
 
   // Films et séries dans la même playlist (même URL)

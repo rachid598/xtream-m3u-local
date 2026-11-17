@@ -2,6 +2,15 @@
 
 Format inspiré de « Keep a Changelog ». Les versions suivent le versionnage sémantique.
 
+## [3.6.0] — 2026-11-17
+
+### Ajouté
+- **Versions de secours visibles** : sous chaque chaîne gardée, « 🔁 n versions de secours » se déplie et liste les autres versions dans l'ordre où la bascule automatique les essaie ; les versions masquées affichent « Secours 2/4 » ; aperçu des groupes « TF1 (+4) » ; Guide TV « 🔁 n secours ».
+- Modèle de groupe **« OTT »** : les 188 chaînes françaises de la catégorie « FRANCE HD | OTT » d'un fournisseur, dans son ordre (correspondance exacte) ; les autres versions (VIP, 4K, FHD…) deviennent leurs secours.
+
+### Corrigé
+- Séparateurs non reconnus quand le fournisseur les encadre d'autres symboles (« ♣♦♣----|FR| FRANCE HD |FR|----♣♦♣ », « •●★---… ---★●• ») : règle générique « au moins 3 symboles au début et à la fin ».
+
 ## [3.5.1] — 2026-11-17
 
 Retour d'essai réel : au redémarrage, le fournisseur a répondu HTTP 429 (« trop de requêtes ») pendant le rechargement simultané direct + films + séries ; les playlists ont renvoyé 502 environ une minute.

@@ -219,7 +219,8 @@
   const SEP_CHARS = '#=*~_\\-•●◆★☆▬▭━─═';
   const SEPARATOR = new RegExp(`^[${SEP_CHARS}|\\s]*[${SEP_CHARS}]{3,}.*[${SEP_CHARS}]{3,}[${SEP_CHARS}|\\s]*$`, 'u');
   /** Fausse chaîne servant de titre de section (même règle que le serveur). */
-  const isSeparator = (name) => { const t = String(name || '').trim(); return !t || SEPARATOR.test(t) || !/[\p{L}\p{N}]/u.test(t); };
+  const SYMBOL_EDGES = /^\s*[^\p{L}\p{N}\s]{3,}.*[^\p{L}\p{N}\s]{3,}\s*$/u;  // ♣♦♣--- … ---♣♦♣
+  const isSeparator = (name) => { const t = String(name || '').trim(); return !t || SEPARATOR.test(t) || SYMBOL_EDGES.test(t) || !/[\p{L}\p{N}]/u.test(t); };
   const squash = (text) => norm(text).split(/\s+/).filter(Boolean).join(' ');
 
   // ------------------------------------------- groupes personnalisés (même règle que app/builder.py)
@@ -235,7 +236,30 @@
   }
   const NUMBERED = /^\s*(\d{1,5})\s*[:=]\s*(.+)$/;  // « 4: Canal+ » = numéro de chaîne (comme sur le décodeur)
   const LIVES = Array.from({ length: 19 }, (_, i) => `Canal+ Live ${i + 1}`);
+  // Liste « OTT » d'un fournisseur (catégorie « FRANCE HD | OTT »), dans son ordre, sans les séparateurs.
+  const OTT = `TF1, France 2, France 3, France 4, France 5, M6, Arte, RTS Un, RTS Deux,
+    Canal+, Canal+ Foot, Canal+ Sport, Canal+ Sport 360, Canal+ Box Office, Canal+ Grand Ecran, Canal+ Cinema(s), Canal+ Docs, Canal+ Kids,
+    Cine+ OCS, Cine+ Frisson, Cine+ Emotion, Cine+ Family, Cine+ Festival, Cine+ Classic, Drive In Movie Channel, Action, TCM Cinema,
+    Eurochannel, La Chaine de Noel, Studio Movie 1, Studio Movie 2, Studio Movie 3, Disney+ Marvels, Disney+ Star Wars,
+    Canal Play 1, Canal Play 2, Canal Play 3, Canal Play 4, Canal Play 5, Canal Play 6, Canal Play 7, Canal Play 8, Canal Play 9, Canal Play 10,
+    13eme Rue, Syfy, Warner TV, Polar+, Serie Club, TV Breizh, RTL9, AB1, Novelas TV, TF1 Series Films, France TV Series, Studio Comedy, Studio Crime,
+    Comedie+, Paris Premiere, Teva, W9, TMC, TFX, CStar, T18, Novo19, 6ter, RMC Story, RMC Life, AB3, Carac 1, TV5 Monde, TV5 Monde Europe,
+    Planete+, Planete+ Crime, Planete+ Aventure, National Geo, National Geo Wild, Discovery Channel, TLC, Discovery ID, RMC Decouverte, Museum,
+    Ushuaia TV, Histoire, Toute l'Histoire, Seasons, Chasse et Peche, Science & Vie, Crime District, Animaux, Trek, L'Esprit Sorcier, France TV Docs, Imearth,
+    Piwi+, Disney Junior, Nickelodeon Junior, Boomerang, Cartoonito, Tiji, Teletoon+, Disney Channel, Nickelodeon, Nickelodeon +1, Canal J,
+    Nickelodeon Teen, Cartoon Network, Gulli, Dreamworks, Pitchoun TV, Pitchoun Kids Music, Baby TV, Duck TV,
+    Disney+ Pixar [VOD], Les Simpson [VOD], Bob l'Eponge [VOD], Spirit : au galop en toute liberte [VOD], Miraculous [VOD], Masha et Michka [VOD],
+    Peppa Pig, Lilo & Stitch [VOD], La Maison de Mickey [VOD], La Garde du Roi Lion [VOD], Elena d'Avalor [VOD], Dora l'exploratrice [VOD],
+    Docteur la Peluche [VOD], South Park [VOD], La Pat Patrouille [VOD], A table T'choupi [VOD], T'choupi et Doudou [VOD], T'choupi et ses amis [VOD],
+    MTV, MCM, Bravo, Comedy Central, Warner TV Next, Mangas, ADN, MGG TV, Ginx Esport, Game Toon, Lucky Jack, Gong, Gong Max, Sqool TV,
+    La Chaine Meteo, CNews, CNews Prime, BFM, BFM 2, LCI, France Info, LCP-AN 24/24, Public Sénat, France 24, Euronews, BFM Business, Tech&Co,
+    B-Smart, Le Media, I24 News, RT France, Bloomberg Europe, CNBC Europe, BBC News, CNN International,
+    beIN Sports 1, beIN Sports 2, beIN Sports 3, RMC Sport 1, Infosport+, L'Equipe, Eurosport 1, Eurosport 2, Journal du Golf, Golf+, Automoto,
+    Autoplus, Equidia, Cheval TV, OLTV, After Foot RMC, SportenFrance, Nautical Channel, Motorvision, Motorvision+, Padel Time TV`
+    .split(',').map((p) => p.trim()).filter(Boolean);
   const PRESETS = [
+    { name: 'OTT', match: 'exact', hint: 'Ta liste « OTT » (188 chaînes françaises) dans l\'ordre du fournisseur ; les autres versions de chaque chaîne (VIP, 4K, FHD…) deviennent ses secours',
+      patterns: OTT },
     { name: 'Bouquet Canal+', match: 'exact', hint: 'Toutes les chaînes du bouquet Canal+, rangées par thème comme sur le décodeur (TNT, Canal+, cinéma, sport, séries, découverte, jeunesse, info, musique)',
       patterns: ['1: TF1', '2: France 2', '3: France 3', '4: Canal+', '5: France 5', '6: M6', '7: Arte',
         'W9', 'TMC', 'TFX', 'NRJ 12', 'NRJ12', 'LCP', 'Public Sénat', 'France 4', 'BFM TV', 'BFMTV', 'CNews', 'CStar', 'C Star', 'Gulli',
@@ -363,18 +387,34 @@
       const group = c.category_ids.find((id) => catOn('live', id)) || (sel.included.has(c.stream_id) ? c.category_id : null);
       if (group == null) continue;
       if (separators && isSeparator(c.name)) { kept.push(c.stream_id); continue; }
-      if (!dedupe) { best.set(`id\u0000${c.stream_id}`, { q: 0, id: c.stream_id }); kept.push(c.stream_id); continue; }
+      if (!dedupe) { best.set(`id\u0000${c.stream_id}`, [{ q: 0, id: c.stream_id, i: kept.length }]); kept.push(c.stream_id); continue; }
       const custom = groupAssignment().get(c.stream_id);
       if (c._core === undefined) c._core = matchName(c.name);
       const key = `${custom ? CG + custom : group}\u0000${c._core || baseName(c.name)}`;
       const q = qualityOf(c.name);
-      const current = best.get(key);
-      if (!current || q > current.q) best.set(key, { q, id: c.stream_id });
+      if (!best.has(key)) best.set(key, []);
+      best.get(key).push({ q, id: c.stream_id, i: kept.length });
       kept.push(c.stream_id);
     }
-    const keep = new Set([...best.values()].map((v) => v.id));
+    // Même règle que le serveur (builder.dedupe) : meilleure qualité gardée, les autres = versions de secours.
+    const keep = new Set();
+    state.altMap = new Map();   // id gardé → [ids des versions de secours, meilleure d'abord]
+    state.altOf = new Map();    // id masqué → { kept, rank }
+    for (const versions of best.values()) {
+      const ranked = versions.sort((a, b) => b.q - a.q || a.i - b.i).map((v) => v.id);
+      keep.add(ranked[0]);
+      if (ranked.length > 1) {
+        state.altMap.set(ranked[0], ranked.slice(1, 9));
+        ranked.slice(1).forEach((id, n) => state.altOf.set(id, { kept: ranked[0], rank: n + 1, total: ranked.length - 1 }));
+      }
+    }
     state.hiddenCache = new Set(kept.filter((id) => !keep.has(id)));
     return state.hiddenCache;
+  }
+  /** Versions de secours d'une chaîne gardée (doublons masqués), dans l'ordre d'essai. */
+  function backupsOf(id) {
+    hiddenDuplicates();
+    return (state.altMap && $('opt-dedupe').checked && state.altMap.get(id)) || [];
   }
 
   // ----------------------------------------------------------- sélection
@@ -853,6 +893,7 @@
           h('span', { class: 'ch-name', text: displayName(c) }),
           state.itemNames[keyOf(c)] ? h('span', { class: 'ch-orig', text: `Nom d'origine : ${c.name}` }) : null,
           h('span', { class: 'ch-meta', text: itemMeta(c) }),
+          state.kind === 'live' ? backupList(c) : null,
           state.kind === 'series' ? episodesButton(c) : null),
         h('span', { class: 'badges' }, badgesFor(c)),
         itemActions(c),
@@ -866,6 +907,25 @@
     $('more').hidden = found.length <= visible.length;
     $('more').textContent = `Afficher ${Math.min(PAGE, found.length - visible.length)} ${K().many} de plus`;
     $('ch-check').disabled = $('ch-uncheck').disabled = !found.length;
+  }
+
+  /** « 🔁 4 versions de secours » : dépliable, dans l'ordre où la bascule automatique les essaie. */
+  function backupList(c) {
+    const ids = backupsOf(c.stream_id);
+    if (!ids.length) return null;
+    const byId = state.cat.live.channelById;
+    const failover = $('opt-failover').checked;
+    const details = h('details', { class: 'alt-list' },
+      h('summary', { text: `🔁 ${plural(ids.length, failover ? 'version de secours' : 'autre version masquée', failover ? 'versions de secours' : 'autres versions masquées')}` }),
+      h('ol', null, ids.map((id) => {
+        const other = byId.get(id);
+        return h('li', { text: other ? `${other.name} · ${(other.category_ids || []).map((cid) => state.cat.live.categoryNames.get(cid) || cid).join(', ')}` : `Chaîne ${id}` });
+      })),
+      failover ? null : h('p', { class: 'hint', text: 'Active « Bascule automatique » (Options) pour que le serveur les utilise si la chaîne coupe.' }));
+    // La ligne est un <label> : sans ça, un clic sur le résumé cocherait/décocherait la chaîne.
+    details.querySelector('summary').addEventListener('click', (event) => { event.preventDefault(); details.open = !details.open; });
+    details.addEventListener('click', (event) => { if (event.target.tagName !== 'SUMMARY') event.preventDefault(); });
+    return details;
   }
 
   function itemMeta(c) {
@@ -888,8 +948,11 @@
     if (c.archive) badges.push(h('span', { class: 'badge opt', text: `Replay ${c.archive} j`, title: 'Programmes passés disponibles (catch-up)' }));
     if (state.kind === 'live' && hiddenDuplicates().has(c.stream_id)) {
       const sep = $('opt-separators').checked && isSeparator(c.name);
-      badges.push(h('span', { class: 'badge warn', text: sep ? 'Séparateur masqué' : 'Doublon masqué',
-        title: sep ? 'Fausse chaîne servant de titre de section chez le fournisseur' : 'Une meilleure qualité de cette chaîne est déjà dans le groupe' }));
+      const alt = !sep && state.altOf && state.altOf.get(c.stream_id);
+      const main = alt && state.cat.live.channelById.get(alt.kept);
+      badges.push(h('span', { class: 'badge warn', text: sep ? 'Séparateur masqué' : alt && $('opt-failover').checked ? `Secours ${alt.rank}/${alt.total}` : 'Doublon masqué',
+        title: sep ? 'Fausse chaîne servant de titre de section chez le fournisseur'
+          : main ? `Version masquée de « ${main.name} »${$('opt-failover').checked ? ` : essayée en n° ${alt.rank} si elle coupe` : ''}` : 'Une meilleure qualité de cette chaîne est déjà dans le groupe' }));
     }
     return badges;
   }
@@ -1141,7 +1204,10 @@
     for (const [sid, gid] of groupAssignment()) {
       if (!members.has(gid)) members.set(gid, []);
       const c = byId.get(sid);
-      if (c && !hiddenDuplicates().has(sid)) members.get(gid).push(displayName(c, 'live'));
+      if (c && !hiddenDuplicates().has(sid)) {
+        const n = backupsOf(sid).length;
+        members.get(gid).push(displayName(c, 'live') + (n ? ` (+${n})` : ''));
+      }
     }
     return members;
   }
@@ -1399,7 +1465,9 @@
   function guideRow(c, body) {
     return h('li', { class: `guide-row${c.mine ? ' mine' : ''}` },
       thumb({ ...c, stream_id: c.id, logo: c.logo }, 'live'),
-      h('span', { class: 'g-chan' }, h('strong', { text: c.name }), h('span', { class: 'muted small', text: [c.num ? `n° ${c.num}` : '', c.group].filter(Boolean).join(' · ') })),
+      h('span', { class: 'g-chan' }, h('strong', { text: c.name }),
+        h('span', { class: 'muted small', text: [c.num ? `n° ${c.num}` : '', c.group, c.backups && c.backups.length ? `🔁 ${c.backups.length} secours` : ''].filter(Boolean).join(' · '),
+          title: c.backups && c.backups.length ? `Versions de secours : ${c.backups.join(' → ')}` : null })),
       body,
       h('button', { type: 'button', class: 'item-btn', text: '▶', title: 'Aperçu dans le navigateur', 'aria-label': `Aperçu de ${c.name}`,
         onclick: () => preview(c.id, c.name) }));

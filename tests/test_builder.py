@@ -113,10 +113,13 @@ if __name__ == "__main__":
 class SeparatorTests(unittest.TestCase):
     def test_is_separator(self):
         from app.builder import is_separator
-        for name in ("#### PRIME ᴿᴬᵂ ⁶⁰ᶠᵖˢ #####", "===== FR =====", "★★★ SPORTS ★★★", "---", "", "   "):
+        for name in ("#### PRIME ᴿᴬᵂ ⁶⁰ᶠᵖˢ #####", "===== FR =====", "★★★ SPORTS ★★★", "---", "", "   ",
+                     "♣♦♣----|FR| FRANCE HD |FR|----♣♦♣", "•●★---|FR| CH. CANAL+ HD |FR|---★●•",
+                     "•●★-|FR| DIVERTISSEMENT HD |FR|-★●•"):
             with self.subTest(name=name):
                 self.assertTrue(is_separator(name))
-        for name in ("TF1 HD", "FR | Sport", "#1 Hits", "|FR| TF1", "A&E", "UK: BBC ONE LONDON 4K ◉", "M6 ###"):
+        for name in ("TF1 HD", "FR | Sport", "#1 Hits", "|FR| TF1", "A&E", "UK: BBC ONE LONDON 4K ◉", "M6 ###",
+                     "|FR| TF1 HD", "|FR| NICKELODEON +1 HD", "|FR| LILO & STITCH [VOD]", "|FR| DISNEY+ PIXAR [VOD]"):
             with self.subTest(name=name):
                 self.assertFalse(is_separator(name))
 
@@ -222,3 +225,40 @@ class CustomGroupIntegrationTests(StackTestCase):
         live = json.loads(self.get(self.stack.proxy_base + "/player_api.php?" + urlencode(
             {**q, "action": "get_live_streams", "category_id": cats[0]["category_id"]}))[1])
         self.assertEqual([s["stream_id"] for s in live], [42, 44])
+
+
+class OttPresetTests(unittest.TestCase):
+    """Le modèle « OTT » de l'interface reconnaît les noms réels du fournisseur (catégorie FRANCE HD | OTT)."""
+
+    PROVIDER = [
+        "|FR| TF1 HD", "|FR| FRANCE 2 HD", "|FR| RTS DEUX HD", "|FR| CANAL+ SPORT 360 HD", "|FR| CANAL+ CINEMA(S) HD",
+        "|FR| CINE+ OCS HD", "|FR| CANAL PLAY 10 HD", "|FR| 13EME RUE HD", "|FR| TF1 SERIES FILMS HD", "|FR| NOVO19 HD",
+        "|FR| TOUTE L'HISTOIRE HD", "|FR| SCIENCE & VIE HD", "|FR| NICKELODEON +1 HD",
+        "|FR| SPIRIT : AU GALOP EN TOUTE LIBERTE [VOD]", "|FR| PEPPA PIG HD", "|FR| LCP-AN 24/24 HD",
+        "|FR| PUBLIC SÉNAT HD", "|FR| TECH&CO HD", "|FR| BEIN SPORTS 1 HD", "|FR| MOTORVISION+ HD", "|FR| PADEL TIME TV HD",
+    ]
+
+    def patterns(self):
+        import pathlib
+        import re as _re
+        js = (pathlib.Path(__file__).resolve().parents[1] / "app" / "static" / "app.js").read_text(encoding="utf-8")
+        block = _re.search(r"const OTT = `([^`]*)`", js).group(1)
+        return [p.strip() for p in block.split(",") if p.strip()]
+
+    def test_every_listed_channel_matches_its_own_pattern_in_order(self):
+        from app.builder import group_matches, match_name, ordered_custom_groups, is_separator
+        patterns = self.patterns()
+        self.assertEqual(len(patterns), 188)   # 531 à 729 sans les 12 séparateurs, + Padel Time TV
+        group = ordered_custom_groups({"custom_groups": [{"id": "ott", "name": "OTT", "match": "exact", "patterns": patterns}]})[0]
+        ranks = []
+        for name in self.PROVIDER:
+            rank = group_matches(match_name(name), group)
+            self.assertIsNotNone(rank, name)
+            ranks.append(rank)
+        self.assertEqual(ranks, sorted(ranks), "ordre du fournisseur conservé")
+        # Les séparateurs du fournisseur ne correspondent à aucun nom de la liste.
+        for sep in ("♣♦♣----|FR| FRANCE HD |FR|----♣♦♣", "•●★---|FR| CH. CANAL+ HD |FR|---★●•"):
+            self.assertTrue(is_separator(sep))
+        # Une autre version de TF1 (VIP 4K) tombe dans le même groupe : elle devient une version de secours.
+        self.assertEqual(group_matches(match_name("VIP: TF1 ᴿᴬᵂ"), group), 0)
+        self.assertIsNone(group_matches(match_name("|FR| TF1 SERIES FILMS HD"), {**group, "_patterns": ["tf1"], "_numbers": [None]}))

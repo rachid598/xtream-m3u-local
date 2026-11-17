@@ -585,3 +585,10 @@ dialog.preview-dialog { width: min(920px, calc(100vw - 24px)); padding: 14px; }
   .section-nav { top: 0; border-radius: 0 0 var(--radius) var(--radius); }
   .section-nav [role=tab] { padding: 9px 10px; font-size: 13px; }
 }
+
+/* versions de secours d'une chaîne (doublons masqués) */
+.alt-list { margin-top: 4px; font-size: 12px; }
+.alt-list summary { cursor: pointer; color: var(--accent-strong); font-weight: 600; width: max-content; max-width: 100%; }
+.alt-list ol { margin: 4px 0 0; padding-left: 20px; color: var(--text-soft); }
+.alt-list li { overflow-wrap: anywhere; }
+.alt-list .hint { margin: 4px 0 0; }
