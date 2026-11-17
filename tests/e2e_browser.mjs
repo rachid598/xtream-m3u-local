@@ -258,6 +258,61 @@ try {
   await page.waitForTimeout(300);
   await showTab('categories');
 
+  // Catégories qui ne diffèrent que par la qualité : « Cocher aussi les catégories liées »
+  await page.fill('#cat-search', 'OTT');
+  await page.waitForTimeout(300);
+  await catBox(page, 'FRANCE FHD | OTT').waitFor({ timeout: 10000 });
+  await catBox(page, 'FRANCE FHD | OTT').check();
+  const fhdCard = catCard(page, 'FRANCE FHD | OTT');
+  const qlink = fhdCard.locator('.qlink');
+  await waitFor(async () => (await qlink.count()) === 1, 'lien catégories liées visible');
+  assert(/3 catégories liées/.test(await qlink.innerText()), `texte du lien : ${await qlink.innerText()}`);
+  if (shots) await page.screenshot({ path: join(shots, 'desktop-quality-link.png') });
+
+  // Avertissement « sans version de secours » dans Mes groupes tant que les qualités liées ne sont pas cochées
+  await showSection('organize');
+  await page.click('#cg-add');
+  await page.fill('#dialog-input', 'Zenith');
+  await page.click('#dialog-ok');
+  const zenithCard = page.locator('#cg-list .cg-card').first();
+  await zenithCard.locator('textarea').fill('Zenith');
+  await waitFor(async () => num(await zenithCard.locator('.num').innerText()) === 1, 'groupe Zenith rempli (dédoublonné)');
+  await waitFor(async () => zenithCard.locator('.warn-text').isVisible(), 'avertissement : aucun secours pour Zenith');
+  assert(/sans version de secours/.test(await zenithCard.locator('.warn-text').innerText()), 'texte de l\'avertissement');
+  if (shots) await page.screenshot({ path: join(shots, 'desktop-failover-warning.png') });
+
+  // Le lien « Cocher aussi les catégories liées » fait disparaître l'avertissement
+  await showTab('categories');
+  await qlink.click();
+  await waitFor(async () => catBox(page, 'FRANCE HEVC | OTT').isChecked(), 'catégories liées cochées');
+  assert(await catBox(page, 'FRANCE HD | OTT').isChecked() && await catBox(page, 'FRANCE SD | OTT').isChecked(), 'les 4 qualités cochées');
+  assert((await fhdCard.locator('.qlink').count()) === 0, 'lien disparu une fois tout coché');
+  await showSection('organize');
+  await waitFor(async () => !(await zenithCard.locator('.warn-text').isVisible()), 'avertissement disparu : secours disponibles');
+  assert(num(await zenithCard.locator('.num').innerText()) === 1, 'toujours 1 chaîne (dédoublonnée)');
+
+  // Secours hors catégories cochées : décoche les qualités liées, active l'option plutôt que de les recocher
+  await showTab('categories');
+  await catBox(page, 'FRANCE HD | OTT').uncheck();
+  await catBox(page, 'FRANCE SD | OTT').uncheck();
+  await catBox(page, 'FRANCE HEVC | OTT').uncheck();
+  await showSection('organize');
+  await waitFor(async () => zenithCard.locator('.warn-text').isVisible(), 'avertissement de retour : qualités liées décochées');
+  await showSection('options');
+  assert(!(await page.isDisabled('#opt-failover-any')), 'option activable (bascule automatique déjà cochée)');
+  await page.check('#opt-failover-any');
+  await showSection('organize');
+  await waitFor(async () => !(await zenithCard.locator('.warn-text').isVisible()), 'secours hors catégories cochées : avertissement disparu');
+  await page.click('#save');
+  await waitFor(async () => !(await page.isVisible('#dirty')), 'enregistrement du secours hors catégories cochées');
+  const zenithLines = (await fetchText(url)).text.split('\n');
+  const zenithUrl = zenithLines[zenithLines.findIndex((l) => l.endsWith(',Zenith FHD')) + 1];
+  assert(/\/stream\/800101\.ts\?alt=800102,800104,800103(&|$)/.test(zenithUrl), `secours hors catégories cochées dans l'URL : ${zenithUrl}`);
+  assert(!zenithLines.some((l) => /,Zenith (HD|SD|HEVC)$/.test(l)), 'les secours restent invisibles dans la playlist');
+  await showTab('categories');
+  await page.fill('#cat-search', '');
+  await page.waitForTimeout(300);
+
   // Films et séries dans la même playlist (même URL)
   const kindBtn = (kind) => page.locator(`#view-playlists [data-kind="${kind}"]`);
   await waitFor(async () => /films disponibles/.test(await page.innerText('[data-kind-meta="vod"]')), 'tuile Films : films disponibles');
@@ -410,6 +465,11 @@ try {
   await waitFor(async () => (await page.locator('#diag-results .diag-item').count()) >= 8, 'résultats du diagnostic', 60000);
   const okCount = await page.locator('#diag-results .diag-item.ok').count();
   assert(okCount >= 9, `diagnostic : ${okCount} tests OK`);
+  const failoverDiag = page.locator('#diag-results .diag-item').filter({ hasText: 'Bascule automatique : « Salon TV »' });
+  await waitFor(async () => (await failoverDiag.count()) === 1, 'diagnostic : résultat de la bascule automatique pour Salon TV');
+  assert(!(await failoverDiag.getAttribute('class')).includes('error'),
+    `diagnostic bascule automatique en erreur : ${await failoverDiag.locator('.d-detail').innerText()}`);
+  assert(/secours/.test(await failoverDiag.locator('.d-detail').innerText()), 'détail du diagnostic mentionne les secours');
   if (shots) await page.screenshot({ path: join(shots, 'desktop-system.png'), fullPage: true });
   const backupHref = await page.getAttribute('#backup-download', 'href');
   const backupText = (await fetchText(`${base}${backupHref}`)).text;

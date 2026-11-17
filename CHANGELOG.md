@@ -2,6 +2,16 @@
 
 Format inspiré de « Keep a Changelog ». Les versions suivent le versionnage sémantique.
 
+## [3.7.0] — 2026-11-17
+
+Suite à une question utilisateur sur la bascule automatique : une catégorie décochée n'a jamais servi de secours, même avec « Masquer les doublons » et « Bascule automatique » activés.
+
+### Ajouté
+- **Avertissement dans « Mes groupes »** : quand la bascule automatique est activée, un groupe dont les chaînes n'ont aucune version de secours (parmi les catégories cochées) l'affiche clairement, avec les deux façons d'y remédier.
+- **« 🔗 Cocher aussi les catégories liées »** : sur une catégorie qui ne diffère d'une ou plusieurs autres que par la qualité (ex. « FRANCE FHD | OTT » / « FRANCE HD | OTT » / « FRANCE SD | OTT »), un lien les coche toutes en un clic.
+- **Diagnostic** : nouvelle section « Bascule automatique » qui teste chaque playlist concernée — détecte une bascule activée sans « Masquer les doublons » (aucun secours possible), et donne le pourcentage de chaînes avec au moins une version de secours.
+- **Option « Secours hors catégories cochées »** (sous « Bascule automatique » dans Options) : cherche des versions de secours dans tout le catalogue du fournisseur, même les catégories non cochées. Ces versions ne sont jamais ajoutées à la playlist ni affichées : elles ne servent que si toutes les versions cochées de la chaîne deviennent indisponibles.
+
 ## [3.6.2] — 2026-11-17
 
 Comparaison du modèle « OTT » avec un 2ᵉ fournisseur réel (47 411 chaînes) qui écrit les noms autrement.

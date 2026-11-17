@@ -129,6 +129,49 @@ def run(api, epg, series, streams, store, config) -> list[dict]:
     step = max(1, len(with_epg) // 5)
     epg_samples = with_epg[::step][:5]
 
+    # 2b. Bascule automatique ---------------------------------------------------------------
+    # Repère les playlists mal configurées (bascule activée sans « Masquer les doublons »,
+    # ou sans aucune version de secours disponible), sans attendre qu'une chaîne coupe en vrai.
+    MAX_FAILOVER_CHECKS = 10
+    try:
+        playlists = store.list()
+    except Exception:
+        playlists = []
+    failover_playlists = [p for p in playlists if p.get("failover")]
+    for saved in failover_playlists[:MAX_FAILOVER_CHECKS]:
+        name, slug = saved.get("name") or saved.get("slug") or "?", saved.get("slug") or "?"
+        label = f"Bascule automatique : « {name} »"
+        if not saved.get("dedupe"):
+            results.append(_result(f"failover-{slug}", label, "error",
+                                   "Activée sans « Masquer les doublons » dans les options de cette playlist : "
+                                   "aucune version de secours n'est possible. Active aussi « Masquer les doublons »."))
+            continue
+        try:
+            entries = select_items(api, saved, "live")[0]
+        except UpstreamError as exc:
+            results.append(_result(f"failover-{slug}", label, "error", str(exc)))
+            continue
+        total = len(entries)
+        with_backup = sum(1 for item, _ in entries if item.get("alternates"))
+        if not total:
+            results.append(_result(f"failover-{slug}", label, "skipped", "Playlist vide pour le moment."))
+        elif not with_backup:
+            results.append(_result(f"failover-{slug}", label, "warn",
+                                   f"0/{total} chaînes ont une version de secours : coche d'autres catégories de la "
+                                   "même chaîne (ex. une autre qualité) dans « 1. Catégories », ou active « Secours "
+                                   "hors catégories cochées » dans les options."))
+        else:
+            pct = round(with_backup / total * 100)
+            results.append(_result(f"failover-{slug}", label, "ok" if pct >= 50 else "warn",
+                                   f"{with_backup}/{total} chaînes ({pct} %) ont au moins une version de secours."))
+    if not failover_playlists:
+        results.append(_result("failover", "Bascule automatique", "skipped",
+                               "Aucune playlist n'utilise la bascule automatique."))
+    elif len(failover_playlists) > MAX_FAILOVER_CHECKS:
+        results.append(_result("failover-more", "Bascule automatique", "skipped",
+                               f"{len(failover_playlists) - MAX_FAILOVER_CHECKS} playlist(s) supplémentaire(s) "
+                               "avec bascule automatique non testée(s) (limite de diagnostic)."))
+
     # 3. Guide ---------------------------------------------------------------------------
     xmltv_result = None
     if config.enable_epg and config.epg_source != "api":

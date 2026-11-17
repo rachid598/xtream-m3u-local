@@ -451,6 +451,7 @@
     data.catchup = $('opt-catchup').checked;
     data.dedupe = $('opt-dedupe').checked;
     data.failover = $('opt-failover').checked;
+    data.failover_any_category = $('opt-failover-any').checked;
     data.hide_separators = $('opt-separators').checked;
     data.favorites_name = $('opt-fav-name').value.trim() || '★ Favoris';
     data.rules = state.rules.map((r) => ({ ...r }));
@@ -718,6 +719,9 @@
     if ($('opt-separators').checked) parts.push('Sans séparateurs');
     if ($('opt-failover').checked && $('opt-dedupe').checked && $('opt-live-format').value !== 'hls') parts.push('Bascule auto');
     $('opt-failover-hint').classList.toggle('warn-text', $('opt-failover').checked && (!$('opt-dedupe').checked || $('opt-live-format').value === 'hls'));
+    $('opt-failover-any').disabled = !$('opt-failover').checked;
+    if (!$('opt-failover').checked) $('opt-failover-any').checked = false;
+    if (parts.includes('Bascule auto') && $('opt-failover-any').checked) parts[parts.length - 1] += ' (toutes catégories)';
     $('options-pill-text').textContent = parts.join(' · ');
   }
 
@@ -798,6 +802,14 @@
       if (state.catFilter === 'off' && catOn(state.kind, cat.category_id)) return false;
       return true;
     });
+    // Catégories qui ne diffèrent que par la qualité (« FRANCE FHD | OTT » / « FRANCE HD | OTT »…) :
+    // même règle que les doublons de chaînes, pour proposer de les cocher ensemble en un clic.
+    const clusters = new Map();
+    for (const cat of state.categories) {
+      const base = baseName(cat.name) || cat.name;
+      if (!clusters.has(base)) clusters.set(base, []);
+      clusters.get(base).push(cat);
+    }
     const fragment = document.createDocumentFragment();
     for (const cat of visible) {
       const ruled = !state.selected.has(cat.category_id) && ruleSet(state.kind).has(cat.category_id);
@@ -815,12 +827,23 @@
         refresh({ channels: false });
       });
       if (ruled) { metaText = `${metaText} · ajoutée par une règle`; partial = true; }
+      const siblings = (clusters.get(baseName(cat.name) || cat.name) || []).filter((c) => c.category_id !== cat.category_id);
+      const uncheckedSiblings = siblings.filter((c) => !state.selected.has(c.category_id));
       fragment.append(h('label', { class: `cat${on ? ' on' : ''}${ruled ? ' ruled' : ''}` },
         box,
         h('span', { class: 'grow' }, h('span', { class: 'name', text: cat.name }),
           cat.provider ? h('span', { class: 'meta', text: `Fournisseur : ${cat.provider}` }) : null,
           parent ? h('span', { class: 'meta', text: `Sous-groupe de ${parent}` }) : null,
-          h('span', { class: `meta${partial ? ' partial' : ''}`, text: metaText })),
+          h('span', { class: `meta${partial ? ' partial' : ''}`, text: metaText }),
+          uncheckedSiblings.length ? h('button', { type: 'button', class: 'link-btn qlink',
+            text: `🔗 Cocher aussi ${plural(uncheckedSiblings.length, 'catégorie liée', 'catégories liées')} (même chaînes, autre qualité)`,
+            title: uncheckedSiblings.map((c) => c.name).join(', '),
+            onclick: (event) => {
+              event.preventDefault();
+              for (const c of uncheckedSiblings) state.selected.add(c.category_id);
+              state.selected.add(cat.category_id);
+              refresh({ channels: false });
+            } }) : null),
         cat.count ? h('button', {
           type: 'button', class: 'view', text: 'Voir', title: `Voir les ${K().many} de ${cat.name}`,
           onclick: (event) => { event.preventDefault(); showCategoryChannels(cat.category_id); },
@@ -1213,10 +1236,32 @@
     return members;
   }
 
+  /** Secours disponibles pour les chaînes d'un groupe perso (parmi les catégories cochées). */
+  function groupBackupStats(gid) {
+    let total = 0, withBackup = 0;
+    for (const [sid, g] of groupAssignment()) {
+      if (g !== gid || hiddenDuplicates().has(sid)) continue;
+      total += 1;
+      if (backupsOf(sid).length) withBackup += 1;
+    }
+    return { total, withBackup };
+  }
+
   function previewText(names) {
     if (!state.cat.live.catalogLoaded) return 'Chargement du catalogue…';
     if (!names || !names.length) return 'Aucune chaîne retenue pour l\'instant (coche d\'abord les catégories FR, puis ajoute des noms ou range des chaînes avec 📁).';
     return `${plural(names.length, 'chaîne', 'chaînes')} : ${names.slice(0, 8).join(', ')}${names.length > 8 ? '…' : ''}`;
+  }
+
+  /** Avertissement « X/Y chaînes sans secours » (bascule automatique activée mais peu de doublons disponibles). */
+  function failoverWarnText(gid) {
+    // « Secours hors catégories cochées » cherche de toute façon dans tout le catalogue : plus rien à signaler.
+    if (!$('opt-failover').checked || $('opt-failover-any').checked) return '';
+    const { total, withBackup } = groupBackupStats(gid);
+    if (!total || withBackup >= total) return '';
+    return `⚠️ ${total - withBackup}/${total} chaîne${total - withBackup > 1 ? 's' : ''} sans version de secours. `
+      + 'Coche d\'autres catégories de la même chaîne (ex. une autre qualité) dans l\'onglet 1, ou active '
+      + '« Secours hors catégories cochées » dans Options.';
   }
 
   function renderCustomGroups() {
@@ -1228,11 +1273,16 @@
       const group = state.customGroups.find((g) => g.id === info.id);
       const count = h('span', { class: 'num', text: String((members.get(group.id) || []).length) });
       const preview = h('p', { class: 'hint cg-preview', text: previewText(members.get(group.id)) });
+      const warnText = failoverWarnText(group.id);
+      const warn = h('p', { class: 'hint warn-text', text: warnText, hidden: !warnText });
       const update = () => {
         state.groupCache = null; state.hiddenCache = null;
         const names = groupMembers().get(group.id);
         preview.textContent = previewText(names);
         count.textContent = String((names || []).length);
+        const w = failoverWarnText(group.id);
+        warn.textContent = w;
+        warn.hidden = !w;
         renderStats();
       };
       const name = h('input', { type: 'text', maxlength: '100', value: group.name, 'aria-label': 'Nom du groupe' });
@@ -1270,7 +1320,7 @@
               for (const [sid, gid] of Object.entries(state.itemGroups)) if (gid === group.id) delete state.itemGroups[sid];
               refresh();
             } })),
-        h('div', { class: 'cg-body' }, match, patterns, preview,
+        h('div', { class: 'cg-body' }, match, patterns, preview, warn,
           manual ? h('p', { class: 'hint', text: `${plural(manual, 'chaîne rangée', 'chaînes rangées')} à la main avec 📁.` }) : null)));
     });
     if (!ordered.length) list.append(h('p', { class: 'empty', text: 'Aucun groupe pour le moment : choisis un modèle (TNT, Canal+…) ou crée un groupe vide puis range tes chaînes avec 📁.' }));
@@ -1591,6 +1641,7 @@
     $('opt-catchup').checked = !p || p.catchup !== false;
     $('opt-dedupe').checked = Boolean(p && p.dedupe);
     $('opt-failover').checked = Boolean(p && p.failover);
+    $('opt-failover-any').checked = Boolean(p && p.failover_any_category);
     $('opt-separators').checked = Boolean(p && p.hide_separators);
     $('opt-fav-name').value = (p && p.favorites_name) || '★ Favoris';
     state.rules = p && p.rules ? p.rules.map((r) => ({ ...r })) : [];
@@ -2210,6 +2261,7 @@
   $('opt-catchup').addEventListener('change', () => { renderOptionsPill(); renderStats(); });
   $('opt-dedupe').addEventListener('change', () => { renderOptionsPill(); refresh(); });
   $('opt-failover').addEventListener('change', () => { renderOptionsPill(); refresh({ channels: false }); });
+  $('opt-failover-any').addEventListener('change', () => { renderOptionsPill(); refresh({ channels: false }); });
   $('opt-separators').addEventListener('change', () => { renderOptionsPill(); refresh(); });
   $('opt-fav-name').addEventListener('input', () => renderStats());
   $('rule-value').addEventListener('input', debounce(previewRule, 150));

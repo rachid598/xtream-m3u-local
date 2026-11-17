@@ -278,3 +278,77 @@ class OttPresetTests(unittest.TestCase):
         for name in second_provider:
             with self.subTest(name=name):
                 self.assertIsNotNone(group_matches(match_name(name), group), name)
+
+
+class FailoverAnyCategoryTests(unittest.TestCase):
+    """Option ``failover_any_category`` : secours cherchés aussi hors des catégories cochées."""
+
+    CATALOG = [
+        ch(1, "TF1 FHD", "1"), ch(2, "M6 FHD", "1"),                                # catégorie 1 (cochée)
+        ch(3, "TF1 HD", "2"), ch(4, "TF1 SD", "3"), ch(5, "TF1 HEVC", "4"),          # 2, 3, 4 non cochées
+        ch(6, "#### FRANCE HD #####", "2"),                                         # séparateur : jamais un secours
+    ]
+    CATEGORIES = {"1": "France FHD", "2": "France HD", "3": "France SD", "4": "France HEVC"}
+
+    def saved(self, **extra):
+        return validate_playlist({"slug": "s", "name": "S", "category_ids": ["1"], "dedupe": True, **extra})
+
+    def test_disabled_by_default_no_alternates_from_unchecked_categories(self):
+        api = StubAPI(self.CATALOG, self.CATEGORIES)
+        entries, _ = select_items(api, self.saved(), "live")
+        tf1 = next(item for item, _ in entries if item["stream_id"] == "1")
+        self.assertEqual(tf1.get("alternates"), None)  # seule version sélectionnée : rien à masquer
+
+    def test_enabled_finds_versions_in_unchecked_categories_best_first(self):
+        api = StubAPI(self.CATALOG, self.CATEGORIES)
+        entries, _ = select_items(api, self.saved(failover=True, failover_any_category=True), "live")
+        self.assertEqual([item["stream_id"] for item, _ in entries], ["1", "2"])  # playlist inchangée
+        tf1 = next(item for item, _ in entries if item["stream_id"] == "1")
+        self.assertEqual(tf1["alternates"], ["3", "5", "4"])  # qualité : HD (2.0) > HEVC (1.5, non noté) > SD (1.0)
+        m6 = next(item for item, _ in entries if item["stream_id"] == "2")
+        self.assertIsNone(m6.get("alternates"))  # aucune autre version de M6 dans le catalogue
+
+    def test_requires_dedupe(self):
+        api = StubAPI(self.CATALOG, self.CATEGORIES)
+        saved = validate_playlist({"slug": "s", "name": "S", "category_ids": ["1"], "failover": True,
+                                   "dedupe": False, "failover_any_category": True})
+        entries, _ = select_items(api, saved, "live")
+        self.assertTrue(all(item.get("alternates") is None for item, _ in entries))
+
+    def test_requires_failover_itself(self):
+        # « Secours hors catégories cochées » coché mais « Bascule automatique » décochée : sans effet.
+        api = StubAPI(self.CATALOG, self.CATEGORIES)
+        saved = validate_playlist({"slug": "s", "name": "S", "category_ids": ["1"], "dedupe": True,
+                                   "failover": False, "failover_any_category": True})
+        entries, _ = select_items(api, saved, "live")
+        tf1 = next(item for item, _ in entries if item["stream_id"] == "1")
+        self.assertIsNone(tf1.get("alternates"))
+
+    def test_combines_with_selected_duplicates_without_repeats_and_caps_at_max(self):
+        # TF1 aussi coché via une 2e catégorie sélectionnée (doublon « sélectionné », même groupe perso
+        # malgré des catégories différentes) + 8 autres versions dans des catégories non cochées.
+        tags = ["HD", "SD", "UHD", "HEVC", "RAW", "MULTI", "BACKUP", "720p"]
+        catalog = [ch(1, "TF1 FHD", "1"), ch(10, "TF1 4K", "9")] + \
+            [ch(100 + n, f"TF1 {tag}", str(20 + n)) for n, tag in enumerate(tags)]
+        categories = {"1": "A", "9": "B", **{str(20 + n): f"C{n}" for n in range(8)}}
+        api = StubAPI(catalog, categories)
+        saved = validate_playlist({"slug": "s", "name": "S", "category_ids": ["1", "9"], "dedupe": True,
+                                   "failover": True, "failover_any_category": True,
+                                   "custom_groups": [{"id": "g1", "name": "G", "match": "exact", "patterns": ["TF1"]}]})
+        entries, _ = select_items(api, saved, "live")
+        self.assertEqual([item["stream_id"] for item, _ in entries], ["10"])  # 4K gardé (meilleure qualité)
+        kept = entries[0][0]
+        self.assertEqual(len(kept["alternates"]), 8)        # plafonné à MAX_ALTERNATES
+        self.assertEqual(kept["alternates"][0], "1")         # le doublon sélectionné (FHD) passe en premier
+        self.assertEqual(len(set(kept["alternates"])), 8)    # aucun identifiant répété
+
+    def test_core_index_cached_per_catalog_identity(self):
+        from app.builder import _core_index
+        items_a = list(self.CATALOG)
+        index_a1 = _core_index(items_a)
+        index_a2 = _core_index(items_a)
+        self.assertIs(index_a1, index_a2)              # même liste : index réutilisé
+        items_b = list(self.CATALOG)                    # contenu identique, objet différent
+        index_b = _core_index(items_b)
+        self.assertIsNot(index_a1, index_b)             # recalculé : pas de collision par contenu
+        self.assertEqual(index_a1, index_b)              # mais le résultat est bien le même

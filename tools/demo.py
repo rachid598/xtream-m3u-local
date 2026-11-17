@@ -65,6 +65,14 @@ def build_catalog(total: int) -> None:
     for index, (name, cat) in enumerate(known, start=1):
         streams.append({"num": 5000 + index, "name": name, "stream_type": "live", "stream_id": 800000 + index,
                         "stream_icon": "", "epg_channel_id": "", "category_id": str(cat)})
+    # Catégories qui ne diffèrent que par la qualité (comme chez certains fournisseurs), avec la même
+    # chaîne dans chacune : pour essayer « Cocher aussi les catégories liées » et les secours hors sélection.
+    quality_cats = [("200", "FRANCE FHD | OTT"), ("201", "FRANCE HD | OTT"),
+                    ("202", "FRANCE SD | OTT"), ("203", "FRANCE HEVC | OTT")]
+    fake_xtream.CATEGORIES.extend({"category_id": cid, "category_name": name, "parent_id": 0} for cid, name in quality_cats)
+    for index, (tag, (cid, _)) in enumerate(zip(["FHD", "HD", "SD", "HEVC"], quality_cats), start=1):
+        streams.append({"num": 5100 + index, "name": f"Zenith {tag}", "stream_type": "live",
+                        "stream_id": 800100 + index, "stream_icon": "", "epg_channel_id": "", "category_id": cid})
     fake_xtream.STREAMS[:] = streams
 
     # Guide : ~2/3 des chaînes avec identifiant dans xmltv.php, d'autres seulement via l'API, le reste sans programme.

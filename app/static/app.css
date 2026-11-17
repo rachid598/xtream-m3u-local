@@ -592,3 +592,6 @@ dialog.preview-dialog { width: min(920px, calc(100vw - 24px)); padding: 14px; }
 .alt-list ol { margin: 4px 0 0; padding-left: 20px; color: var(--text-soft); }
 .alt-list li { overflow-wrap: anywhere; }
 .alt-list .hint { margin: 4px 0 0; }
+.check-row.sub-option { margin-left: 28px; margin-top: 4px; font-size: 13px; }
+.cg-body .warn-text { margin: 0; }
+.qlink { display: block; margin-top: 2px; }

@@ -6,6 +6,7 @@ pour que les deux présentent exactement la même sélection.
 from __future__ import annotations
 
 import re
+import threading
 import unicodedata
 
 from .custom import SELECTION_FIELDS, filter_kind
@@ -205,6 +206,60 @@ def dedupe(entries: list[tuple[dict, str]]) -> list[tuple[dict, str]]:
     return result
 
 
+_CORE_INDEX_LOCK = threading.Lock()
+_CORE_INDEX_CACHE: dict[int, dict[str, list[tuple[float, str]]]] = {}
+_CORE_INDEX_ORDER: list[int] = []
+_CORE_INDEX_MAX = 8  # catalogues distincts gardés en mémoire (multi-fournisseurs, tests…)
+
+
+def _core_index(items: list[dict]) -> dict[str, list[tuple[float, str]]]:
+    """Index ``{nom comparable: [(qualité, stream_id)…]}`` (meilleure qualité d'abord) de tout le catalogue.
+
+    Caché par identité de la liste ``items`` : recalculé seulement quand le catalogue est rechargé,
+    jamais à chaque requête, même avec des dizaines de milliers de chaînes.
+    """
+    key = id(items)
+    with _CORE_INDEX_LOCK:
+        cached = _CORE_INDEX_CACHE.get(key)
+        if cached is not None:
+            return cached
+    index: dict[str, list[tuple[float, str]]] = {}
+    for item in items:
+        name = item.get("name") or ""
+        if is_separator(name):
+            continue
+        core = match_name(name) or base_name(name)
+        index.setdefault(core, []).append((quality(name), item["stream_id"]))
+    for versions in index.values():
+        versions.sort(key=lambda v: -v[0])
+    with _CORE_INDEX_LOCK:
+        _CORE_INDEX_CACHE[key] = index
+        _CORE_INDEX_ORDER.append(key)
+        while len(_CORE_INDEX_ORDER) > _CORE_INDEX_MAX:
+            _CORE_INDEX_CACHE.pop(_CORE_INDEX_ORDER.pop(0), None)
+    return index
+
+
+def extend_alternates_from_catalog(entries: list[tuple[dict, str]], items: list[dict]) -> list[tuple[dict, str]]:
+    """Complète les versions de secours avec tout le catalogue, même les catégories non cochées.
+
+    Option de playlist ``failover_any_category`` : les chaînes trouvées restent invisibles (aucune
+    catégorie, aucune entrée dans la playlist, le guide ni l'export) — elles ne servent que de secours
+    si toutes les versions sélectionnées de la chaîne sont indisponibles. Nécessite ``dedupe`` et ``failover``.
+    """
+    index = _core_index(items)
+    result = []
+    for item, group in entries:
+        existing = list(item.get("alternates") or [])
+        core = match_name(item["name"]) or base_name(item["name"])
+        seen = {item["stream_id"], *existing}
+        extra = [sid for _, sid in index.get(core, []) if sid not in seen]
+        if extra:
+            item = {**item, "alternates": (existing + extra)[:MAX_ALTERNATES]}
+        result.append((item, group))
+    return result
+
+
 def item_key(item: dict) -> str:
     kind = item.get("kind", "live")
     if kind == "movie":
@@ -236,6 +291,8 @@ def select_items(api, saved: dict, kind: str, *, refresh: bool = False) -> tuple
         entries = apply_custom_groups(entries, saved)
     if kind == "live" and saved.get("dedupe"):
         entries = dedupe(entries)
+        if saved.get("failover") and saved.get("failover_any_category"):
+            entries = extend_alternates_from_catalog(entries, items)
     names = saved.get("item_names") or {}
     numbers = saved.get("item_numbers") or {} if kind == "live" else {}
     logos = saved.get("item_logos") or {}

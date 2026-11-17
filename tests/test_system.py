@@ -74,6 +74,7 @@ class DiagnosticTests(StackTestCase):
         statuses = {k: v["status"] for k, v in results.items()}
         self.assertEqual(statuses, {
             "account": "ok", "catalog-live": "ok", "catalog-vod": "ok", "catalog-series": "ok",
+            "failover": "skipped",        # aucune playlist n'utilise la bascule automatique
             "epg-xmltv": "ok", "epg-api": "warn",   # 1 chaîne sur 3 a des programmes via l'API
             "stream-ts": "warn",          # le faux flux n'est pas du vrai MPEG-TS
             "stream-hls": "ok", "stream-movie": "ok", "stream-episode": "ok", "stream-replay": "ok"})
@@ -131,3 +132,55 @@ class DiagnosticSamplingTests(StackTestCase):
             if hasattr(fake, "SIMPLE_EPG_BACKUP"):
                 fake.SIMPLE_EPG.update(fake.SIMPLE_EPG_BACKUP)
                 del fake.SIMPLE_EPG_BACKUP
+
+
+class FailoverDiagnosticTests(StackTestCase):
+    """Diagnostic : repère une bascule automatique mal configurée, sans attendre une vraie coupure."""
+
+    def run_diagnostic(self):
+        status, data = self.send(self.stack.web_base + "/api/diagnostic", "POST")
+        self.assertEqual(status, 200)
+        return {r["id"]: r for r in data["results"]}
+
+    def test_no_playlist_uses_failover(self):
+        self.create({"slug": "salon", "name": "Salon", "category_ids": ["1"]})
+        results = self.run_diagnostic()
+        self.assertEqual(results["failover"]["status"], "skipped")
+        self.assertNotIn("failover-salon", results)
+
+    def test_enabled_without_dedupe_is_an_error(self):
+        self.create({"slug": "salon", "name": "Salon", "category_ids": ["1"], "failover": True, "dedupe": False})
+        results = self.run_diagnostic()
+        r = results["failover-salon"]
+        self.assertEqual(r["status"], "error")
+        self.assertIn("Masquer les doublons", r["detail"])
+        self.assertNotIn("failover", results)  # pas de résumé « aucune playlist » : il y en a une
+
+    def test_enabled_with_dedupe_but_no_duplicate_is_a_warning(self):
+        self.create({"slug": "salon", "name": "Salon", "category_ids": ["1"], "failover": True, "dedupe": True})
+        results = self.run_diagnostic()
+        r = results["failover-salon"]
+        self.assertEqual(r["status"], "warn")
+        self.assertIn("0/", r["detail"])
+        self.assertIn("Secours hors catégories cochées", r["detail"])
+
+    def test_enabled_with_real_duplicate_is_ok(self):
+        import tests.fake_xtream as fake
+        original = list(fake.STREAMS)
+        fake.STREAMS.append({"num": 9, "name": "France Info 4K", "stream_type": "live", "stream_id": 900,
+                             "stream_icon": "", "epg_channel_id": "", "category_id": "1", "category_ids": [1]})
+        try:
+            self.create({"slug": "salon", "name": "Salon", "category_ids": ["1"], "failover": True, "dedupe": True})
+            r = self.run_diagnostic()["failover-salon"]
+            self.assertEqual(r["status"], "ok")
+            self.assertRegex(r["detail"], r"^\d+/\d+ chaînes \(\d+ %\)")
+        finally:
+            fake.STREAMS[:] = original
+
+    def test_more_than_ten_failover_playlists_are_capped(self):
+        for n in range(11):
+            self.create({"slug": f"p{n}", "name": f"P{n}", "category_ids": ["1"], "failover": True, "dedupe": True})
+        results = self.run_diagnostic()
+        self.assertEqual(sum(1 for k in results if k.startswith("failover-p")), 10)
+        self.assertEqual(results["failover-more"]["status"], "skipped")
+        self.assertIn("1 playlist", results["failover-more"]["detail"])
