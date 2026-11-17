@@ -1,6 +1,7 @@
 """Port 7777 : playlists M3U, relais TS, token, cache catalogue."""
 import logging
 import re
+import time
 import unittest
 from urllib.request import Request, urlopen
 
@@ -181,3 +182,45 @@ class LoggingQuiet(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ProviderFriendlyCatalogTests(StackTestCase):
+    """Redémarrages et rafraîchissements sans rafale de requêtes vers le fournisseur."""
+
+    def wait_for(self, check, timeout=5):
+        end = time.monotonic() + timeout
+        while time.monotonic() < end:
+            if check():
+                return True
+            time.sleep(0.05)
+        return False
+
+    def test_restart_serves_disk_copy_while_provider_refuses(self):
+        self.get(self.stack.proxy_base + "/playlist.m3u")
+        cache = self.stack.api._cache_file("live")
+        self.assertTrue(self.wait_for(cache.exists), "copie disque du catalogue")
+        import gzip
+        text = gzip.decompress(cache.read_bytes()).decode()
+        self.assertIn("France Info", text)
+        self.assertNotIn("/user/pw/", text)                  # direct_source expurgé : aucun identifiant
+        FakeXtream.fail_api = 429
+        restarted = self.make_stack()                        # même dossier /data
+        status, body, _ = self.get(restarted.proxy_base + "/playlist.m3u")
+        self.assertEqual(status, 200)
+        self.assertIn(b"/stream/42.ts", body)
+        # Le rafraîchissement en arrière-plan a reçu un 429 : pause, plus aucun appel pendant ce temps.
+        self.assertTrue(self.wait_for(lambda: restarted.api.paused_for() > 0), "pause après 429")
+        calls = len(FakeXtream.actions)
+        for _ in range(3):
+            self.assertEqual(self.get(restarted.proxy_base + "/playlist.m3u")[0], 200)
+        self.assertEqual(len(FakeXtream.actions), calls)
+
+    def test_expired_catalog_served_immediately_and_refreshed_in_background(self):
+        self.get(self.stack.proxy_base + "/playlist.m3u")
+        before = FakeXtream.actions.count("get_live_streams")
+        self.stack.api.kind_state("live").expires_at = 0          # catalogue périmé
+        status, body, _ = self.get(self.stack.proxy_base + "/playlist.m3u")
+        self.assertEqual(status, 200)
+        self.assertTrue(self.wait_for(lambda: FakeXtream.actions.count("get_live_streams") == before + 1),
+                        "rafraîchissement en arrière-plan")
+        self.assertTrue(self.wait_for(lambda: self.stack.api.kind_state("live").expires_at > time.monotonic()))

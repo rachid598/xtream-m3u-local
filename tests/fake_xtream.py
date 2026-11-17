@@ -147,6 +147,8 @@ class FakeXtream(BaseHTTPRequestHandler):
         if url.path == "/player_api.php":
             action = args.get("action", [""])[0]
             type(self).actions.append(action)
+            if type(self).fail_api == 429:
+                return self.send_body(429, b"Too Many Requests", "text/plain", {"Retry-After": "30"})
             if type(self).fail_api:
                 return self.send_body(503, b"down", "text/plain")
             if not authed:

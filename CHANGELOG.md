@@ -2,6 +2,16 @@
 
 Format inspiré de « Keep a Changelog ». Les versions suivent le versionnage sémantique.
 
+## [3.5.1] — 2026-11-17
+
+Retour d'essai réel : au redémarrage, le fournisseur a répondu HTTP 429 (« trop de requêtes ») pendant le rechargement simultané direct + films + séries ; les playlists ont renvoyé 502 environ une minute.
+
+### Corrigé
+- **Copie disque des catalogues** (`DATA_DIR/cache/catalog-*.json.gz`, sans `direct_source`) : au redémarrage, les playlists sont servies aussitôt depuis la copie, puis rafraîchies en arrière-plan.
+- **Rafraîchissement en arrière-plan** : un catalogue périmé est servi immédiatement pendant son rechargement (plus d'attente de 30 s pour les TV) ; « Actualiser le catalogue » reste immédiat.
+- **Un seul gros catalogue chargé à la fois**, au plus 2 appels API simultanés vers le fournisseur.
+- **HTTP 429** : pause respectant `Retry-After` (60 s par défaut, 15 s à 10 min), aucun appel au fournisseur pendant la pause ; le catalogue en mémoire ou sur disque continue d'être servi.
+
 ## [3.5.0] — 2026-11-17
 
 ### Ajouté

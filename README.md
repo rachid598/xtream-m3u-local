@@ -147,7 +147,7 @@ Ajouter `XTREAM_URL_2`, `XTREAM_USERNAME_2`, `XTREAM_PASSWORD_2` (et `XTREAM_NAM
 | `EPG_SOURCE` | `auto` | `auto`, `xmltv` ou `api` |
 | `EPG_URL` | vide | Guide XMLTV externe à la place de `xmltv.php` |
 | `EPG_CACHE_HOURS` / `EPG_FETCH_SECONDS` / `EPG_API_MAX_CHANNELS` | `12` / `15` / `1000` | Cache du XMLTV, temps max de complément API par requête, chaînes max complétées dans le guide complet |
-| `CACHE_SECONDS` | `1800` | Cache des catalogues |
+| `CACHE_SECONDS` | `1800` | Durée de validité des catalogues ; ensuite ils sont rafraîchis **en arrière-plan** (l'ancien reste servi). Une copie est gardée dans `/data/cache` pour les redémarrages. Après un HTTP 429 du fournisseur, aucun appel pendant la pause demandée (60 s par défaut) |
 | `SERIES_CACHE_HOURS` / `SERIES_FETCH_SECONDS` | `24` / `20` | Cache des épisodes, temps max de récupération par requête |
 | `XTREAM_USER_AGENT` | `XtreamM3ULocal/3.x` | User-Agent envoyé au fournisseur |
 | `PUID` / `PGID` | `99` / `100` | Propriétaire des fichiers de `/data` (nobody/users sur Unraid) |

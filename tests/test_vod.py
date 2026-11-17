@@ -68,10 +68,12 @@ class VodTests(StackTestCase):
         self.assertEqual(data["vod"], {"items": 3, "categories": 3, "error": None})
         self.assertEqual(data["series"], {"items": 3, "categories": 2, "error": None})
         FakeXtream.fail_api = True
-        stack = self.make_stack()
-        data = json.loads(self.get(stack.web_base + "/api/catalog/summary")[1])
-        self.assertIsNone(data["vod"]["items"])
-        self.assertIn("indisponible", data["vod"]["error"])
+        import tempfile
+        with tempfile.TemporaryDirectory() as fresh:  # nouvelle installation : aucune copie disque
+            stack = self.make_stack(data_dir=fresh)
+            data = json.loads(self.get(stack.web_base + "/api/catalog/summary")[1])
+            self.assertIsNone(data["vod"]["items"])
+            self.assertIn("indisponible", data["vod"]["error"])
 
     def test_series_episodes_api(self):
         data = json.loads(self.get(self.stack.web_base + "/api/series/900")[1])

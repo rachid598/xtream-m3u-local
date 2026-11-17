@@ -5,6 +5,7 @@ Bibliothèque standard Python uniquement, y compris pour le relais des flux TS.
 
 from __future__ import annotations
 
+import gzip
 import hmac
 import json
 import logging
@@ -312,19 +313,39 @@ class _KindState:
         self.retry_at = 0.0
         self.updated_at: float | None = None
         self.last_error: str | None = None
-        self.lock = threading.Lock()
+        self.loaded_at = 0.0             # time.monotonic() du dernier chargement réussi
+        self.lock = threading.Lock()      # protège l'échange des données (rapide)
+        self.load_lock = threading.Lock()  # un seul chargement à la fois pour ce type
 
 
 class XtreamAPI:
-    """Client Xtream : catalogues direct / films / séries en cache mémoire, repli sur cache périmé."""
+    """Client Xtream : catalogues direct / films / séries.
+
+    Ménage le fournisseur (souvent 1 connexion et une limite de requêtes) :
+    - copie de chaque catalogue sur disque (``DATA_DIR/cache``), servie aussitôt au redémarrage ;
+    - catalogue périmé servi tout de suite pendant qu'il est rafraîchi en arrière-plan ;
+    - un seul gros catalogue chargé à la fois, au plus 2 appels API simultanés ;
+    - après un HTTP 429 (« trop de requêtes »), aucun appel pendant la pause demandée (60 s par défaut).
+    """
 
     RETRY_AFTER_FAILURE = 60
+    PAUSE_ON_429 = 60
 
     def __init__(self, config: Config):
         self.config = config
         self._kinds = {kind: _KindState() for kind in KINDS}
         self._account: dict | None = None
         self._account_expires = 0.0
+        self._gate = threading.BoundedSemaphore(2)   # appels API simultanés vers le fournisseur
+        self._catalog_gate = threading.Lock()         # gros catalogues : l'un après l'autre
+        self._paused_until = 0.0
+        self._refreshing: set[str] = set()
+        self._refreshing_lock = threading.Lock()
+        self._cache_dir = Path(config.data_dir) / "cache"
+
+    def paused_for(self) -> float:
+        """Secondes restantes de pause après un « trop de requêtes » du fournisseur."""
+        return max(0.0, self._paused_until - time.monotonic())
 
     # Attributs historiques (catalogue du direct), utilisés par l'interface et les tests.
     def kind_state(self, kind: str = "live") -> _KindState:
@@ -363,9 +384,12 @@ class XtreamAPI:
         )
 
     def _fetch(self, url: str, label: str):
+        wait = self.paused_for()
+        if wait:
+            raise UpstreamError(f"Le fournisseur limite les requêtes : pause encore {int(wait) + 1} s")
         req = Request(url, headers={"User-Agent": self.config.user_agent, "Accept": "application/json"})
         try:
-            with urlopen(req, timeout=60) as response:
+            with self._gate, urlopen(req, timeout=60) as response:
                 # Refuser les réponses démesurées (les catalogues VOD peuvent dépasser 50 Mo).
                 raw = response.read(200 * 1024 * 1024 + 1)
                 if len(raw) > 200 * 1024 * 1024:
@@ -375,6 +399,15 @@ class XtreamAPI:
         except (HTTPError, URLError, TimeoutError, OSError, HTTPException, ValueError) as exc:
             status = getattr(exc, "code", None)
             LOG.warning("API error for %s status=%s", label, status or "réseau")
+            if status == 429:
+                try:
+                    pause = int((exc.headers or {}).get("Retry-After") or self.PAUSE_ON_429)
+                except (TypeError, ValueError, AttributeError):
+                    pause = self.PAUSE_ON_429
+                pause = min(600, max(15, pause))
+                self._paused_until = max(self._paused_until, time.monotonic() + pause)
+                LOG.warning("Le fournisseur limite les requêtes (HTTP 429) : pause de %d s", pause)
+                raise UpstreamError(f"Le fournisseur limite les requêtes (HTTP 429) : nouvel essai dans {pause} s") from None
             if status in (401, 403):
                 raise UpstreamError(f"Le fournisseur refuse l'accès (HTTP {status}) : vérifie les identifiants") from None
             raise UpstreamError(f"API Xtream indisponible ({status or 'réseau'})") from None
@@ -402,16 +435,58 @@ class XtreamAPI:
         return self._fetch(self.api_url("get_series_info", series_id=series_id), "action=get_series_info")
 
     def catalog(self, *, refresh: bool = False, kind: str = "live") -> tuple[list[dict], dict[str, str]]:
-        """``(éléments normalisés, {category_id: nom})`` dans l'ordre du fournisseur."""
-        categories_action, items_action, normalize, label = KINDS[kind]
+        """``(éléments normalisés, {category_id: nom})`` dans l'ordre du fournisseur.
+
+        Sans ``refresh`` : réponse immédiate dès qu'un catalogue existe (mémoire ou copie disque) ; s'il est
+        périmé, le rafraîchissement part en arrière-plan. ``refresh=True`` (bouton « Actualiser ») attend.
+        """
         st = self._kinds[kind]
-        with st.lock:
-            now = time.monotonic()
-            if st.items is not None and not refresh and now < st.expires_at:
+        if st.items is None and not refresh:
+            self._restore(kind)
+        now = time.monotonic()
+        if st.items is not None and now < st.retry_at:
+            return st.items, st.categories  # échec récent : pas de nouvel essai (même avec refresh)
+        if st.items is not None and not refresh:
+            if now < st.expires_at:
                 return st.items, st.categories
-            if st.items is not None and now < st.retry_at:
+            if self.config.cache_seconds > 0:
+                self._refresh_in_background(kind)
                 return st.items, st.categories
+        asked = time.monotonic()
+        with st.load_lock:
+            if st.items is not None and st.loaded_at >= asked:
+                return st.items, st.categories  # chargé par une autre requête pendant l'attente
+            if st.items is None and not refresh and time.monotonic() < st.retry_at:
+                raise UpstreamError(st.last_error or "API Xtream indisponible")
+            self._load(kind)
+        return st.items, st.categories
+
+    def _refresh_in_background(self, kind: str) -> None:
+        with self._refreshing_lock:
+            if kind in self._refreshing:
+                return
+            self._refreshing.add(kind)
+
+        def job() -> None:
             try:
+                with self._kinds[kind].load_lock:
+                    st = self._kinds[kind]
+                    if time.monotonic() >= st.expires_at:
+                        self._load(kind)
+            except UpstreamError:
+                pass
+            finally:
+                with self._refreshing_lock:
+                    self._refreshing.discard(kind)
+
+        threading.Thread(target=job, name=f"refresh-{kind}", daemon=True).start()
+
+    def _load(self, kind: str) -> None:
+        """Télécharge un catalogue (appelé sous ``load_lock``). Garde l'ancien en cas d'échec."""
+        categories_action, items_action, _, _ = KINDS[kind]
+        st = self._kinds[kind]
+        try:
+            with self._catalog_gate:
                 streams = self.get_json(items_action)
                 if not streams:
                     LOG.warning("Upstream returned an empty %s list", kind)
@@ -422,45 +497,99 @@ class XtreamAPI:
                     categories_raw = []
                     categories_error = f"{categories_action} a échoué : {exc}"
                     LOG.warning("Categories unavailable for %s; using derived groups", kind)
-                categories: dict[str, str] = {}
-                meta: dict[str, dict] = {}
-                for item in categories_raw:
-                    if not isinstance(item, dict) or item.get("category_id") in (None, ""):
-                        continue
-                    cid = str(item["category_id"]).strip()
-                    if not CATEGORY_RE.fullmatch(cid) or cid == UNCATEGORIZED or cid in categories:
-                        continue
-                    categories[cid] = _clean_text(item.get("category_name"), f"Catégorie {cid}")
-                    parent = str(item.get("parent_id") if item.get("parent_id") is not None else "").strip()
-                    meta[cid] = {"parent_id": parent if parent not in ("", "0") else "",
-                                 "source": "provider", "position": len(meta)}
-                items = [c for c in (normalize(e) for e in streams) if c is not None]
-                for element in items:
-                    for cid in element["category_ids"]:
-                        if cid not in categories:
-                            categories[cid] = "Sans catégorie" if cid == UNCATEGORIZED else f"Catégorie {cid}"
-                            meta[cid] = {"parent_id": "", "source": "derived", "position": len(meta)}
-                st.category_meta = meta
-                st.raw_categories = categories_raw if isinstance(categories_raw, list) else []
-                st.raw_streams = streams
-                st.categories_error = categories_error
-                st.items = items
-                st.by_id = {item["stream_id"]: item for item in items}
-                id_field = "series_id" if kind == "series" else "stream_id"
-                st.raw_by_id = {str(e.get(id_field)).strip(): e for e in streams if isinstance(e, dict)}
-                st.categories = categories
-                st.expires_at = now + self.config.cache_seconds
-                st.retry_at = 0.0
-                st.updated_at = time.time()
-                st.last_error = None
-                LOG.info("Catalogue %s chargé : %d %s, %d catégories", kind, len(items), label, len(categories))
-            except UpstreamError as exc:
-                st.last_error = str(exc)
-                if st.items is None:
-                    raise
-                st.retry_at = now + self.RETRY_AFTER_FAILURE
-                LOG.warning("Using stale %s catalog because upstream refresh failed", kind)
-            return st.items, st.categories
+        except UpstreamError as exc:
+            st.last_error = str(exc)
+            st.retry_at = time.monotonic() + max(self.RETRY_AFTER_FAILURE, self.paused_for())
+            if st.items is None:
+                raise
+            LOG.warning("Using stale %s catalog because upstream refresh failed", kind)
+            return
+        self._apply(kind, streams, categories_raw, categories_error, updated_at=time.time())
+        st.expires_at = time.monotonic() + self.config.cache_seconds
+        threading.Thread(target=self._save, args=(kind, streams, categories_raw, categories_error),
+                         name=f"save-{kind}", daemon=True).start()
+
+    def _apply(self, kind: str, streams: list, categories_raw: list, categories_error: str | None, *,
+               updated_at: float) -> None:
+        """Normalise un catalogue brut et l'installe (données du fournisseur ou copie disque)."""
+        _, _, normalize, label = KINDS[kind]
+        st = self._kinds[kind]
+        categories: dict[str, str] = {}
+        meta: dict[str, dict] = {}
+        for item in categories_raw:
+            if not isinstance(item, dict) or item.get("category_id") in (None, ""):
+                continue
+            cid = str(item["category_id"]).strip()
+            if not CATEGORY_RE.fullmatch(cid) or cid == UNCATEGORIZED or cid in categories:
+                continue
+            categories[cid] = _clean_text(item.get("category_name"), f"Catégorie {cid}")
+            parent = str(item.get("parent_id") if item.get("parent_id") is not None else "").strip()
+            meta[cid] = {"parent_id": parent if parent not in ("", "0") else "",
+                         "source": "provider", "position": len(meta)}
+        items = [c for c in (normalize(e) for e in streams) if c is not None]
+        for element in items:
+            for cid in element["category_ids"]:
+                if cid not in categories:
+                    categories[cid] = "Sans catégorie" if cid == UNCATEGORIZED else f"Catégorie {cid}"
+                    meta[cid] = {"parent_id": "", "source": "derived", "position": len(meta)}
+        id_field = "series_id" if kind == "series" else "stream_id"
+        by_id = {item["stream_id"]: item for item in items}
+        raw_by_id = {str(e.get(id_field)).strip(): e for e in streams if isinstance(e, dict)}
+        with st.lock:
+            st.category_meta = meta
+            st.raw_categories = categories_raw if isinstance(categories_raw, list) else []
+            st.raw_streams = streams
+            st.categories_error = categories_error
+            st.by_id = by_id
+            st.raw_by_id = raw_by_id
+            st.categories = categories
+            st.items = items
+            st.retry_at = 0.0
+            st.updated_at = updated_at
+            st.last_error = None
+            st.loaded_at = time.monotonic()
+        LOG.info("Catalogue %s chargé : %d %s, %d catégories", kind, len(items), label, len(categories))
+
+    # ------------------------------------------------------- copie sur disque
+    def _cache_file(self, kind: str) -> Path:
+        return self._cache_dir / f"catalog-{kind}.json.gz"
+
+    def _save(self, kind: str, streams: list, categories_raw: list, categories_error: str | None) -> None:
+        """Copie du catalogue brut (aucun identifiant : les réponses sont expurgées des champs sensibles)."""
+        try:
+            self._cache_dir.mkdir(parents=True, exist_ok=True)
+            data = {"saved_at": time.time(), "streams": redact_raw(streams), "categories": categories_raw,
+                    "categories_error": categories_error}
+            tmp = self._cache_file(kind).with_suffix(".tmp")
+            with gzip.open(tmp, "wt", encoding="utf-8", compresslevel=1) as f:
+                json.dump(data, f, ensure_ascii=False, separators=(",", ":"))
+            os.chmod(tmp, 0o600)
+            os.replace(tmp, self._cache_file(kind))
+        except (OSError, TypeError, ValueError) as exc:
+            LOG.warning("Copie du catalogue %s non enregistrée (%s)", kind, type(exc).__name__)
+
+    def _restore(self, kind: str) -> None:
+        """Au démarrage : reprend la dernière copie disque (marquée périmée → rafraîchie en arrière-plan)."""
+        st = self._kinds[kind]
+        with st.load_lock:
+            if st.items is not None:
+                return
+            path = self._cache_file(kind)
+            try:
+                with gzip.open(path, "rt", encoding="utf-8") as f:
+                    data = json.load(f)
+                streams, categories = data["streams"], data.get("categories") or []
+                if not isinstance(streams, list):
+                    raise ValueError
+            except FileNotFoundError:
+                return
+            except (OSError, ValueError, KeyError, TypeError, EOFError):
+                LOG.warning("Copie disque du catalogue %s illisible : ignorée", kind)
+                return
+            self._apply(kind, streams, categories, data.get("categories_error"),
+                        updated_at=float(data.get("saved_at") or time.time()))
+            st.expires_at = 0.0  # périmée : la prochaine demande lance un rafraîchissement en arrière-plan
+            LOG.info("Catalogue %s repris de la copie disque (rafraîchissement en arrière-plan)", kind)
 
     def provider_timezone(self):
         """Fuseau horaire du serveur Xtream (les dates de replay sont exprimées dans ce fuseau)."""
@@ -589,6 +718,16 @@ def parse_alternates(value: str) -> list[str]:
     """``?alt=12,34`` : versions de secours d'une chaîne (identifiants numériques, 8 au maximum)."""
     ids = [part for part in (value or "").split(",") if part.isdigit() and len(part) <= 12]
     return list(dict.fromkeys(ids))[:8]
+
+
+def redact_raw(streams: list) -> list:
+    """Retire de la copie disque les champs qui peuvent contenir des identifiants (``direct_source``)."""
+    cleaned = []
+    for entry in streams:
+        if isinstance(entry, dict) and entry.get("direct_source"):
+            entry = {**entry, "direct_source": ""}
+        cleaned.append(entry)
+    return cleaned
 
 
 def with_token(url: str, token: str) -> str:

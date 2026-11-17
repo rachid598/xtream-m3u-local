@@ -1,6 +1,6 @@
 # Passation — Xtream M3U Local
 
-> **État au 16 novembre 2026 — version 3.5.0.** Document à transmettre tel quel à l'IA suivante avec le dépôt.
+> **État au 16 novembre 2026 — version 3.5.1.** Document à transmettre tel quel à l'IA suivante avec le dépôt.
 > Aucun mot de passe, token ni URL fournisseur réelle ne doit être copié ici ni commité sur GitHub.
 
 ## 1. Objectif et contexte utilisateur
@@ -8,7 +8,7 @@
 - Unraid « Tower », appdata sur pool **NVMe**, IP LAN vue sur une capture : `192.168.0.108`. Lecteur Android TV (écran « Playlist M3U via URL » avec champ EPG et « EPG Shift »).
 - Abonnement Xtream Codes : `player_api.php` et les flux `/live/U/P/ID.ts` fonctionnent ; **`get.php` ne donne pas de playlist**.
 - But : redistribuer le catalogue sur le LAN (playlists M3U à URL permanente + serveur Xtream local), avec interface Web, sans exposer les identifiants.
-- Historique des retours réels : la 2.1.0 « fonctionne » sur Tower (direct) ; il manquait la VOD (→ 2.2.0), l'éditeur films/séries n'était pas visible (→ 2.2.1), EPG (→ 2.3.0), le lecteur demandait `http://IP:7777/xmltv.php` (404) (→ 2.3.1). Puis demande « fais tout » de la liste d'améliorations (→ **3.0.0**). Premier diagnostic réel sur Tower (→ **3.0.1**, voir § 5). Demande « ranger la playlist selon les goûts (TNT, Canal+…) pour la partie FR, avec un groupe en premier » (→ **3.1.0**). Puis « un groupe Canal+ avec toutes les chaînes comme le décodeur Canal+ » (→ **3.2.0**). Capture réelle : groupe avec « VIP: TF1 ᴿᴬᵂ », « VIP: TF1 ᴴᴰ », « FR: TF1 », « AF: TF1 » malgré « Masquer les doublons » (→ **3.2.1**). Puis : badge « 0/1 connexion » pendant une lecture, et « playlist dynamique » qui passe de TF1 4K à FHD puis HD si ça saccade (→ **3.3.0**). Puis : « EPG 8 % seulement, je veux un focus sur les chaînes françaises » (→ **3.4.0**). Puis lot de nouveautés choisies par l'utilisateur (n° 2, 3, 4, 7, 8, 10 de la liste d'idées + interface rangée ; refusés : bilan de santé nocturne, notifications, enregistrement ; contrôle parental en attente d'explication) (→ **3.5.0**).
+- Historique des retours réels : la 2.1.0 « fonctionne » sur Tower (direct) ; il manquait la VOD (→ 2.2.0), l'éditeur films/séries n'était pas visible (→ 2.2.1), EPG (→ 2.3.0), le lecteur demandait `http://IP:7777/xmltv.php` (404) (→ 2.3.1). Puis demande « fais tout » de la liste d'améliorations (→ **3.0.0**). Premier diagnostic réel sur Tower (→ **3.0.1**, voir § 5). Demande « ranger la playlist selon les goûts (TNT, Canal+…) pour la partie FR, avec un groupe en premier » (→ **3.1.0**). Puis « un groupe Canal+ avec toutes les chaînes comme le décodeur Canal+ » (→ **3.2.0**). Capture réelle : groupe avec « VIP: TF1 ᴿᴬᵂ », « VIP: TF1 ᴴᴰ », « FR: TF1 », « AF: TF1 » malgré « Masquer les doublons » (→ **3.2.1**). Puis : badge « 0/1 connexion » pendant une lecture, et « playlist dynamique » qui passe de TF1 4K à FHD puis HD si ça saccade (→ **3.3.0**). Puis : « EPG 8 % seulement, je veux un focus sur les chaînes françaises » (→ **3.4.0**). Puis lot de nouveautés choisies par l'utilisateur (n° 2, 3, 4, 7, 8, 10 de la liste d'idées + interface rangée ; refusés : bilan de santé nocturne, notifications, enregistrement ; contrôle parental en attente d'explication) (→ **3.5.0**). Essai réel de redémarrage : HTTP 429 du fournisseur, playlists en 502 ~1 min (→ **3.5.1**).
 
 ## 2. Architecture
 
@@ -125,13 +125,14 @@ Clés de groupes/éléments : direct sans préfixe, films `vod:`, séries `serie
   - Aperçu : `app/static/vendor/hls.light.min.js` (1.5.20, Apache 2.0, licence à côté), CSP Web dynamique (`connect-src`/`media-src` vers le port lecteurs), CORS sur `/hls/` limité à l'origine de l'interface (port `WEB_PORT` ou même hôte).
   - Interface : éditeur en 4 parties (`#sec-content|organize|options|guide`, `selectSection`), vue `#view-guide`, dialogue `#item-dialog`, `#preview`, historique dans Système, priorité/IP dans Appareils. Le scénario e2e couvre tout (y compris débordement mobile des 4 parties et du guide).
   - Contrôle parental : non fait, explication donnée à l'utilisateur (filtre `is_adult`/noms de catégories adultes par playlist).
+- **3.5.1** : `XtreamAPI` ménage le fournisseur. `catalog()` : copie disque (`_save` gzip niveau 1, 0600, `redact_raw` retire `direct_source` ; `_restore` au premier appel, marquée périmée), rafraîchissement en arrière-plan d'un catalogue périmé (`_refresh_in_background`, un fil par type), `refresh=True` synchrone ; `_load` sous `load_lock` (par type) et `_catalog_gate` (un gros catalogue à la fois) ; `_apply` installe les données sous `lock` ; `_fetch` passe par `_gate` (2 appels simultanés) et, sur HTTP 429, fixe `_paused_until` (`Retry-After`, 15 s–10 min, 60 s par défaut) pendant lequel tout appel API échoue sans contacter le fournisseur. Conseil utilisateur : éviter les redémarrages répétés (ils restent sans effet visible désormais).
 - Faux échec intermittent corrigé en 2.3.0 : un test cherchait « pw » dans une réponse contenant un chemin temporaire aléatoire.
 
 ## 6. Tests et vérifications (16/11/2026)
 
 | Vérification | Résultat |
 |---|---|
-| `python -m unittest discover -s tests -t .` | **177 tests OK** (fichiers : playlist_server, custom, web, epg, config, vod, http, streams, hls, catchup, xtream_emu, builder, system, providers) |
+| `python -m unittest discover -s tests -t .` | **179 tests OK** (fichiers : playlist_server, custom, web, epg, config, vod, http, streams, hls, catchup, xtream_emu, builder, system, providers) |
 | `node --check app/static/app.js` | OK |
 | Scénario Chromium `tests/e2e_browser.mjs` sur `python -m tools.demo` | OK : création, exclusion/ajout, groupes, règle, favori, renommage + numéro, séparateurs masqués, doublons, bascule automatique (URL `?alt=`), groupes perso (modèles TNT et Bouquet Canal+ numéroté, nouveau groupe en premier, rangement 📁, vérification du M3U), numérotation, films/séries/épisodes, EPG, appareil (connexion `player_api.php` réelle puis révocation), diagnostic (≥ 9 tests OK), sauvegarde/restauration, catalogue, mise en page 390/768/1366/1920 px sans défilement horizontal, aucune erreur console |
 | Docker 3.0.0 (`docker build` + `run`, dossier `/data` créé par root) | OK : droits abandonnés (UID 99), playlist HLS + favori + replay, appareil → `player_api.php` auth 1 (fuseau Europe/Paris), manifeste HLS réécrit, gzip, replay converti à l'heure de Paris, diagnostic vert (faux flux TS en « warn »), `devices.json` 0600, appareil conservé après recréation du conteneur, healthcheck « healthy », aucun secret dans les journaux |
@@ -153,7 +154,7 @@ Faux fournisseurs de test : `tests/fake_xtream.py` (direct, films, séries, épi
 2. Tester le mode Xtream dans TiviMate avec un appareil ; tester HLS (`?format=m3u8`) et le replay sur une chaîne qui le propose ; vérifier « EPG Shift = 0 ».
 3. GitHub :
    - la branche **`main` existe** (même contenu que `claude/wizardly-keller-bd38ld`) ; la passer en branche par défaut (Settings → General → Default branch), puis supprimer éventuellement l'ancienne branche ;
-   - le **tag de version (`v3.5.0`) n'a pas pu être poussé** depuis l'environnement de l'IA (le push de tags est coupé par son proxy Git, les branches passent). Le créer sur GitHub : Releases → « Draft a new release » → tag `v3.5.0` sur `main` → Publish. Le workflow publiera alors `ghcr.io/rachid598/xtream-m3u-local:3.5.0`, `:3.5` et `:3` ;
+   - le **tag de version (`v3.5.1`) n'a pas pu être poussé** depuis l'environnement de l'IA (le push de tags est coupé par son proxy Git, les branches passent). Le créer sur GitHub : Releases → « Draft a new release » → tag `v3.5.1` sur `main` → Publish. Le workflow publiera alors `ghcr.io/rachid598/xtream-m3u-local:3.5.1`, `:3.5` et `:3` ;
    - **Dependabot** a ouvert des pull requests (actions GitHub, image `python:3.15-alpine`) : à examiner ; la montée de Python est à tester avant fusion ;
    - rendre le package GHCR public si besoin.
 4. Pistes : contrôle d'accès des épisodes par appareil, fusion de plusieurs XMLTV, historique des lectures, notifications Unraid, renommage en masse, import de logos alternatifs.
