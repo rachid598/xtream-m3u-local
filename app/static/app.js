@@ -220,7 +220,8 @@
   const SEPARATOR = new RegExp(`^[${SEP_CHARS}|\\s]*[${SEP_CHARS}]{3,}.*[${SEP_CHARS}]{3,}[${SEP_CHARS}|\\s]*$`, 'u');
   /** Fausse chaîne servant de titre de section (même règle que le serveur). */
   const SYMBOL_EDGES = /^\s*[^\p{L}\p{N}\s]{3,}.*[^\p{L}\p{N}\s]{3,}\s*$/u;  // ♣♦♣--- … ---♣♦♣
-  const isSeparator = (name) => { const t = String(name || '').trim(); return !t || SEPARATOR.test(t) || SYMBOL_EDGES.test(t) || !/[\p{L}\p{N}]/u.test(t); };
+  const PLACEHOLDER = /^[^\p{L}\p{N}]*no\s+(live\s+)?events?\b|\bno\s+event\s+streaming\b/iu;  // emplacement PPV vide
+  const isSeparator = (name) => { const t = String(name || '').trim(); return !t || PLACEHOLDER.test(t) || SEPARATOR.test(t) || SYMBOL_EDGES.test(t) || !/[\p{L}\p{N}]/u.test(t); };
   const squash = (text) => norm(text).split(/\s+/).filter(Boolean).join(' ');
 
   // ------------------------------------------- groupes personnalisés (même règle que app/builder.py)
@@ -950,7 +951,7 @@
       const sep = $('opt-separators').checked && isSeparator(c.name);
       const alt = !sep && state.altOf && state.altOf.get(c.stream_id);
       const main = alt && state.cat.live.channelById.get(alt.kept);
-      badges.push(h('span', { class: 'badge warn', text: sep ? 'Séparateur masqué' : alt && $('opt-failover').checked ? `Secours ${alt.rank}/${alt.total}` : 'Doublon masqué',
+      badges.push(h('span', { class: 'badge warn', text: sep ? (PLACEHOLDER.test(c.name) ? 'Emplacement vide masqué' : 'Séparateur masqué') : alt && $('opt-failover').checked ? `Secours ${alt.rank}/${alt.total}` : 'Doublon masqué',
         title: sep ? 'Fausse chaîne servant de titre de section chez le fournisseur'
           : main ? `Version masquée de « ${main.name} »${$('opt-failover').checked ? ` : essayée en n° ${alt.rank} si elle coupe` : ''}` : 'Une meilleure qualité de cette chaîne est déjà dans le groupe' }));
     }

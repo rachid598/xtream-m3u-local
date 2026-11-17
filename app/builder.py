@@ -35,10 +35,17 @@ _SEPARATOR = re.compile(rf"^{_SEPARATOR_EDGE}*[#=*~_\-•●◆★☆▬▭━�
 _SYMBOL_EDGES = re.compile(r"^\s*(?:[^\w\s]|_){3,}.*(?:[^\w\s]|_){3,}\s*$")
 
 
+# Emplacement d'événement vide (chaînes PPV) : « - NO EVENT STREAMING - | 4K EXCLUSIVE | … ».
+_PLACEHOLDER = re.compile(r"^[\W_]*no\s+(live\s+)?events?\b|\bno\s+event\s+streaming\b", re.IGNORECASE)
+
+
 def is_separator(name: str) -> bool:
-    """Fausse chaîne servant de titre de section chez le fournisseur : « #### PRIME ####», « ===== FR ===== »…"""
+    """Fausse chaîne : titre de section du fournisseur (« #### PRIME #### », « ===== FR ===== »…)
+    ou emplacement d'événement vide (« NO EVENT STREAMING ») — elle reprend un vrai nom quand un événement démarre."""
     text = (name or "").strip()
     if not text:
+        return True
+    if _PLACEHOLDER.search(text):
         return True
     if _SEPARATOR.match(text) or _SYMBOL_EDGES.match(text):
         return True

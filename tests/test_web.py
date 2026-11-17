@@ -82,8 +82,9 @@ class WebTests(StackTestCase):
         self.assertEqual([c["category_id"] for c in doc["get_live_categories"]], ["1", "2", "10", "11", "12"])
         self.assertEqual(doc["get_live_categories"][4]["parent_id"], 10)   # valeurs brutes conservées
         self.assertEqual(len(doc["get_live_streams"]), 8)                  # y compris les entrées invalides
-        self.assertEqual(doc["get_live_streams"][0]["direct_source"],
-                         "http://cdn.invalid/live/***/***/42.ts?username=***&password=***")
+        # direct_source vidé : il peut contenir les identifiants d'un autre compte du fournisseur.
+        self.assertEqual(doc["get_live_streams"][0]["direct_source"], "")
+        self.assertNotIn("cdn.invalid", body.decode())
         self.assertEqual(doc["counts"]["valid_streams"], 6)
         self.assertNotIn("/user/pw/", body.decode())
 

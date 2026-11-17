@@ -22,7 +22,7 @@ from .builder import select_items
 from .custom import SLUG_RE, filter_kind, uses
 from .epg import EpgUnavailable, read_schedule, xml_channel_id
 from .builder import CUSTOM_PREFIX, normalize
-from .server import KINDS, Config, UpstreamError, XtreamAPI, live_channels_in_order, redact
+from .server import KINDS, Config, UpstreamError, XtreamAPI, live_channels_in_order, redact, redact_raw
 from .devices import DeviceStore, InvalidDevice
 from .streams import StreamManager
 from .vod import SeriesCache
@@ -328,7 +328,8 @@ class WebHandler(BaseHTTPRequestHandler):
             "counts": {"categories": len(st.raw_categories), "streams": len(st.raw_streams),
                        "valid_streams": len(items), "groups": len(categories)},
             categories_action: redact(st.raw_categories, self.config),
-            items_action: redact(st.raw_streams, self.config),
+            # direct_source : URL directe du fournisseur, parfois avec d'autres identifiants → jamais exportée.
+            items_action: redact_raw(redact(st.raw_streams, self.config)),
         }
         data = json.dumps(document, ensure_ascii=False, indent=1).encode("utf-8")
         self.send_response(200)

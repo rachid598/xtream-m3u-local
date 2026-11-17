@@ -115,11 +115,13 @@ class SeparatorTests(unittest.TestCase):
         from app.builder import is_separator
         for name in ("#### PRIME ᴿᴬᵂ ⁶⁰ᶠᵖˢ #####", "===== FR =====", "★★★ SPORTS ★★★", "---", "", "   ",
                      "♣♦♣----|FR| FRANCE HD |FR|----♣♦♣", "•●★---|FR| CH. CANAL+ HD |FR|---★●•",
-                     "•●★-|FR| DIVERTISSEMENT HD |FR|-★●•"):
+                     "•●★-|FR| DIVERTISSEMENT HD |FR|-★●•",
+                     "- NO EVENT STREAMING - | 4K EXCLUSIVE | 12", "NO EVENT STREAMING NOW - | 4K EXCLUSIVE 3"):
             with self.subTest(name=name):
                 self.assertTrue(is_separator(name))
         for name in ("TF1 HD", "FR | Sport", "#1 Hits", "|FR| TF1", "A&E", "UK: BBC ONE LONDON 4K ◉", "M6 ###",
-                     "|FR| TF1 HD", "|FR| NICKELODEON +1 HD", "|FR| LILO & STITCH [VOD]", "|FR| DISNEY+ PIXAR [VOD]"):
+                     "|FR| TF1 HD", "|FR| NICKELODEON +1 HD", "|FR| LILO & STITCH [VOD]", "|FR| DISNEY+ PIXAR [VOD]",
+                     "NO: RIKSTOTO DIREKTE 1 ᴿᴬᵂ ⱽᴵᴾ", "NO V SPORT PREMIER LEAGUE 2 ⱽᴵᴾ", "FR| SOCCER: PSG - OM"):
             with self.subTest(name=name):
                 self.assertFalse(is_separator(name))
 

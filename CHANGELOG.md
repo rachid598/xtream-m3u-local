@@ -2,6 +2,14 @@
 
 Format inspiré de « Keep a Changelog ». Les versions suivent le versionnage sémantique.
 
+## [3.6.1] — 2026-11-17
+
+Analyse des exports réels de deux fournisseurs (11 178 et 47 411 chaînes).
+
+### Corrigé
+- **Export JSON du catalogue** : `direct_source` est désormais vidé (un fournisseur y mettait une URL directe avec les identifiants d'un autre compte).
+- **« Masquer les séparateurs »** masque aussi les emplacements d'événements vides (« NO EVENT STREAMING », 7 296 chez un fournisseur) ; ils réapparaissent avec leur vrai nom pendant un événement. Badge « Emplacement vide masqué ».
+
 ## [3.6.0] — 2026-11-17
 
 ### Ajouté
