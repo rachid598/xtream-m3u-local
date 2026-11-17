@@ -226,17 +226,29 @@ def select_items(api, saved: dict, kind: str, *, refresh: bool = False) -> tuple
         entries = dedupe(entries)
     names = saved.get("item_names") or {}
     numbers = saved.get("item_numbers") or {} if kind == "live" else {}
-    if names or numbers:
+    logos = saved.get("item_logos") or {}
+    epg_from = saved.get("item_epg") or {} if kind == "live" else {}
+    if names or numbers or logos or epg_from:
+        lookup = getattr(api, "lookup", None)
         customized = []
         for item, group in entries:
             key = prefix + item["stream_id"]
-            if key in names or item["stream_id"] in numbers:
+            sid = item["stream_id"]
+            if key in names or sid in numbers or key in logos or sid in epg_from:
                 item = dict(item)
                 if key in names:
                     item["name"] = names[key]
-                if item["stream_id"] in numbers:
-                    item["num"] = str(numbers[item["stream_id"]])
+                if sid in numbers:
+                    item["num"] = str(numbers[sid])
                     item["custom_num"] = True
+                if key in logos:
+                    item["logo"] = logos[key]
+                if sid in epg_from:
+                    # Guide emprunté à une autre chaîne : son identifiant EPG (xmltv) et sa source API.
+                    item["epg_from"] = epg_from[sid]
+                    source = lookup("live", epg_from[sid]) if lookup else None
+                    if source and source.get("epg_id"):
+                        item["epg_id"] = source["epg_id"]
             customized.append((item, group))
         entries = customized
     groups = {prefix + cid: name for cid, name in categories.items()}

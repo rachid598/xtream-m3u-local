@@ -24,6 +24,7 @@ import tempfile
 import threading
 import time
 import xml.etree.ElementTree as ET
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 from urllib.error import HTTPError, URLError
@@ -328,7 +329,8 @@ class EpgCache:
         source_of: dict[str, str] = {}
         to_fetch: list[str] = []
         for c in targets:
-            chain = [c["stream_id"], *(c.get("alternates") or [])[:3]]
+            chain = list(dict.fromkeys([*([c["epg_from"]] if c.get("epg_from") else []),
+                                        c["stream_id"], *(c.get("alternates") or [])[:3]]))
             for sid in chain:
                 known = api.known(sid) if hasattr(api, "known") else None
                 if known is None:
@@ -447,3 +449,62 @@ def write_filtered_xmltv(source: Path, dst, wanted: set[str], *, close: bool = T
     if close:
         dst.write("</tv>\n")
     return kept
+
+
+def parse_xmltv_time(value: str | None) -> int | None:
+    """« 20261116200000 +0100 » → horodatage Unix (fuseau absent = UTC)."""
+    if not value:
+        return None
+    text = value.strip()
+    try:
+        moment = datetime.strptime(text[:14], "%Y%m%d%H%M%S")
+    except ValueError:
+        return None
+    offset = 0
+    rest = text[14:].strip()
+    if len(rest) == 5 and rest[0] in "+-" and rest[1:].isdigit():
+        offset = (int(rest[1:3]) * 3600 + int(rest[3:5]) * 60) * (1 if rest[0] == "+" else -1)
+    return int(moment.replace(tzinfo=timezone.utc).timestamp()) - offset
+
+
+_schedule_cache: dict[str, tuple[int, dict[str, list[tuple[int, int, str, str]]]]] = {}
+_schedule_lock = threading.Lock()
+
+
+def read_schedule(path: Path) -> dict[str, list[tuple[int, int, str, str]]]:
+    """Programmes d'un guide XMLTV : ``{id_de_chaîne (minuscules): [(début, fin, titre, description)]}``.
+
+    Mis en cache tant que le fichier ne change pas (guide d'une playlist : quelques Mo au plus).
+    """
+    try:
+        stamp = path.stat().st_mtime_ns
+    except OSError:
+        return {}
+    key = str(path)
+    with _schedule_lock:
+        cached = _schedule_cache.get(key)
+        if cached and cached[0] == stamp:
+            return cached[1]
+    schedule: dict[str, list[tuple[int, int, str, str]]] = {}
+    try:
+        for _, elem in ET.iterparse(path, events=("end",)):
+            if elem.tag != "programme":
+                if elem.tag == "channel":
+                    elem.clear()
+                continue
+            start, stop = parse_xmltv_time(elem.get("start")), parse_xmltv_time(elem.get("stop"))
+            channel = (elem.get("channel") or "").strip().lower()
+            if start is not None and channel:
+                title = (elem.findtext("title") or "").strip()
+                desc = (elem.findtext("desc") or "").strip()
+                schedule.setdefault(channel, []).append((start, stop or start + 1800, title, desc[:400]))
+            elem.clear()
+    except ET.ParseError:
+        return {}
+    for items in schedule.values():
+        items.sort()
+    with _schedule_lock:
+        if len(_schedule_cache) > 20:
+            _schedule_cache.clear()
+        _schedule_cache[key] = (stamp, schedule)
+    return schedule

@@ -45,6 +45,9 @@
     customGroups: [],        // groupes perso du direct [{id, name, match: words|exact, patterns}]
     itemGroups: {},          // rangements manuels {id_chaîne: id_groupe | "-" (groupe d'origine)}
     groupCache: null,        // chaînes rangées dans les groupes perso (calculé à la demande)
+    itemLogos: {},           // logos de remplacement {clé: URL}
+    itemEpg: {},             // guide emprunté {id_chaîne: id_chaîne_source}
+    section: 'content',      // partie de l'éditeur : content | organize | options | guide
   };
   // Raccourcis vers le catalogue et la sélection du type affiché (state.categories, state.selected…).
   for (const key of ['categories', 'categoryNames', 'channels', 'channelById', 'channelsByCat', 'catalogLoaded', 'categoriesError']) {
@@ -416,6 +419,8 @@
     data.item_numbers = sortedObject(state.itemNumbers);
     data.group_order = [...state.groupOrder];
     data.group_names = cleanGroupNames();
+    data.item_logos = sortedObject(state.itemLogos);
+    data.item_epg = sortedObject(state.itemEpg);
     data.custom_groups = state.customGroups.map((g) => ({ id: g.id, name: String(g.name || '').trim() || g.id, match: g.match,
       patterns: [...new Set((g.patterns || []).map((p) => String(p).trim()).filter(Boolean))] }));
     const known = new Set(state.customGroups.map((g) => g.id));
@@ -569,9 +574,11 @@
   async function loadEpg({ poll = false } = {}) {
     clearTimeout(epgTimer);
     if (!poll) epgPolls = 0;
-    const box = $('epg-box');
-    if (!epgVisible()) { box.hidden = true; return; }
-    box.hidden = false;
+    const visible = epgVisible();
+    $('epg-content').hidden = !visible;
+    $('epg-unavailable').hidden = visible;
+    $('epg-pill').hidden = !visible;
+    if (!visible) return;
     const slug = state.editing;
     const url = withToken(`${baseUrl()}/p/${slug}.xml`);
     $('epg-url').textContent = url;
@@ -802,20 +809,22 @@
         case 'included': return state.included.has(c.stream_id);
         case 'excluded': return state.excluded.has(c.stream_id);
         case 'favorites': return state.favorites.includes(keyOf(c));
-        case 'custom': return Boolean(state.itemNames[keyOf(c)] || (state.kind === 'live' && state.itemNumbers[c.stream_id]));
+        case 'custom': return Boolean(state.itemNames[keyOf(c)] || state.itemLogos[keyOf(c)]
+          || (state.kind === 'live' && (state.itemNumbers[c.stream_id] || state.itemEpg[c.stream_id])));
         case 'grouped': return state.kind === 'live' && groupAssignment().has(c.stream_id);
         default: return true;
       }
     });
   }
 
-  function thumb(c) {
-    const box = h('span', { class: `thumb${state.kind === 'live' ? '' : ' poster'}`, 'aria-hidden': 'true', text: c.name.replace(/[^\p{L}\p{N}]/gu, '').slice(0, 2).toUpperCase() || 'TV' });
-    if (c.logo) {
+  function thumb(c, kind = state.kind) {
+    const logo = state.itemLogos[keyOf(c, kind)] || c.logo;
+    const box = h('span', { class: `thumb${kind === 'live' ? '' : ' poster'}`, 'aria-hidden': 'true', text: String(c.name).replace(/[^\p{L}\p{N}]/gu, '').slice(0, 2).toUpperCase() || 'TV' });
+    if (logo) {
       const img = h('img', { alt: '', loading: 'lazy', decoding: 'async', referrerpolicy: 'no-referrer' });
       img.addEventListener('load', () => { box.textContent = ''; box.append(img); }, { once: true });
       img.addEventListener('error', () => img.remove(), { once: true });
-      img.src = c.logo;
+      img.src = logo;
     }
     return box;
   }
@@ -890,24 +899,55 @@
     state.favorites = state.favorites.includes(key) ? state.favorites.filter((k) => k !== key) : [...state.favorites, key];
   }
 
-  async function editItem(c) {
+  /** Fenêtre « Personnaliser » : nom, numéro, logo et guide emprunté (direct). */
+  function editItem(c) {
     const isLive = state.kind === 'live';
-    const result = await ask({
-      title: `Personnaliser « ${c.name} »`,
-      text: 'Laisse vide pour garder le nom ou le numéro du fournisseur. Ne concerne que cette playlist.',
-      okLabel: 'Appliquer',
-      input: { label: 'Nom affiché', value: state.itemNames[keyOf(c)] || '' },
-      input2: isLive ? { label: 'Numéro de chaîne (1 à 99 999)', value: state.itemNumbers[c.stream_id] || '' } : null,
-    });
-    if (!result) return;
-    const name = result.value.trim();
-    if (name && name !== c.name) state.itemNames[keyOf(c)] = name.slice(0, 100); else delete state.itemNames[keyOf(c)];
+    const key = keyOf(c);
+    const dialog = $('item-dialog');
+    $('item-title').textContent = `Personnaliser « ${c.name} »`;
+    $('item-name').value = state.itemNames[key] || '';
+    $('item-name').placeholder = c.name;
+    $('item-number-field').hidden = !isLive;
+    $('item-number').value = isLive ? state.itemNumbers[c.stream_id] || '' : '';
+    $('item-logo').value = state.itemLogos[key] || '';
+    $('item-logo').placeholder = c.logo || 'https://…/logo.png';
+    $('item-epg-field').hidden = !isLive;
+    const byLabel = new Map();
     if (isLive) {
-      const number = parseInt(result.value2, 10);
-      if (Number.isInteger(number) && number >= 1 && number <= 99999) state.itemNumbers[c.stream_id] = number;
-      else delete state.itemNumbers[c.stream_id];
+      const list = $('item-epg-list');
+      list.replaceChildren();
+      for (const other of state.cat.live.channels) {
+        if (other.stream_id === c.stream_id || isSeparator(other.name)) continue;
+        if (!isOn(other) && !(c._core && (other._core ?? (other._core = matchName(other.name))) === c._core)) continue;
+        const label = `${other.name} (n° ${other.stream_id})`;
+        byLabel.set(label, other.stream_id);
+        if (byLabel.size <= 3000) list.append(h('option', { value: label }));
+      }
+      const source = state.itemEpg[c.stream_id] && state.cat.live.channelById.get(state.itemEpg[c.stream_id]);
+      $('item-epg').value = source ? `${source.name} (n° ${source.stream_id})` : (state.itemEpg[c.stream_id] || '');
     }
-    refresh();
+    if (typeof dialog.showModal !== 'function') return;
+    dialog.returnValue = 'cancel';
+    dialog.addEventListener('close', () => {
+      if (dialog.returnValue !== 'ok') return;
+      const name = $('item-name').value.trim();
+      if (name && name !== c.name) state.itemNames[key] = name.slice(0, 100); else delete state.itemNames[key];
+      const logo = $('item-logo').value.trim();
+      if (/^https?:\/\/\S{3,}$/.test(logo)) state.itemLogos[key] = logo; else delete state.itemLogos[key];
+      if (logo && !state.itemLogos[key]) toast('Logo ignoré : il faut une adresse http(s)', 'warn');
+      if (isLive) {
+        const number = parseInt($('item-number').value, 10);
+        if (Number.isInteger(number) && number >= 1 && number <= 99999) state.itemNumbers[c.stream_id] = number;
+        else delete state.itemNumbers[c.stream_id];
+        const text = $('item-epg').value.trim();
+        const sourceId = byLabel.get(text) || (/\(n° (\d+)\)$/.exec(text) || [])[1] || (/^\d+$/.test(text) ? text : '');
+        if (sourceId && sourceId !== c.stream_id) state.itemEpg[c.stream_id] = sourceId; else delete state.itemEpg[c.stream_id];
+        if (text && !sourceId) toast('Chaîne du guide introuvable : choisis-la dans la liste proposée', 'warn');
+      }
+      refresh();
+    }, { once: true });
+    dialog.showModal();
+    $('item-name').focus();
   }
 
   function itemActions(c) {
@@ -919,7 +959,10 @@
       h('button', { type: 'button', class: `item-btn${fav ? ' fav-on' : ''}`, text: fav ? '★' : '☆',
         title: fav ? 'Retirer des favoris' : 'Ajouter aux favoris', 'aria-label': `${fav ? 'Retirer' : 'Ajouter'} ${displayName(c)} ${fav ? 'des' : 'aux'} favoris`,
         onclick: (event) => { event.preventDefault(); event.stopPropagation(); toggleFavorite(c); refresh(); } }),
-      h('button', { type: 'button', class: 'item-btn', text: '✎', title: 'Renommer / numéroter',
+      state.kind === 'live' ? h('button', { type: 'button', class: 'item-btn', text: '▶', title: 'Aperçu dans le navigateur',
+        'aria-label': `Aperçu de ${displayName(c)}`,
+        onclick: (event) => { event.preventDefault(); event.stopPropagation(); preview(c.stream_id, displayName(c)); } }) : null,
+      h('button', { type: 'button', class: 'item-btn', text: '✎', title: 'Renommer, numéroter, logo, guide',
         'aria-label': `Personnaliser ${displayName(c)}`,
         onclick: (event) => { event.preventDefault(); event.stopPropagation(); editItem(c); } }));
   }
@@ -1190,19 +1233,25 @@
     if (!state.favorites.length) favList.append(h('li', { class: 'empty', text: 'Aucun favori.' }));
     const custom = $('sum-custom');
     custom.replaceChildren();
-    const keys = new Set([...Object.keys(state.itemNames), ...Object.keys(state.itemNumbers)]);
+    const keys = new Set([...Object.keys(state.itemNames), ...Object.keys(state.itemNumbers),
+      ...Object.keys(state.itemLogos), ...Object.keys(state.itemEpg)]);
     for (const key of keys) {
       const { kind, item } = itemByKey(key);
       const parts = [];
       if (state.itemNames[key]) parts.push(`« ${state.itemNames[key]} »`);
       if (kind === 'live' && state.itemNumbers[key]) parts.push(`n° ${state.itemNumbers[key]}`);
+      if (state.itemLogos[key]) parts.push('logo');
+      if (kind === 'live' && state.itemEpg[key]) {
+        const source = state.cat.live.channelById.get(state.itemEpg[key]);
+        parts.push(`guide de « ${source ? source.name : state.itemEpg[key]} »`);
+      }
       custom.append(h('li', null,
         h('span', null, h('span', { class: `kind-tag ${kind}`, text: KIND[kind].label }), ' ', `${item ? item.name : key} → ${parts.join(' · ')}`),
         h('button', { type: 'button', class: 'x', text: '×', title: 'Annuler la personnalisation', onclick: () => {
-          delete state.itemNames[key]; delete state.itemNumbers[key]; refresh();
+          delete state.itemNames[key]; delete state.itemNumbers[key]; delete state.itemLogos[key]; delete state.itemEpg[key]; refresh();
         } })));
     }
-    if (!keys.size) custom.append(h('li', { class: 'empty', text: 'Aucun nom ni numéro personnalisé.' }));
+    if (!keys.size) custom.append(h('li', { class: 'empty', text: 'Aucune personnalisation (nom, numéro, logo, guide).' }));
   }
 
   function renderRules() {
@@ -1251,9 +1300,188 @@
     if (state.tab === 'categories' || channels === true) { renderCategories(); renderRules(); }
     if (channels === true) renderChannels();
     else if (channels === 'row') updateRow(row, channel);
-    if (state.tab === 'summary') renderSummary();
+    if (state.tab === 'summary' || state.section === 'organize') renderSummary();
     renderUrl();
     renderPlaylists();
+  }
+
+  // ------------------------------------------------- parties de l'éditeur
+  const SECTIONS = ['content', 'organize', 'options', 'guide'];
+  function selectSection(name) {
+    state.section = name;
+    for (const sec of SECTIONS) {
+      const active = sec === name;
+      $(`sec-btn-${sec}`).setAttribute('aria-selected', String(active));
+      $(`sec-btn-${sec}`).tabIndex = active ? 0 : -1;
+      $(`sec-${sec}`).hidden = !active;
+    }
+    if (name === 'organize') renderSummary();
+    if (name === 'guide') loadEpg();
+  }
+
+  // ------------------------------------------------------------- Guide TV
+  let guideWhen = 'now';
+  let guideRequest = 0;
+  const hhmm = (ts) => new Date(ts * 1000).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+  const dayLabel = (ts) => new Date(ts * 1000).toLocaleDateString('fr-FR', { weekday: 'short', day: 'numeric', month: 'short' });
+
+  function guideAt() {
+    const d = new Date();
+    if (guideWhen === 'now') return Math.floor(Date.now() / 1000);
+    if (guideWhen === 'tomorrow') d.setDate(d.getDate() + 1);
+    d.setHours(21, 0, 0, 0);
+    return Math.floor(d.getTime() / 1000);
+  }
+
+  function renderGuidePlaylists() {
+    const select = $('guide-playlist');
+    const current = select.value || state.editing || storage('xtream-m3u-guide') || '';
+    select.replaceChildren(...state.playlists.filter((p) => usesKind(p, 'live'))
+      .map((p) => h('option', { value: p.slug, text: p.name, selected: p.slug === current })));
+    if (!select.value && select.options.length) select.value = select.options[0].value;
+  }
+
+  async function loadGuide() {
+    renderGuidePlaylists();
+    const slug = $('guide-playlist').value;
+    const list = $('guide-list');
+    if (!slug) {
+      list.replaceChildren(h('li', { class: 'empty', text: 'Crée d\'abord une playlist avec des chaînes en direct.' }));
+      $('guide-status').textContent = '';
+      return;
+    }
+    try { storage('xtream-m3u-guide', slug); } catch (_) { /* facultatif */ }
+    const q = $('guide-search').value.trim();
+    const params = new URLSearchParams({ slug, at: String(q ? Math.floor(Date.now() / 1000) : guideAt()) });
+    if (q) params.set('q', q);
+    const ticket = ++guideRequest;
+    $('guide-status').textContent = 'Chargement du guide…';
+    let data;
+    try { data = await request(`/api/now?${params}`); } catch (error) {
+      if (ticket === guideRequest) { $('guide-status').textContent = error.message; list.replaceChildren(); }
+      return;
+    }
+    if (ticket !== guideRequest) return;
+    const mine = $('guide-mine').checked;
+    list.replaceChildren();
+    const now = Math.floor(Date.now() / 1000);
+    if (q) {
+      const rows = data.results.filter((r) => !mine || r.mine);
+      for (const r of rows) {
+        const live = r.start <= now && now < r.stop;
+        list.append(guideRow(r, h('span', { class: 'g-prog' },
+          h('span', { class: 'g-time', text: `${live ? 'En ce moment' : dayLabel(r.start)} · ${hhmm(r.start)} – ${hhmm(r.stop)}` }),
+          h('strong', { text: r.title }), r.desc ? h('span', { class: 'g-desc', text: r.desc }) : null)));
+      }
+      $('guide-status').textContent = rows.length ? `${plural(rows.length, 'programme trouvé', 'programmes trouvés')} (7 prochains jours)` : 'Aucun programme trouvé dans le guide.';
+      return;
+    }
+    const at = data.at;
+    const rows = data.channels.filter((c) => !mine || c.mine);
+    let withProgramme = 0;
+    for (const c of rows) {
+      const cur = c.now;
+      if (cur) withProgramme += 1;
+      const pct = cur ? Math.max(0, Math.min(100, ((at - cur.start) / Math.max(1, cur.stop - cur.start)) * 100)) : 0;
+      list.append(guideRow(c, h('span', { class: 'g-prog' },
+        cur ? h('span', { class: 'g-time', text: `${hhmm(cur.start)} – ${hhmm(cur.stop)}` }) : null,
+        h('strong', { text: cur ? cur.title : 'Pas de programme dans le guide' }),
+        cur ? h('span', { class: 'g-bar', 'aria-hidden': 'true' }, h('span', { style: null, class: 'g-fill', 'data-pct': String(Math.round(pct)) })) : null,
+        c.next ? h('span', { class: 'g-next', text: `Ensuite ${hhmm(c.next.start)} : ${c.next.title}` }) : null)));
+    }
+    for (const fill of list.querySelectorAll('.g-fill')) fill.style.width = `${fill.dataset.pct}%`;
+    const when = guideWhen === 'now' ? 'en ce moment' : `${dayLabel(at)} à ${hhmm(at)}`;
+    $('guide-status').textContent = rows.length
+      ? `${plural(rows.length, 'chaîne', 'chaînes')} ${when}${data.total > data.channels.length ? ` (les ${data.channels.length} premières)` : ''} · ${withProgramme} avec programme`
+      : 'Aucune chaîne à afficher.';
+  }
+
+  function guideRow(c, body) {
+    return h('li', { class: `guide-row${c.mine ? ' mine' : ''}` },
+      thumb({ ...c, stream_id: c.id, logo: c.logo }, 'live'),
+      h('span', { class: 'g-chan' }, h('strong', { text: c.name }), h('span', { class: 'muted small', text: [c.num ? `n° ${c.num}` : '', c.group].filter(Boolean).join(' · ') })),
+      body,
+      h('button', { type: 'button', class: 'item-btn', text: '▶', title: 'Aperçu dans le navigateur', 'aria-label': `Aperçu de ${c.name}`,
+        onclick: () => preview(c.id, c.name) }));
+  }
+
+  // ------------------------------------------------- aperçu (navigateur)
+  let previewPlayer = null;
+  let hlsLoading = null;
+  function loadHlsLibrary() {
+    if (window.Hls) return Promise.resolve(window.Hls);
+    if (!hlsLoading) {
+      hlsLoading = new Promise((resolve, reject) => {
+        const script = document.createElement('script');
+        script.src = '/static/vendor/hls.light.min.js';
+        script.onload = () => resolve(window.Hls);
+        script.onerror = () => { hlsLoading = null; reject(new Error('Lecteur HLS introuvable')); };
+        document.head.append(script);
+      });
+    }
+    return hlsLoading;
+  }
+
+  let previewId = null;
+  function stopPreview() {
+    if (previewPlayer) { try { previewPlayer.destroy(); } catch (_) { /* déjà détruit */ } previewPlayer = null; }
+    if (previewId) {
+      // Libère tout de suite la connexion au fournisseur (sinon gardée 30 s) : la TV peut reprendre la main.
+      const id = previewId;
+      previewId = null;
+      request('/api/streams').then((data) => Promise.all(data.streams.filter((s) => s.kind === 'hls' && s.item_id === id)
+        .map((s) => request(`/api/streams/${s.id}/stop?cooldown=0`, 'POST')))).then(() => loadStreams()).catch(() => {});
+    }
+    const video = $('preview-video');
+    video.pause();
+    video.removeAttribute('src');
+    video.load();
+  }
+
+  async function preview(id, name) {
+    const dialog = $('preview');
+    const video = $('preview-video');
+    $('preview-title').textContent = `Aperçu : ${name}`;
+    $('preview-status').textContent = 'Connexion au flux… Utilise la connexion de ton abonnement : une lecture en cours sur une TV peut être coupée (selon les priorités des appareils).';
+    stopPreview();
+    if (typeof dialog.showModal === 'function') dialog.showModal();
+    const url = withToken(`${baseUrl()}/hls/${encodeURIComponent(id)}.m3u8`);
+    previewId = String(id);
+    const failed = (message) => { $('preview-status').textContent = message; };
+    video.onerror = () => failed('Lecture impossible dans le navigateur (format vidéo non pris en charge, souvent le HEVC/4K) : la chaîne peut quand même marcher sur la TV.');
+    video.onplaying = () => { $('preview-status').textContent = 'Lecture en cours (son coupé : clique sur le haut-parleur).'; };
+    if (video.canPlayType('application/vnd.apple.mpegurl')) {
+      video.src = url;
+      video.play().catch(() => {});
+      return;
+    }
+    try {
+      const Hls = await loadHlsLibrary();
+      if (!Hls || !Hls.isSupported()) { failed('Ce navigateur ne sait pas lire le HLS.'); return; }
+      previewPlayer = new Hls({ enableWorker: false, lowLatencyMode: false });
+      previewPlayer.on(Hls.Events.ERROR, (_, info) => {
+        if (info && info.fatal) failed(info.response && info.response.code
+          ? `Le serveur a répondu ${info.response.code} : ${info.response.code === 503 ? 'connexion occupée par une autre lecture prioritaire.' : 'flux indisponible (le fournisseur propose-t-il le HLS ?).'}`
+          : 'Lecture impossible (flux indisponible ou format non pris en charge par le navigateur).');
+      });
+      previewPlayer.loadSource(url);
+      previewPlayer.attachMedia(video);
+      video.play().catch(() => {});
+    } catch (error) { failed(error.message); }
+  }
+
+  // ------------------------------------------------------------ historique
+  async function loadHistory() {
+    let data;
+    try { data = await request('/api/history'); } catch (_) { return; }
+    const fill = (id, rows, text, empty) => {
+      const node = $(id);
+      node.replaceChildren(...rows.map((r) => h('li', null, h('span', { text: r.label }), h('span', { class: 'num', text: text(r) }))));
+      if (!rows.length) node.append(h('li', { class: 'empty', text: empty }));
+    };
+    fill('history-top', data.top, (r) => `${formatDuration(r.seconds)} · ${plural(r.count, 'fois', 'fois')}`, 'Aucune lecture enregistrée.');
+    fill('history-unstable', data.unstable, (r) => `${plural(r.switches, 'bascule', 'bascules')}`, 'Aucune bascule : les chaînes tiennent bien.');
+    fill('history-list', data.entries.slice(0, 50), (r) => `${new Date(r.started_at * 1000).toLocaleString('fr-FR', { dateStyle: 'short', timeStyle: 'short' })} · ${formatDuration(r.seconds)}${r.device ? ` · ${r.device}` : ''}${r.switches ? ` · ${plural(r.switches, 'bascule', 'bascules')}` : ''}`, 'Aucune lecture.');
   }
 
   // ------------------------------------------------------------ onglets
@@ -1300,6 +1528,8 @@
     state.favorites = p && p.favorites ? [...p.favorites] : [];
     state.itemNames = p && p.item_names ? { ...p.item_names } : {};
     state.itemNumbers = p && p.item_numbers ? { ...p.item_numbers } : {};
+    state.itemLogos = p && p.item_logos ? { ...p.item_logos } : {};
+    state.itemEpg = p && p.item_epg ? { ...p.item_epg } : {};
     state.hiddenCache = null;
     renderOptionsPill();
     state.groupOrder = p && p.group_order ? [...p.group_order] : [];
@@ -1400,7 +1630,7 @@
   }
 
   // ------------------------------------------------ catalogue fournisseur
-  const VIEWS = { playlists: '#', catalog: '#catalogue', devices: '#appareils', system: '#systeme' };
+  const VIEWS = { playlists: '#', guide: '#guide', catalog: '#catalogue', devices: '#appareils', system: '#systeme' };
 
   function switchView(view) {
     if (!VIEWS[view]) view = 'playlists';
@@ -1415,6 +1645,7 @@
     if (view === 'catalog') renderProvider();
     if (view === 'system') loadSystem();
     if (view === 'devices') loadDevices();
+    if (view === 'guide') loadGuide();
     try { history.replaceState(null, '', VIEWS[view]); } catch (_) { /* ignore */ }
   }
 
@@ -1469,7 +1700,10 @@
             if (!(await ask({ title: 'Supprimer l\'appareil ?', text: `« ${d.name} » perdra immédiatement l'accès.`, okLabel: 'Supprimer', danger: true }))) return;
             try { await request(`/api/devices/${d.id}`, 'DELETE'); toast('Appareil supprimé'); loadDevices(); } catch (error) { toast(error.message, 'error'); }
           } }))),
-      h('div', { class: 'field' }, h('label', { text: 'Playlist de cet appareil' }), select),
+      h('div', { class: 'device-settings' },
+        h('div', { class: 'field' }, h('label', { text: 'Playlist de cet appareil' }), select),
+        h('div', { class: 'field' }, h('label', { text: 'Priorité (limite de connexions)' }), prioritySelect(d)),
+        h('div', { class: 'field' }, h('label', { text: 'Adresse IP de la TV (facultatif)' }), ipInput(d))),
       h('div', { class: 'device-grid' },
         h('div', { class: 'device-mode' },
           h('h4', { text: '📺 Mode « Playlist M3U » (VLC, TiviMate, Android TV…)' }),
@@ -1478,6 +1712,28 @@
           h('h4', { text: '🔐 Mode « Xtream Codes » (TiviMate, IPTV Smarters…)' }),
           credRow('Serveur', server), credRow('Identifiant', d.username), credRow('Mot de passe', d.password, { secret: true }),
           h('p', { class: 'hint', text: 'Rubriques Direct / Films / Séries natives du lecteur, guide et replay inclus.' }))));
+  }
+
+  function prioritySelect(d) {
+    const select = h('select', { 'aria-label': `Priorité de ${d.name}` },
+      h('option', { value: 'high', text: 'Haute : jamais coupée par une autre TV', selected: d.priority === 'high' }),
+      h('option', { value: 'normal', text: 'Normale', selected: !d.priority || d.priority === 'normal' }),
+      h('option', { value: 'low', text: 'Basse : cède toujours sa place', selected: d.priority === 'low' }));
+    select.addEventListener('change', async () => {
+      try { await request(`/api/devices/${d.id}`, 'PUT', { priority: select.value }); toast('Priorité modifiée'); }
+      catch (error) { toast(error.message, 'error'); loadDevices(); }
+    });
+    return select;
+  }
+
+  function ipInput(d) {
+    const input = h('input', { type: 'text', value: d.ip || '', placeholder: d.last_ip ? `vue : ${d.last_ip}` : 'ex. 192.168.0.42', inputmode: 'decimal',
+      'aria-label': `Adresse IP de ${d.name}`, title: 'Sert à reconnaître la TV même si sa playlist n\'utilise pas son code' });
+    input.addEventListener('change', async () => {
+      try { await request(`/api/devices/${d.id}`, 'PUT', { ip: input.value.trim() }); toast('Adresse enregistrée'); }
+      catch (error) { toast(error.message, 'error'); input.value = d.ip || ''; }
+    });
+    return input;
   }
 
   async function loadDevices() {
@@ -1534,7 +1790,7 @@
         h('span', { class: 'dot live-dot' }),
         h('span', { class: 'grow' },
           h('span', { class: 's-title', text: s.label || s.item_id }),
-          h('span', { class: 's-meta', text: `${KIND_LABEL[s.kind] || s.kind} · appareil ${s.client} · depuis ${formatDuration(s.seconds)} · ${formatBytes(s.bytes)}` })),
+          h('span', { class: 's-meta', text: `${KIND_LABEL[s.kind] || s.kind} · ${s.device ? `${s.device}${s.priority === 'high' ? ' (prioritaire)' : s.priority === 'low' ? ' (priorité basse)' : ''}` : `appareil ${s.client}`} · depuis ${formatDuration(s.seconds)} · ${formatBytes(s.bytes)}${s.switches ? ` · ${plural(s.switches, 'bascule', 'bascules')}` : ''}` })),
         h('button', { type: 'button', class: 'btn small danger', text: 'Arrêter', onclick: async (event) => {
           event.target.disabled = true;
           try { await request(`/api/streams/${s.id}/stop`, 'POST'); toast('Lecture arrêtée'); } catch (error) { toast(error.message, 'error'); }
@@ -1547,6 +1803,7 @@
   function loadSystem() {
     loadStreams();
     loadAccount();
+    loadHistory();
   }
 
   function providerChannelList(list, limit = 300, withCategories = false) {
@@ -1932,6 +2189,7 @@
   $('epg-refresh').addEventListener('click', refreshEpg);
   document.querySelectorAll('[data-kind]').forEach((btn) => btn.addEventListener('click', () => switchKind(btn.dataset.kind)));
   $('view-btn-playlists').addEventListener('click', () => switchView('playlists'));
+  $('view-btn-guide').addEventListener('click', () => switchView('guide'));
   $('view-btn-catalog').addEventListener('click', () => switchView('catalog'));
   $('view-btn-system').addEventListener('click', () => switchView('system'));
   $('view-btn-devices').addEventListener('click', () => switchView('devices'));
@@ -1940,7 +2198,7 @@
     const name = $('device-name').value.trim();
     if (!name) { $('device-name').focus(); return; }
     try {
-      const device = await request('/api/devices', 'POST', { name, playlist: $('device-playlist').value });
+      const device = await request('/api/devices', 'POST', { name, playlist: $('device-playlist').value, priority: $('device-priority').value });
       $('device-name').value = '';
       toast(`Appareil « ${device.name} » ajouté`);
       loadDevices();
@@ -2023,6 +2281,29 @@
   document.querySelectorAll('[data-copy]').forEach((btn) => btn.addEventListener('click', () => copyText($(btn.dataset.copy).textContent)));
 
   for (const tab of ['categories', 'channels', 'summary']) $(`tab-${tab}`).addEventListener('click', () => selectTab(tab));
+  for (const sec of SECTIONS) $(`sec-btn-${sec}`).addEventListener('click', () => selectSection(sec));
+  document.querySelector('.section-nav').addEventListener('keydown', (event) => {
+    const index = SECTIONS.indexOf(state.section);
+    const next = { ArrowRight: SECTIONS[(index + 1) % SECTIONS.length], ArrowLeft: SECTIONS[(index + SECTIONS.length - 1) % SECTIONS.length] }[event.key];
+    if (next) { event.preventDefault(); selectSection(next); $(`sec-btn-${next}`).focus(); }
+  });
+  $('guide-playlist').addEventListener('change', loadGuide);
+  $('guide-mine').addEventListener('change', loadGuide);
+  $('guide-search').addEventListener('input', debounce(loadGuide, 400));
+  for (const btn of document.querySelectorAll('[data-when]')) {
+    btn.addEventListener('click', () => {
+      guideWhen = btn.dataset.when;
+      for (const other of document.querySelectorAll('[data-when]')) other.setAttribute('aria-pressed', String(other === btn));
+      $('guide-search').value = '';
+      loadGuide();
+    });
+  }
+  $('preview-close').addEventListener('click', () => $('preview').close());
+  $('preview').addEventListener('close', stopPreview);
+  $('history-clear').addEventListener('click', async () => {
+    if (!(await ask({ title: 'Effacer l\'historique des lectures ?', okLabel: 'Effacer', danger: true }))) return;
+    try { await request('/api/history/clear', 'POST'); loadHistory(); } catch (error) { toast(error.message, 'error'); }
+  });
   document.querySelector('.tabs').addEventListener('keydown', (event) => {
     const tabs = ['categories', 'channels', 'summary'];
     const index = tabs.indexOf(state.tab);

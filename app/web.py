@@ -20,8 +20,8 @@ import time
 
 from .builder import select_items
 from .custom import SLUG_RE, filter_kind, uses
-from .epg import EpgUnavailable
-from .builder import CUSTOM_PREFIX
+from .epg import EpgUnavailable, read_schedule, xml_channel_id
+from .builder import CUSTOM_PREFIX, normalize
 from .server import KINDS, Config, UpstreamError, XtreamAPI, live_channels_in_order, redact
 from .devices import DeviceStore, InvalidDevice
 from .streams import StreamManager
@@ -35,14 +35,17 @@ STATIC_FILES = {
     "/static/app.css": ("app.css", "text/css; charset=utf-8"),
     "/static/app.js": ("app.js", "text/javascript; charset=utf-8"),
     "/static/favicon.svg": ("favicon.svg", "image/svg+xml"),
+    # Lecteur HLS pour l'aperçu dans le navigateur (hls.js 1.5.20, licence Apache 2.0, embarqué : aucun CDN).
+    "/static/vendor/hls.light.min.js": ("vendor/hls.light.min.js", "text/javascript; charset=utf-8"),
 }
 SLUG_API = re.compile(r"^/api/playlists/([a-z0-9][a-z0-9_-]{0,59})$")
 SERIES_API = re.compile(r"^/api/series/([0-9]{1,12})$")
 DEVICE_API = re.compile(r"^/api/devices/([A-Za-z0-9_-]{1,16})$")
 STREAM_STOP_API = re.compile(r"^/api/streams/([0-9]{1,9})/stop$")
 CSP = (
-    "default-src 'none'; style-src 'self'; script-src 'self'; connect-src 'self'; "
-    "img-src 'self' data: http: https:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+    "default-src 'none'; style-src 'self'; script-src 'self'; connect-src 'self'{players}; "
+    "media-src 'self' blob:{players}; img-src 'self' data: http: https:; base-uri 'none'; form-action 'none'; "
+    "frame-ancestors 'none'"
 )
 
 
@@ -75,12 +78,22 @@ class WebHandler(BaseHTTPRequestHandler):
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("X-Frame-Options", "DENY")
         self.send_header("Referrer-Policy", "no-referrer")
-        self.send_header("Content-Security-Policy", CSP)
+        self.send_header("Content-Security-Policy", CSP.format(players=self.players_origin()))
         if auth_challenge:
             self.send_header("WWW-Authenticate", 'Basic realm="Xtream M3U Local", charset="UTF-8"')
         self.end_headers()
         if self.command != "HEAD":
             self.wfile.write(data)
+
+    def players_origin(self) -> str:
+        """Origine du port lecteurs (7777) autorisée pour l'aperçu HLS (CSP connect-src / media-src)."""
+        if self.config.public_base_url:
+            parts = urlsplit(self.config.public_base_url)
+            return f" {parts.scheme}://{parts.netloc}"
+        host = (self.headers.get("Host") or "").rsplit(":", 1)[0]
+        if not re.fullmatch(r"[A-Za-z0-9.-]{1,253}|\[[0-9A-Fa-f:.]{2,45}\]", host):
+            return ""
+        return f" http://{host}:{self.config.port}"
 
     def json(self, status: int, data: object) -> None:
         self.output(status, json.dumps(data, ensure_ascii=False, separators=(",", ":")).encode("utf-8"),
@@ -161,12 +174,16 @@ class WebHandler(BaseHTTPRequestHandler):
             return self.json(200, catalog_payload(items, categories, self.api, kind))
         if path == "/api/streams":
             return self.json(200, self.streams_status())
+        if path == "/api/history":
+            return self.json(200, history_payload(self.streams.history() if self.streams is not None else []))
         if path == "/api/devices":
             return self.devices_status()
         if path == "/api/backup":
             return self.backup()
         if path == "/api/epg":
             return self.epg_status(qs.get("slug", [""])[0] or None)
+        if path == "/api/now":
+            return self.now_on_tv(qs)
         series_match = SERIES_API.fullmatch(path)
         if series_match and self.series is not None:
             episodes = self.series.episodes(series_match.group(1), refresh=refresh, timeout=30)
@@ -187,6 +204,7 @@ class WebHandler(BaseHTTPRequestHandler):
         for device in devices:
             seen = self.devices.last_seen.get(device["id"])
             device["last_seen"] = int(seen) if seen else None
+            device["last_ip"] = self.devices.last_ip.get(device["id"], "")
         return self.json(200, {"require_token": require, "access_token_env": bool(self.config.access_token),
                                "devices": devices})
 
@@ -211,7 +229,8 @@ class WebHandler(BaseHTTPRequestHandler):
                 return self.devices_status()
             if method == "POST":
                 return self.json(201, self.devices.create(body.get("name"), body.get("playlist", ""),
-                                                          body.get("username")))
+                                                          body.get("username"), body.get("priority", "normal"),
+                                                          body.get("ip", "")))
             return self.json(200, self.devices.update(device_id, body))
         except KeyError:
             return self.json(404, {"error": "Appareil introuvable"})
@@ -384,11 +403,18 @@ class WebHandler(BaseHTTPRequestHandler):
             return self.restore()
         if path == "/api/diagnostic":
             return self.diagnostic()
+        if path == "/api/history/clear":
+            if not self.same_origin():
+                return
+            if self.streams is not None:
+                self.streams.clear_history()
+            return self.json(200, {"cleared": True})
         stop = STREAM_STOP_API.fullmatch(path)
         if stop:
             if not self.same_origin():
                 return
-            if self.streams is None or not self.streams.stop(int(stop.group(1))):
+            cooldown = parse_qs(urlsplit(self.path).query).get("cooldown", ["1"])[0] != "0"
+            if self.streams is None or not self.streams.stop(int(stop.group(1)), cooldown=cooldown):
                 return self.json(404, {"error": "Lecture introuvable (déjà terminée ?)"})
             return self.json(200, {"stopped": True})
         if path != "/api/playlists":
@@ -486,6 +512,60 @@ class WebHandler(BaseHTTPRequestHandler):
                 data["error"] = str(exc)
             data["source"] = self.epg.status()
         return self.json(200, data)
+
+    def now_on_tv(self, qs: dict[str, list[str]]) -> None:
+        """« En ce moment à la TV » : programme à l'instant ``at`` (défaut : maintenant) et suivant,
+        pour les chaînes d'une playlist (favoris et « Mes groupes » d'abord) ; ``q`` : recherche (7 jours)."""
+        slug = qs.get("slug", [""])[0]
+        if not SLUG_RE.fullmatch(slug or ""):
+            return self.json(400, {"error": "Playlist invalide"})
+        if self.epg is None or not self.config.enable_epg:
+            return self.json(409, {"error": "EPG désactivé (ENABLE_EPG=false)"})
+        try:
+            saved = self.store.get(slug)
+        except RuntimeError:
+            return self.json(500, {"error": "Sauvegarde illisible"})
+        if saved is None:
+            return self.json(404, {"error": "Playlist introuvable"})
+        now = int(time.time())
+        try:
+            at = int(qs.get("at", [""])[0] or now)
+        except ValueError:
+            at = now
+        query = [t for t in normalize(qs.get("q", [""])[0]).split() if t][:6]
+        try:
+            ordered = live_channels_in_order(self.api, saved, with_groups=True)
+            _, group_names = select_items(self.api, saved, "live")
+            path, _ = self.epg.playlist_guide(slug, [c for c, _ in ordered], budget=0)
+        except (UpstreamError, EpgUnavailable) as exc:
+            return self.json(502, {"error": str(exc)})
+        schedule = read_schedule(path)
+        favorites = set(saved.get("favorites") or [])
+        names = saved.get("group_names") or {}
+        channels, results = [], []
+        for channel, group in ordered:
+            programmes = (schedule.get(xml_channel_id(channel).lower())
+                          or schedule.get(f"xtream-{channel['stream_id']}") or [])
+            info = {"id": channel["stream_id"], "name": channel["name"], "logo": channel.get("logo", ""),
+                    "group": names.get(group) or group_names.get(group, ""), "num": channel.get("num", ""),
+                    "mine": group.startswith(CUSTOM_PREFIX) or channel["stream_id"] in favorites}
+            if query:
+                for start, stop, title, desc in programmes:
+                    if stop < at or start > at + 7 * 86400:
+                        continue
+                    text = normalize(f"{title} {desc}")
+                    if all(term in text for term in query):
+                        results.append({**info, "start": start, "stop": stop, "title": title, "desc": desc})
+                continue
+            current = next((p for p in programmes if p[0] <= at < p[1]), None)
+            upcoming = next((p for p in programmes if p[0] > at), None)
+            info["now"] = {"start": current[0], "stop": current[1], "title": current[2], "desc": current[3]} if current else None
+            info["next"] = {"start": upcoming[0], "stop": upcoming[1], "title": upcoming[2]} if upcoming else None
+            channels.append(info)
+        if query:
+            results.sort(key=lambda r: (r["start"], not r["mine"]))
+            return self.json(200, {"at": at, "query": " ".join(query), "results": results[:200]})
+        return self.json(200, {"at": at, "channels": channels[:500], "total": len(channels)})
 
     def refresh_epg(self) -> None:
         """Re-télécharge le guide XMLTV et force la relecture des programmes de la playlist (arrière-plan)."""
@@ -595,6 +675,33 @@ def catalog_payload(channels: list[dict], categories: dict[str, str], api: Xtrea
         "channels": channel_list,
         "updated_at": int(st.updated_at) if st and st.updated_at else None,
         "categories_error": st.categories_error if st else None,
+    }
+
+
+def history_payload(history: list[dict], *, days: int = 30, now: float | None = None) -> dict:
+    """Historique des lectures : 100 dernières, chaînes les plus regardées et chaînes qui basculent (30 jours).
+
+    Les lectures de moins de 20 s (zapping) ne comptent pas dans le classement.
+    """
+    now = now or time.time()
+    recent = [h for h in history if now - h.get("started_at", 0) <= days * 86400]
+    top: dict[str, dict] = {}
+    unstable: dict[str, dict] = {}
+    for h in recent:
+        label = h.get("label") or h.get("item_id") or "?"
+        if h.get("seconds", 0) >= 20:
+            entry = top.setdefault(label, {"label": label, "kind": h.get("kind"), "count": 0, "seconds": 0})
+            entry["count"] += 1
+            entry["seconds"] += h.get("seconds", 0)
+        if h.get("switches"):
+            entry = unstable.setdefault(label, {"label": label, "count": 0, "switches": 0})
+            entry["count"] += 1
+            entry["switches"] += h["switches"]
+    return {
+        "entries": history[:100],
+        "top": sorted(top.values(), key=lambda e: (-e["seconds"], e["label"]))[:15],
+        "unstable": sorted(unstable.values(), key=lambda e: (-e["switches"], e["label"]))[:15],
+        "total": len(recent),
     }
 
 

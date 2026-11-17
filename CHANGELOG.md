@@ -2,6 +2,20 @@
 
 Format inspiré de « Keep a Changelog ». Les versions suivent le versionnage sémantique.
 
+## [3.5.0] — 2026-11-17
+
+### Ajouté
+- **Guide TV** (nouvelle vue) : programmes maintenant / ce soir 21 h / demain 21 h sur les chaînes d'une playlist (favoris et « Mes groupes » d'abord), progression, programme suivant, recherche sur 7 jours (`/api/now`).
+- **Aperçu dans le navigateur** (▶ dans le guide et la liste des chaînes) : hls.js 1.5.20 embarqué (Apache 2.0), relais `/hls/` ouvert en CORS uniquement à l'interface Web ; la connexion est libérée à la fermeture.
+- **Priorité des appareils** (haute / normale / basse) et adresse IP facultative : un appareil ne coupe jamais un appareil plus prioritaire ; message « connexion occupée par … ».
+- **Retour à la meilleure qualité** après une bascule (`FAILOVER_RETURN_MINUTES`, 10 min, délai doublé si la meilleure version flanche encore).
+- **Historique des lectures** (vue Système, `data/history.json`, 1 000 dernières) : chaînes les plus regardées, chaînes qui basculent, dernières lectures.
+- **✎ Personnalisation** étendue : logo de remplacement (`item_logos`) et guide emprunté à une autre chaîne (`item_epg`).
+
+### Modifié
+- **Interface réorganisée** : éditeur en quatre parties (Contenu, Organisation, Options, Guide) au lieu d'un long écran à blocs dépliants.
+- Le diagnostic ignore les sessions HLS inactives (aperçu fermé).
+
 ## [3.4.0] — 2026-11-16
 
 ### Ajouté

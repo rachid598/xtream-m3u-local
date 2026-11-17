@@ -174,7 +174,7 @@ def run(api, epg, series, streams, store, config) -> list[dict]:
     results.extend(r for r in (xmltv_result, api_result) if r)
 
     # 4. Flux -----------------------------------------------------------------------------
-    busy = streams is not None and streams.count() > 0
+    busy = streams is not None and (streams.busy() if hasattr(streams, "busy") else streams.count()) > 0
     stream_tests = [("stream-ts", "Flux direct MPEG-TS"), ("stream-hls", "Flux direct HLS"),
                     ("stream-movie", "Film"), ("stream-episode", "Épisode de série"), ("stream-replay", "Replay")]
     if busy:

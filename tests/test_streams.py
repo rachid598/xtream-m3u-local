@@ -207,3 +207,78 @@ class FailoverTests(StackTestCase):
     def test_option_saved(self):
         self.create({"slug": "f", "name": "F", "category_ids": ["1"], "dedupe": True, "failover": True})
         self.assertTrue(self.stack.store.get("f")["failover"])
+
+
+class PriorityAndHistoryTests(unittest.TestCase):
+    def manager(self, limit=1, **kw):
+        from app.streams import StreamManager
+        return StreamManager(lambda provider: limit, **kw)
+
+    def test_low_priority_device_cannot_cut_high_priority(self):
+        from app.streams import LimitReached
+        m = self.manager()
+        salon = m.acquire(kind="live", item_id="1", client="10.0.0.2", label="TF1", device="Salon", priority="high")
+        with self.assertRaises(LimitReached) as ctx:
+            m.acquire(kind="live", item_id="2", client="10.0.0.3", label="M6", device="Chambre", priority="low")
+        self.assertIs(ctx.exception.holder, salon)
+        self.assertFalse(salon.cancelled.is_set())
+        # Même priorité ou plus haute : la plus ancienne lecture est coupée.
+        other = m.acquire(kind="live", item_id="3", client="10.0.0.4", label="Arte", priority="high")
+        self.assertTrue(salon.cancelled.is_set())
+        m.release(other)
+
+    def test_history_recorded_persisted_and_summarized(self):
+        import tempfile
+        from app.web import history_payload
+        with tempfile.TemporaryDirectory() as tmp:
+            path = f"{tmp}/history.json"
+            m = self.manager(history_path=path)
+            s = m.acquire(kind="live", item_id="1", client="c", label="TF1", device="Salon")
+            s.started -= 120
+            s.switches = 2
+            m.release(s)
+            again = self.manager(history_path=path).history()
+            self.assertEqual((again[0]["label"], again[0]["device"], again[0]["switches"]), ("TF1", "Salon", 2))
+            summary = history_payload(again)
+            self.assertEqual(summary["top"][0]["label"], "TF1")
+            self.assertEqual(summary["unstable"][0]["switches"], 2)
+            m.clear_history()
+            self.assertEqual(self.manager(history_path=path).history(), [])
+
+
+class DevicePriorityTests(unittest.TestCase):
+    def test_priority_ip_and_lookup(self):
+        import tempfile
+        from app.devices import DeviceStore, InvalidDevice
+        with tempfile.TemporaryDirectory() as tmp:
+            store = DeviceStore(tmp)
+            salon = store.create("Salon", priority="high", ip="192.168.0.42")
+            chambre = store.create("Chambre")
+            self.assertEqual((salon["priority"], chambre["priority"], chambre["ip"]), ("high", "normal", ""))
+            self.assertEqual(store.by_ip("192.168.0.42")["name"], "Salon")
+            store.seen_from(chambre, "192.168.0.50")
+            self.assertEqual(store.by_ip("192.168.0.50")["name"], "Chambre")
+            self.assertIsNone(store.by_ip("192.168.0.99"))
+            for bad in ({"priority": "max"}, {"ip": "salon"}):
+                with self.subTest(bad=bad), self.assertRaises(InvalidDevice):
+                    store.update(chambre["id"], bad)
+
+
+class ReturnToBestTests(StackTestCase):
+    def test_returns_to_best_version_after_a_while(self):
+        stack = self.make_stack(failover_stall_seconds=1.0, failover_return_minutes=0.04)  # ≈ 2,4 s
+        seen = b""
+        with urlopen(stack.proxy_base + "/stream/60.ts?alt=50", timeout=15) as r:
+            start = time.monotonic()
+            while time.monotonic() - start < 12:
+                chunk = r.read(1024)
+                if not chunk:
+                    break
+                seen += chunk
+                # 60 (A…) se tait → 50 (0x47…) → retour à 60 (A…) au bout de ~2,4 s
+                if seen.count(b"A" * 1024) >= 8 and b"\x47" * 1024 in seen:
+                    break
+        first_a, first_g = seen.find(b"A" * 1024), seen.find(b"\x47" * 1024)
+        self.assertTrue(0 <= first_a < first_g, seen[:20])
+        self.assertGreaterEqual(seen.count(b"A" * 1024), 8, "retour à la meilleure version")
+        self.assertGreater(seen.rfind(b"A" * 1024), first_g)

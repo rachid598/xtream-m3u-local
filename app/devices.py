@@ -10,11 +10,15 @@ Fichier ``DATA_DIR/devices.json`` (droits 0600 : il contient les codes d'accès 
 - ``require_token`` : si vrai, les URL du port 7777 exigent un code (d'appareil ou ``ACCESS_TOKEN``).
 - ``username`` / ``password`` servent aussi d'identifiants pour le serveur Xtream local
   (``player_api.php``) : l'appareil ne voit que sa ``playlist`` (ou tout le catalogue si vide).
+- ``priority`` (high | normal | low) : avec une limite de connexions, un appareil n'en coupe jamais un
+  plus prioritaire ; ``ip`` (facultatif) : adresse de la TV, pour la reconnaître même sans code
+  (playlist ouverte sans ``?token=``) — sinon la dernière adresse vue avec son code est utilisée.
 - Les identifiants du fournisseur ne sont jamais stockés ici.
 """
 from __future__ import annotations
 
 import hmac
+import ipaddress
 import json
 import os
 import re
@@ -28,6 +32,7 @@ USERNAME_RE = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,31}$")
 SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,59}$")
 PASSWORD_ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789"   # sans caractères ambigus (saisie à la télécommande)
 MAX_DEVICES = 50
+PRIORITIES = ("high", "normal", "low")
 
 
 class InvalidDevice(ValueError):
@@ -51,6 +56,7 @@ class DeviceStore:
         self._lock = threading.RLock()
         self._cache: tuple[float, dict] | None = None
         self.last_seen: dict[str, float] = {}
+        self.last_ip: dict[str, str] = {}
 
     # ------------------------------------------------------------ lecture
     def _load(self) -> dict:
@@ -95,6 +101,22 @@ class DeviceStore:
                 return device
         return None
 
+    def seen_from(self, device: dict, ip: str) -> None:
+        """Mémorise l'adresse d'où l'appareil s'est présenté avec son code."""
+        if device and ip:
+            self.last_ip[device["id"]] = ip
+
+    def by_ip(self, ip: str) -> dict | None:
+        """Appareil reconnu à son adresse : adresse saisie d'abord, puis dernière adresse vue avec son code."""
+        if not ip:
+            return None
+        try:
+            devices = self._load()["devices"]
+        except RuntimeError:
+            return None
+        return (next((d for d in devices if d.get("ip") == ip), None)
+                or next((d for d in devices if self.last_ip.get(d["id"]) == ip), None))
+
     def authenticate(self, username: str, password: str) -> dict | None:
         device = self.find_by_token(password)
         if device and hmac.compare_digest(username.encode(), device["username"].encode()):
@@ -135,7 +157,25 @@ class DeviceStore:
             raise InvalidDevice("Playlist invalide")
         return playlist
 
-    def create(self, name: object, playlist: object = "", username: object = None) -> dict:
+    @staticmethod
+    def _check_priority(priority: object) -> str:
+        if priority in (None, ""):
+            return "normal"
+        if priority not in PRIORITIES:
+            raise InvalidDevice("Priorité : high, normal ou low")
+        return priority
+
+    @staticmethod
+    def _check_ip(ip: object) -> str:
+        if ip in (None, ""):
+            return ""
+        try:
+            return str(ipaddress.ip_address(str(ip).strip()))
+        except ValueError:
+            raise InvalidDevice("Adresse IP de l'appareil invalide (ex. 192.168.0.42)") from None
+
+    def create(self, name: object, playlist: object = "", username: object = None,
+               priority: object = "normal", ip: object = "") -> dict:
         with self._lock:
             data = self._load()
             devices = data["devices"]
@@ -152,6 +192,7 @@ class DeviceStore:
                 i += 1
             device = {"id": secrets.token_hex(4), "name": clean_name, "username": candidate,
                       "password": new_password(), "playlist": self._check_playlist(playlist),
+                      "priority": self._check_priority(priority), "ip": self._check_ip(ip),
                       "created_at": int(time.time())}
             self._write({"require_token": data["require_token"], "devices": devices + [device]})
             return dict(device)
@@ -167,6 +208,10 @@ class DeviceStore:
                 device["name"] = self._check_name(payload["name"])
             if "playlist" in payload:
                 device["playlist"] = self._check_playlist(payload["playlist"])
+            if "priority" in payload:
+                device["priority"] = self._check_priority(payload["priority"])
+            if "ip" in payload:
+                device["ip"] = self._check_ip(payload["ip"])
             if payload.get("regenerate"):
                 device["password"] = new_password()
             self._write({"require_token": data["require_token"], "devices": devices})
@@ -206,6 +251,8 @@ class DeviceStore:
             devices.append({"id": str(raw.get("id") or secrets.token_hex(4))[:16], "name": name,
                             "username": username, "password": password,
                             "playlist": self._check_playlist(raw.get("playlist")),
+                            "priority": self._check_priority(raw.get("priority")),
+                            "ip": self._check_ip(raw.get("ip")),
                             "created_at": int(raw.get("created_at") or time.time())})
         with self._lock:
             self._write({"require_token": bool(data.get("require_token")), "devices": devices})

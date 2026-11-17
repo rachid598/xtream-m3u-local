@@ -104,6 +104,41 @@ def _item_names(value: object) -> dict[str, str]:
     return result
 
 
+LOGO_RE = re.compile(r"^https?://[^\s\"'<>]{3,490}$")
+
+
+def _item_logos(value: object) -> dict[str, str]:
+    """Logos de remplacement ``{clé: URL http(s)}`` (clé = id du direct, ``vod:id`` ou ``series:id``)."""
+    if value is None:
+        return {}
+    if not isinstance(value, dict) or len(value) > MAX_ITEMS_CUSTOM:
+        raise InvalidPlaylist("Logos : objet attendu")
+    result = {}
+    for key, url in value.items():
+        if not isinstance(key, str) or not ITEM_KEY_RE.fullmatch(key):
+            raise InvalidPlaylist("Identifiant d'élément invalide (logos)")
+        if not isinstance(url, str) or not LOGO_RE.fullmatch(url.strip()):
+            raise InvalidPlaylist("Logo : adresse http(s) d'une image attendue")
+        result[key] = url.strip()
+    return result
+
+
+def _item_epg(value: object) -> dict[str, str]:
+    """Guide emprunté ``{id_du_direct: id_de_la_chaîne_dont_on_prend_le_guide}``."""
+    if value is None:
+        return {}
+    if not isinstance(value, dict) or len(value) > MAX_ITEMS_CUSTOM:
+        raise InvalidPlaylist("Guides empruntés : objet attendu")
+    result = {}
+    for key, source in value.items():
+        source = str(source).strip() if isinstance(source, (str, int)) and not isinstance(source, bool) else ""
+        if not isinstance(key, str) or not key.isdigit() or len(key) > 12 or not source.isdigit() or len(source) > 12:
+            raise InvalidPlaylist("Guide emprunté : identifiants de chaînes attendus")
+        if source != key:
+            result[key] = source
+    return result
+
+
 def _item_numbers(value: object) -> dict[str, int]:
     """Numéros de chaînes ``{id_du_direct: numéro}`` (1 à 99 999) ; servent aussi à l'ordre."""
     if value is None:
@@ -224,6 +259,8 @@ def validate_playlist(payload: object, *, slug: str | None = None) -> dict:
     result["rules"] = _rules(payload.get("rules"))
     result["item_names"] = _item_names(payload.get("item_names"))
     result["item_numbers"] = _item_numbers(payload.get("item_numbers"))
+    result["item_logos"] = _item_logos(payload.get("item_logos"))
+    result["item_epg"] = _item_epg(payload.get("item_epg"))
     result["custom_groups"] = _custom_groups(payload.get("custom_groups"))
     result["item_groups"] = _item_groups(payload.get("item_groups"), result["custom_groups"])
     favorites = _ids(payload.get("favorites"), pattern=ITEM_KEY_RE, label="favori")

@@ -285,3 +285,34 @@ class MyGroupsGuideTests(_Stack):
         self.assertEqual(order[:2], ["44", "43"])         # favori, puis « Mes groupes », puis le reste
         status = json.loads(self.get(self.stack.web_base + "/api/epg?slug=salon")[1])
         self.assertEqual(status["playlist"]["mine"]["channels"], 2)
+
+
+class NowOnTvTests(_Stack):
+    AT = 1794762000 + 60   # 15/11/2026 18 h 01 (Paris) : « Journal » sur France Info
+
+    def test_now_next_and_search(self):
+        self.create({"slug": "salon", "name": "Salon", "category_ids": ["1"], "favorites": ["44"]})
+        data = json.loads(self.get(self.stack.web_base + f"/api/now?slug=salon&at={self.AT}")[1])
+        by_id = {c["id"]: c for c in data["channels"]}
+        self.assertEqual(data["channels"][0]["id"], "44")            # favori en premier
+        self.assertTrue(data["channels"][0]["mine"])
+        self.assertEqual(by_id["42"]["now"]["title"], "Journal")
+        self.assertEqual(by_id["42"]["now"]["start"], 1794762000)
+        found = json.loads(self.get(self.stack.web_base + f"/api/now?slug=salon&at={self.AT - 3600}&q=journal")[1])
+        self.assertEqual([(r["id"], r["title"]) for r in found["results"]], [("42", "Journal")])
+        self.assertEqual(self.get(self.stack.web_base + "/api/now?slug=../x")[0], 400)
+        self.assertEqual(self.get(self.stack.web_base + "/api/now?slug=inconnue")[0], 404)
+
+    def test_borrowed_guide_and_logo_override(self):
+        self.create({"slug": "salon", "name": "Salon", "category_ids": ["1"],
+                     "item_epg": {"44": "42"}, "item_logos": {"44": "https://logos.example/sport.png"}})
+        m3u = self.get(self.stack.proxy_base + "/p/salon.m3u")[1].decode()
+        line = next(l for l in m3u.splitlines() if l.endswith(",Sport 1"))
+        self.assertIn('tvg-id="franceinfo.fr"', line)
+        self.assertIn('tvg-logo="https://logos.example/sport.png"', line)
+        data = json.loads(self.get(self.stack.web_base + f"/api/now?slug=salon&at={self.AT}")[1])
+        self.assertEqual({c["id"]: (c["now"] or {}).get("title") for c in data["channels"]}["44"], "Journal")
+        for bad in ({"item_logos": {"44": "javascript:alert(1)"}}, {"item_epg": {"44": "abc"}}):
+            status = self.send(self.stack.web_base + "/api/playlists", "POST",
+                               {"slug": "x", "name": "X", "category_ids": ["1"], **bad})[0]
+            self.assertEqual(status, 400, bad)

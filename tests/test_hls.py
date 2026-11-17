@@ -143,3 +143,21 @@ class HlsRelayTests(StackTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PreviewAccessTests(StackTestCase):
+    """Aperçu dans le navigateur : le relais HLS n'est lisible en JavaScript que depuis l'interface Web."""
+
+    def test_cors_only_for_web_interface_and_csp(self):
+        web_port = self.stack.config.web_port
+        ok = self.get(self.stack.proxy_base + "/hls/42.m3u8", {"Origin": f"http://127.0.0.1:{web_port}"})
+        self.assertEqual(ok[0], 200)
+        self.assertEqual(ok[2].get("Access-Control-Allow-Origin"), f"http://127.0.0.1:{web_port}")
+        other = self.get(self.stack.proxy_base + "/hls/42.m3u8", {"Origin": "http://evil.example"})
+        self.assertNotIn("Access-Control-Allow-Origin", other[2])
+        playlist = self.get(self.stack.proxy_base + "/playlist.m3u", {"Origin": f"http://127.0.0.1:{web_port}"})
+        self.assertNotIn("Access-Control-Allow-Origin", playlist[2])
+        csp = self.get(self.stack.web_base + "/")[2]["Content-Security-Policy"]
+        self.assertIn(f"connect-src 'self' http://127.0.0.1:{self.stack.config.port}", csp)
+        self.assertIn("media-src 'self' blob:", csp)
+        self.assertEqual(self.get(self.stack.web_base + "/static/vendor/hls.light.min.js")[0], 200)

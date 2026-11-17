@@ -21,6 +21,7 @@
   </div>
   <nav class="views" aria-label="Vues">
     <button type="button" class="view-btn" id="view-btn-playlists" aria-pressed="true">Mes playlists</button>
+    <button type="button" class="view-btn" id="view-btn-guide" aria-pressed="false">Guide TV</button>
     <button type="button" class="view-btn" id="view-btn-catalog" aria-pressed="false">Catalogue<span class="hide-sm"> fournisseur</span></button>
     <button type="button" class="view-btn" id="view-btn-devices" aria-pressed="false">Appareils</button>
     <button type="button" class="view-btn" id="view-btn-system" aria-pressed="false">Système</button>
@@ -114,64 +115,6 @@
           <a class="btn ghost" id="open" target="_blank" rel="noopener noreferrer" aria-disabled="true">Ouvrir le M3U</a>
         </div>
       </div>
-      <details class="epg-box" id="epg-box" hidden>
-        <summary>
-          <span class="epg-title"><span aria-hidden="true">🗓️</span> Guide des programmes (EPG)</span>
-          <span class="pill" id="epg-pill"><span class="dot"></span><span id="epg-pill-text">Vérification…</span></span>
-        </summary>
-        <div class="epg-body">
-          <p class="hint">Les lecteurs (TiviMate, VLC…) le chargent automatiquement depuis la playlist. Si ton lecteur demande une adresse « EPG » séparée, copie celle-ci (l'adresse <code>http://IP:7777/xmltv.php</code> fonctionne aussi) :</p>
-          <div class="url-box">
-            <code id="epg-url">—</code>
-            <button type="button" class="btn small" data-copy="epg-url">Copier</button>
-          </div>
-          <div class="epg-grid">
-            <div class="stat"><strong id="epg-covered">–</strong><span>chaînes avec programmes</span></div>
-            <div class="stat"><strong id="epg-xmltv">–</strong><span id="epg-xmltv-label">via xmltv.php</span></div>
-            <div class="stat"><strong id="epg-api">–</strong><span>via l'API (chaîne par chaîne)</span></div>
-            <div class="stat"><strong id="epg-missing-count">–</strong><span>sans programme</span></div>
-          </div>
-          <p class="hint" id="epg-source"></p>
-          <details class="epg-missing" id="epg-missing-box" hidden>
-            <summary id="epg-missing-summary">Chaînes sans programme</summary>
-            <ul id="epg-missing" class="sum-list"></ul>
-          </details>
-          <div class="btn-row">
-            <button type="button" class="btn small" id="epg-refresh">Actualiser le guide</button>
-            <a class="btn small ghost" id="epg-open" target="_blank" rel="noopener noreferrer">Ouvrir le XML</a>
-          </div>
-        </div>
-      </details>
-      <details class="epg-box options-box" id="options-box">
-        <summary><span class="epg-title"><span aria-hidden="true">⚙️</span> Options de la playlist</span><span class="pill" id="options-pill"><span id="options-pill-text">MPEG-TS</span></span></summary>
-        <div class="epg-body">
-          <div class="option-row">
-            <label for="opt-live-format">Format des chaînes en direct</label>
-            <select id="opt-live-format">
-              <option value="ts">MPEG-TS (recommandé, une connexion continue)</option>
-              <option value="hls">HLS .m3u8 (petits morceaux : si le TS se fige ou coupe souvent)</option>
-            </select>
-            <p class="hint">Les deux passent par ton serveur, sans identifiants dans la playlist. Pour tester sans changer la playlist : ajoute <code>?format=m3u8</code> à son URL.</p>
-          </div>
-          <div class="option-row">
-            <label class="check-row"><input type="checkbox" id="opt-dedupe"> <span>Masquer les doublons SD / HD / FHD / 4K d'une même chaîne (garder la meilleure qualité dans chaque groupe)</span></label>
-          </div>
-          <div class="option-row">
-            <label class="check-row"><input type="checkbox" id="opt-failover"> <span>Bascule automatique : si la version lue coupe, se fige ou rame, passer toute seule à la version suivante de la même chaîne (4K → FHD → HD → SD)</span></label>
-            <p class="hint" id="opt-failover-hint">Utilise les doublons masqués comme versions de secours : active aussi « Masquer les doublons ». Format MPEG-TS seulement ; chaque bascule provoque une courte coupure (1 à 3 s) et la version suivante reste jusqu'au prochain changement de chaîne.</p>
-          </div>
-          <div class="option-row">
-            <label class="check-row"><input type="checkbox" id="opt-separators"> <span>Masquer les séparateurs du fournisseur (fausses chaînes du type « ##### PRIME ##### » ou « ===== FR ===== »)</span></label>
-          </div>
-          <div class="option-row">
-            <label for="opt-fav-name">Nom du groupe des favoris</label>
-            <input id="opt-fav-name" type="text" maxlength="100" placeholder="★ Favoris">
-          </div>
-          <div class="option-row">
-            <label class="check-row"><input type="checkbox" id="opt-catchup" checked> <span>Replay (catch-up) : revoir les programmes passés depuis le guide, sur les chaînes qui le proposent</span></label>
-          </div>
-        </div>
-      </details>
       <div class="stats" aria-live="polite">
         <div class="stat"><strong id="stat-channels">0</strong><span id="stat-channels-label">chaînes retenues</span></div>
         <div class="stat"><strong id="stat-vod">0</strong><span>films retenus</span></div>
@@ -180,6 +123,14 @@
       </div>
     </section>
 
+    <nav class="section-nav" role="tablist" aria-label="Parties de la playlist">
+      <button type="button" role="tab" id="sec-btn-content" aria-controls="sec-content" aria-selected="true"><span aria-hidden="true">📺</span> Contenu</button>
+      <button type="button" role="tab" id="sec-btn-organize" aria-controls="sec-organize" aria-selected="false" tabindex="-1"><span aria-hidden="true">📁</span> Organisation</button>
+      <button type="button" role="tab" id="sec-btn-options" aria-controls="sec-options" aria-selected="false" tabindex="-1"><span aria-hidden="true">⚙️</span> Options</button>
+      <button type="button" role="tab" id="sec-btn-guide" aria-controls="sec-guide" aria-selected="false" tabindex="-1"><span aria-hidden="true">🗓️</span> Guide</button>
+    </nav>
+
+    <div id="sec-content" role="tabpanel" aria-labelledby="sec-btn-content" class="sec-panel">
     <section class="card content-card" aria-labelledby="content-title">
       <div class="card-head">
         <h2 id="content-title">Contenu de la playlist</h2>
@@ -210,7 +161,7 @@
       <div class="tabs" role="tablist" aria-label="Étapes">
         <button type="button" role="tab" id="tab-categories" aria-controls="panel-categories" aria-selected="true">1. Catégories <span class="count" id="tab-cat-count"></span></button>
         <button type="button" role="tab" id="tab-channels" aria-controls="panel-channels" aria-selected="false" tabindex="-1">2. <span id="tab-items-label">Chaînes</span> <span class="count" id="tab-ch-count"></span></button>
-        <button type="button" role="tab" id="tab-summary" aria-controls="panel-summary" aria-selected="false" tabindex="-1">3. Résumé</button>
+        <button type="button" role="tab" id="tab-summary" aria-controls="panel-summary" aria-selected="false" tabindex="-1">3. Ajouts et exclusions</button>
       </div>
 
       <div id="panel-categories" role="tabpanel" aria-labelledby="tab-categories" class="panel">
@@ -276,6 +227,23 @@
       </div>
 
       <div id="panel-summary" role="tabpanel" aria-labelledby="tab-summary" class="panel" hidden>
+        <p class="hint">Éléments ajoutés un par un hors des catégories cochées, et éléments retirés de catégories cochées.</p>
+        <div class="summary-grid">
+          <div>
+            <div class="card-head"><h3>Ajouts manuels</h3><button type="button" class="btn small ghost" id="clear-included">Tout retirer</button></div>
+            <ul id="sum-included" class="sum-list"></ul>
+          </div>
+          <div>
+            <div class="card-head"><h3>Exclusions</h3><button type="button" class="btn small ghost" id="clear-excluded">Tout retirer</button></div>
+            <ul id="sum-excluded" class="sum-list"></ul>
+          </div>
+        </div>
+      </div>
+    </section>
+    </div>
+
+    <div id="sec-organize" role="tabpanel" aria-labelledby="sec-btn-organize" class="sec-panel" hidden>
+    <section class="card">
         <section class="cg-box" aria-labelledby="cg-title">
           <div class="card-head">
             <h3 id="cg-title">📁 Mes groupes de chaînes</h3>
@@ -285,20 +253,15 @@
           <div class="preset-row" id="cg-presets"><span class="muted small">Modèles prêts :</span></div>
           <div id="cg-list" class="cg-list"></div>
         </section>
-        <div class="summary-grid">
+    </section>
+    <section class="card">
+      <div class="summary-grid">
           <div>
             <div class="card-head"><h3>Groupes dans la playlist</h3><button type="button" class="btn small ghost" id="reset-groups">Ordre et noms du fournisseur</button></div>
             <p class="hint">Réorganise et renomme les groupes de cette playlist uniquement : le catalogue du fournisseur n'est jamais modifié.</p>
             <ol id="sum-groups" class="group-list"></ol>
           </div>
-          <div>
-            <div class="card-head"><h3>Ajouts manuels</h3><button type="button" class="btn small ghost" id="clear-included">Tout retirer</button></div>
-            <ul id="sum-included" class="sum-list"></ul>
-            <div class="card-head"><h3>Exclusions</h3><button type="button" class="btn small ghost" id="clear-excluded">Tout retirer</button></div>
-            <ul id="sum-excluded" class="sum-list"></ul>
-          </div>
-        </div>
-        <div class="summary-grid custom-grid">
+          <div class="stack">
           <div>
             <div class="card-head"><h3>★ Favoris</h3><button type="button" class="btn small ghost" id="clear-favorites">Tout retirer</button></div>
             <p class="hint">Regroupés en tête de la playlist (ils restent aussi dans leur groupe). Ajoute-les avec ☆ dans la liste.</p>
@@ -314,8 +277,100 @@
             <p class="hint">Les numéros servent au zapping à la télécommande et à l'ordre des chaînes dans chaque groupe. Utilise ✎ dans la liste pour renommer ou numéroter.</p>
             <ul id="sum-custom" class="sum-list"></ul>
           </div>
+          </div>
+      </div>
+    </section>
+    </div>
+
+    <div id="sec-options" role="tabpanel" aria-labelledby="sec-btn-options" class="sec-panel" hidden>
+    <section class="card options-card" id="options-box">
+      <div class="card-head"><h2><span aria-hidden="true">⚙️</span> Options de la playlist</h2><span class="pill" id="options-pill"><span id="options-pill-text">MPEG-TS</span></span></div>
+        <div class="epg-body">
+          <div class="option-row">
+            <label for="opt-live-format">Format des chaînes en direct</label>
+            <select id="opt-live-format">
+              <option value="ts">MPEG-TS (recommandé, une connexion continue)</option>
+              <option value="hls">HLS .m3u8 (petits morceaux : si le TS se fige ou coupe souvent)</option>
+            </select>
+            <p class="hint">Les deux passent par ton serveur, sans identifiants dans la playlist. Pour tester sans changer la playlist : ajoute <code>?format=m3u8</code> à son URL.</p>
+          </div>
+          <div class="option-row">
+            <label class="check-row"><input type="checkbox" id="opt-dedupe"> <span>Masquer les doublons SD / HD / FHD / 4K d'une même chaîne (garder la meilleure qualité dans chaque groupe)</span></label>
+          </div>
+          <div class="option-row">
+            <label class="check-row"><input type="checkbox" id="opt-failover"> <span>Bascule automatique : si la version lue coupe, se fige ou rame, passer toute seule à la version suivante de la même chaîne (4K → FHD → HD → SD)</span></label>
+            <p class="hint" id="opt-failover-hint">Utilise les doublons masqués comme versions de secours : active aussi « Masquer les doublons ». Format MPEG-TS seulement ; chaque bascule provoque une courte coupure (1 à 3 s) et la version suivante reste jusqu'au prochain changement de chaîne.</p>
+          </div>
+          <div class="option-row">
+            <label class="check-row"><input type="checkbox" id="opt-separators"> <span>Masquer les séparateurs du fournisseur (fausses chaînes du type « ##### PRIME ##### » ou « ===== FR ===== »)</span></label>
+          </div>
+          <div class="option-row">
+            <label for="opt-fav-name">Nom du groupe des favoris</label>
+            <input id="opt-fav-name" type="text" maxlength="100" placeholder="★ Favoris">
+          </div>
+          <div class="option-row">
+            <label class="check-row"><input type="checkbox" id="opt-catchup" checked> <span>Replay (catch-up) : revoir les programmes passés depuis le guide, sur les chaînes qui le proposent</span></label>
+          </div>
+        </div>
+      
+    </section>
+    </div>
+
+    <div id="sec-guide" role="tabpanel" aria-labelledby="sec-btn-guide" class="sec-panel" hidden>
+    <section class="card options-card" id="epg-box">
+      <div class="card-head"><h2><span aria-hidden="true">🗓️</span> Guide des programmes (EPG)</h2><span class="pill" id="epg-pill"><span class="dot"></span><span id="epg-pill-text">Vérification…</span></span></div>
+      <p class="hint" id="epg-unavailable" hidden>Enregistre la playlist avec des chaînes en direct pour obtenir son guide. Le guide TV complet (ce qui passe maintenant, recherche) est dans la vue « Guide TV ».</p>
+      <div id="epg-content">
+        <div class="epg-body">
+          <p class="hint">Les lecteurs (TiviMate, VLC…) le chargent automatiquement depuis la playlist. Si ton lecteur demande une adresse « EPG » séparée, copie celle-ci (l'adresse <code>http://IP:7777/xmltv.php</code> fonctionne aussi) :</p>
+          <div class="url-box">
+            <code id="epg-url">—</code>
+            <button type="button" class="btn small" data-copy="epg-url">Copier</button>
+          </div>
+          <div class="epg-grid">
+            <div class="stat"><strong id="epg-covered">–</strong><span>chaînes avec programmes</span></div>
+            <div class="stat"><strong id="epg-xmltv">–</strong><span id="epg-xmltv-label">via xmltv.php</span></div>
+            <div class="stat"><strong id="epg-api">–</strong><span>via l'API (chaîne par chaîne)</span></div>
+            <div class="stat"><strong id="epg-missing-count">–</strong><span>sans programme</span></div>
+          </div>
+          <p class="hint" id="epg-source"></p>
+          <details class="epg-missing" id="epg-missing-box" hidden>
+            <summary id="epg-missing-summary">Chaînes sans programme</summary>
+            <ul id="epg-missing" class="sum-list"></ul>
+          </details>
+          <div class="btn-row">
+            <button type="button" class="btn small" id="epg-refresh">Actualiser le guide</button>
+            <a class="btn small ghost" id="epg-open" target="_blank" rel="noopener noreferrer">Ouvrir le XML</a>
+          </div>
+        </div>
+      
+      </div>
+    </section>
+    </div>
+  </main>
+</div>
+
+<div class="layout single" id="view-guide" hidden>
+  <main class="main">
+    <section class="card">
+      <div class="card-head">
+        <div>
+          <h2>Guide TV</h2>
+          <p class="muted small">Ce qui passe sur les chaînes d'une playlist (favoris et « Mes groupes » d'abord), et recherche dans les programmes des 7 prochains jours. ▶ ouvre un aperçu dans le navigateur.</p>
         </div>
       </div>
+      <div class="guide-toolbar">
+        <div class="field"><label for="guide-playlist">Playlist</label><select id="guide-playlist"></select></div>
+        <div class="segmented" role="group" aria-label="Moment">
+          <button type="button" data-when="now" aria-pressed="true">Maintenant</button>
+          <button type="button" data-when="tonight" aria-pressed="false">Ce soir 21 h</button>
+          <button type="button" data-when="tomorrow" aria-pressed="false">Demain 21 h</button>
+        </div>
+        <div class="search"><label class="sr-only" for="guide-search">Rechercher un programme</label><input id="guide-search" type="search" placeholder="Rechercher un programme (match, film…)" autocomplete="off"></div>
+        <label class="check-row"><input type="checkbox" id="guide-mine"> <span>Mes groupes et favoris seulement</span></label>
+      </div>
+      <p class="hint" id="guide-status"></p>
+      <ul id="guide-list" class="guide-list"></ul>
     </section>
   </main>
 </div>
@@ -375,6 +430,14 @@
           <label for="device-playlist">Playlist</label>
           <select id="device-playlist"></select>
         </div>
+        <div class="field">
+          <label for="device-priority">Priorité</label>
+          <select id="device-priority">
+            <option value="normal">Normale</option>
+            <option value="high">Haute : jamais coupée par une autre TV</option>
+            <option value="low">Basse : cède toujours sa place</option>
+          </select>
+        </div>
         <button type="submit" class="btn primary">+ Ajouter l'appareil</button>
       </form>
     </section>
@@ -401,7 +464,21 @@
         <button type="button" class="btn small" id="streams-refresh">↻ Actualiser</button>
       </div>
       <ul id="streams-list" class="stream-list"></ul>
-      <p class="hint">Quand la limite de l'abonnement est atteinte, le flux du même appareil est remplacé (zapping), sinon le plus ancien est coupé. L'appareil coupé ne peut pas reprendre ce même flux pendant 30 secondes.</p>
+      <p class="hint">Quand la limite de l'abonnement est atteinte, le flux du même appareil est remplacé (zapping), sinon le plus ancien est coupé, mais jamais celui d'un appareil plus prioritaire (vue Appareils). L'appareil coupé ne peut pas reprendre ce même flux pendant 30 secondes.</p>
+    </section>
+    <section class="card">
+      <div class="card-head">
+        <div>
+          <h2>Historique des lectures</h2>
+          <p class="muted small">30 derniers jours : chaînes les plus regardées (lectures de plus de 20 s) et chaînes qui ont dû basculer sur une version de secours.</p>
+        </div>
+        <button type="button" class="btn small ghost" id="history-clear">Effacer</button>
+      </div>
+      <div class="summary-grid">
+        <div><h3>Les plus regardées</h3><ol id="history-top" class="sum-list"></ol></div>
+        <div><h3>Bascules automatiques</h3><ol id="history-unstable" class="sum-list"></ol></div>
+      </div>
+      <details class="epg-missing"><summary>Dernières lectures</summary><ul id="history-list" class="sum-list"></ul></details>
     </section>
     <section class="card">
       <div class="card-head">
@@ -474,6 +551,35 @@
     <div class="btn-row end">
       <button type="submit" class="btn ghost" value="cancel">Annuler</button>
       <button type="submit" class="btn primary" value="ok" id="dialog-ok">Confirmer</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="preview" class="preview-dialog">
+  <div class="card-head">
+    <h2 id="preview-title">Aperçu</h2>
+    <button type="button" class="btn small" id="preview-close">Fermer</button>
+  </div>
+  <video id="preview-video" controls playsinline muted></video>
+  <p class="hint" id="preview-status">Utilise la connexion de ton abonnement : une lecture en cours sur une TV peut être coupée (selon les priorités).</p>
+</dialog>
+
+<dialog id="item-dialog">
+  <form method="dialog">
+    <h2 id="item-title">Personnaliser</h2>
+    <p class="hint">Laisse vide pour garder la valeur du fournisseur. Ne concerne que cette playlist.</p>
+    <div class="field"><label for="item-name">Nom affiché</label><input id="item-name" type="text" maxlength="100" autocomplete="off"></div>
+    <div class="field" id="item-number-field"><label for="item-number">Numéro de chaîne (1 à 99 999)</label><input id="item-number" type="number" min="1" max="99999" step="1"></div>
+    <div class="field"><label for="item-logo">Logo (adresse http(s) d'une image)</label><input id="item-logo" type="url" maxlength="490" placeholder="https://…/logo.png" autocomplete="off"></div>
+    <div class="field" id="item-epg-field">
+      <label for="item-epg">Guide des programmes : prendre celui de…</label>
+      <input id="item-epg" type="search" list="item-epg-list" placeholder="Nom d'une autre chaîne (vide = son propre guide)" autocomplete="off">
+      <datalist id="item-epg-list"></datalist>
+      <p class="hint">Utile si cette chaîne n'a pas de programmes mais qu'une autre version les a (ex. « FR: TF1 » pour « VIP: TF1 »).</p>
+    </div>
+    <div class="btn-row end">
+      <button type="submit" class="btn ghost" value="cancel">Annuler</button>
+      <button type="submit" class="btn primary" value="ok" id="item-ok">Appliquer</button>
     </div>
   </form>
 </dialog>

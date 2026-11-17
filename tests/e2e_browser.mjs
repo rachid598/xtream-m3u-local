@@ -42,6 +42,9 @@ try {
   page.on('pageerror', (e) => errors.push(String(e)));
   await page.goto(`${base}/`);
   await waitFor(async () => (await page.getAttribute('#connection', 'class')) === 'pill ok', 'connexion catalogue');
+  // Éditeur en 4 parties : Contenu (onglets 1-2-3), Organisation, Options, Guide.
+  const showSection = async (name) => { await page.click(`#sec-btn-${name}`); await waitFor(() => page.isVisible(`#sec-${name}`), `partie ${name}`); };
+  const showTab = async (tab) => { await showSection('content'); await page.click(`#tab-${tab}`); };
 
   // Adresse EPG « à la Xtream » de la playlist complète
   const fullEpg = await page.innerText('#full-epg-url');
@@ -77,10 +80,11 @@ try {
   await page.selectOption('#ch-state', 'all');
   if (shots) await page.screenshot({ path: join(shots, 'desktop-channels.png') });
 
-  await page.click('#tab-summary');
+  await showTab('summary');
   assert(await page.locator('#sum-excluded li').count() === 1, '1 exclusion');
   assert(await page.locator('#sum-included li').count() === 1, '1 ajout');
-  // Ordre et noms de groupes propres à la playlist
+  // Ordre et noms de groupes propres à la playlist (partie Organisation)
+  await showSection('organize');
   const rows = page.locator('#sum-groups .group-row');
   assert(await rows.count() >= 3, 'au moins 3 groupes');
   const secondPlaceholder = await rows.nth(1).locator('input').getAttribute('placeholder');
@@ -95,9 +99,9 @@ try {
   assert(await page.locator('#saved .playlist-item').count() === 1, 'liste des playlists');
   assert(await page.isDisabled('#slug'), 'slug figé');
   // Guide des programmes (EPG) de la playlist
-  assert(await page.isVisible('#epg-box'), 'bloc EPG visible');
-  await page.click('#epg-box > summary');
-  await waitFor(async () => /% des chaînes/.test(await page.innerText('#epg-pill-text')), 'couverture EPG', 20000);
+  await showSection('guide');
+  assert(await page.isVisible('#epg-content'), 'bloc EPG visible');
+  await waitFor(async () => /%/.test(await page.innerText('#epg-pill-text')) && !/en cours/.test(await page.innerText('#epg-pill-text')), 'couverture EPG', 20000);
   assert((await page.innerText('#epg-url')).endsWith('/p/salon.xml'), 'URL EPG');
   assert(/^\d+ \/ \d+$/.test(await page.innerText('#epg-covered')), 'compteur EPG');
   assert(num(await page.innerText('#epg-api')) > 0, 'chaînes complétées par l\'API');
@@ -107,7 +111,7 @@ try {
   if (shots) await page.screenshot({ path: join(shots, 'desktop-epg.png') });
   await page.click('#epg-refresh');
   await waitFor(async () => (await page.locator('.toast', { hasText: 'Actualisation du guide' }).count()) > 0, 'actualisation EPG');
-  await page.click('#epg-box > summary');
+  await showSection('content');
   const { text: m3u } = await fetchText(url);
   assert(m3u.startsWith('#EXTM3U'), 'en-tête M3U');
   assert(!m3u.includes(`,${excludedName}\n`), 'chaîne exclue présente');
@@ -118,14 +122,14 @@ try {
   const entries = (m3u.match(/#EXTINF/g) || []).length;
   assert(entries === num(await page.innerText('#stat-channels')), `nombre d'entrées ${entries}`);
   if (shots) {
-    await page.click('#tab-categories');
+    await showTab('categories');
     await page.fill('#cat-search', '');
     await page.waitForTimeout(300);
     await page.screenshot({ path: join(shots, 'desktop-saved.png') });
   }
 
   // Modification : même URL, contenu différent
-  await page.click('#tab-categories');
+  await showTab('categories');
   await page.fill('#cat-search', 'FR | Sport');
   await page.waitForTimeout(300);
   await catBox(page, 'FR | Sport').uncheck();
@@ -137,7 +141,7 @@ try {
   assert(!m3u2.includes('group-title="FR | Sport"') && (m3u2.match(/#EXTINF/g) || []).length < entries, 'contenu mis à jour');
 
   // Personnalisation : règle automatique, favori, renommage + numéro, numérotation, doublons
-  await page.click('#tab-categories');
+  await showTab('categories');
   await page.fill('#cat-search', '');
   await page.waitForTimeout(250);
   await page.click('#rules-box > summary');
@@ -148,7 +152,7 @@ try {
   await waitFor(async () => (await page.locator('#rules-list li', { hasText: 'commence par' }).count()) === 1, 'règle ajoutée');
   assert(await catBox(page, 'BE | Belgique').isChecked() && await catBox(page, 'BE | Belgique').isDisabled(), 'catégorie cochée par la règle');
   await page.fill('#cat-search', '');
-  await page.click('#tab-channels');
+  await showTab('channels');
   await page.fill('#search', '');
   await page.waitForTimeout(250);
   await page.selectOption('#ch-category', { label: (await page.locator('#ch-category option', { hasText: 'FR | Information' }).innerText()) });
@@ -159,19 +163,18 @@ try {
   await firstRow.locator('.item-btn', { hasText: '☆' }).click();
   await waitFor(async () => (await realRows().first().locator('.fav-on').count()) === 1, 'favori');
   await realRows().first().locator('.item-btn', { hasText: '✎' }).click();
-  await page.fill('#dialog-input', 'Ma chaîne info');
-  await page.fill('#dialog-input2', '7');
-  await page.click('#dialog-ok');
+  await page.fill('#item-name', 'Ma chaîne info');
+  await page.fill('#item-number', '7');
+  await page.click('#item-ok');
   await waitFor(async () => (await realRows().first().locator('.ch-name').innerText()) === 'Ma chaîne info', 'renommage');
   await page.selectOption('#ch-state', 'all');
   await page.selectOption('#ch-category', '');
-  await page.click('#options-box > summary');
+  await showSection('options');
   const beforeSep = num(await page.innerText('#stat-channels'));
   await page.check('#opt-separators');
   await waitFor(async () => num(await page.innerText('#stat-channels')) < beforeSep, 'séparateurs masqués');
   await page.check('#opt-dedupe');
-  await page.click('#options-box > summary');
-  await page.click('#tab-summary');
+  await showSection('organize');
   assert(await page.locator('#sum-favorites li', { hasText: 'Ma chaîne info' }).count() === 1, 'favori dans le résumé');
   await page.click('#save');
   await waitFor(async () => !(await page.isVisible('#dirty')), 'enregistrement des personnalisations');
@@ -191,9 +194,9 @@ try {
   if (shots) await page.screenshot({ path: join(shots, 'desktop-summary.png') });
 
   // Mes groupes : modèle TNT, nouveau groupe en premier, rangement manuel 📁
-  await page.click('#tab-categories');
+  await showTab('categories');
   await catBox(page, 'FR | Généralistes').check();
-  await page.click('#tab-summary');
+  await showSection('organize');
   await page.locator('#cg-presets button', { hasText: '+ TNT' }).click();
   await waitFor(async () => num(await page.locator('#cg-list .cg-card').first().locator('.num').innerText()) >= 6, 'modèle TNT rempli');
   await page.click('#cg-add');
@@ -201,7 +204,7 @@ try {
   await page.click('#dialog-ok');
   await waitFor(async () => (await page.locator('#cg-list .cg-card').first().locator('input').inputValue()) === 'Mes infos', 'nouveau groupe en premier');
   assert((await page.locator('#sum-groups .group-row').first().locator('input').inputValue()) === 'TNT', 'TNT en tête des groupes');
-  await page.click('#tab-channels');
+  await showTab('channels');
   await page.fill('#search', 'franceinfo');
   const fi = page.locator('#channels .channel').filter({ hasText: 'FR: franceinfo' }).first();
   await waitFor(async () => (await fi.count()) === 1 && (await fi.locator('.badge.grp').innerText()) === '📁 TNT', 'franceinfo rangée dans TNT');
@@ -211,7 +214,7 @@ try {
   await waitFor(async () => (await fi.locator('.badge.grp').innerText()) === '📁 Mes infos', 'rangement manuel');
   await page.fill('#search', '');
   await page.waitForTimeout(300);
-  await page.click('#tab-summary');
+  await showSection('organize');
   if (shots) await page.screenshot({ path: join(shots, 'desktop-groups.png') });
   await page.click('#save');
   await waitFor(async () => !(await page.isVisible('#dirty')), 'enregistrement des groupes');
@@ -223,13 +226,12 @@ try {
     && tnt.indexOf('FR: TF1 HD') < tnt.indexOf('FR: France 2 HD'), `groupe TNT : ${tnt.join(' | ')}`);
   assert(infos.filter((l) => l.endsWith(',FR: franceinfo')).length === 1, 'chaîne rangée une seule fois');
   // Bascule automatique : TF1 4K (gardée) + TF1 HD (secours)
-  await page.click('#tab-categories');
+  await showTab('categories');
   await catBox(page, '4K | UHD').check();
-  await page.click('#options-box > summary');
+  await showSection('options');
   await page.check('#opt-failover');
   await waitFor(async () => /Bascule auto/.test(await page.innerText('#options-pill-text')), 'option bascule automatique');
-  await page.click('#options-box > summary');
-  await page.click('#tab-summary');
+  await showSection('organize');
   await page.locator('#cg-presets button', { hasText: '+ Bouquet Canal+' }).click();
   await waitFor(async () => (await page.locator('#cg-list .cg-card').first().locator('input').inputValue()) === 'Bouquet Canal+', 'bouquet Canal+ en premier');
   await page.click('#save');
@@ -240,7 +242,7 @@ try {
   const m3uLines = (await fetchText(url)).text.split('\n');
   const tf1Url = m3uLines[m3uLines.findIndex((l) => l.endsWith(',FR: TF1 4K')) + 1];
   assert(/\/stream\/800012\.ts\?alt=800001(&|$)/.test(tf1Url), `URL avec version de secours : ${tf1Url}`);
-  await page.click('#tab-categories');
+  await showTab('categories');
 
   // Films et séries dans la même playlist (même URL)
   const kindBtn = (kind) => page.locator(`#view-playlists [data-kind="${kind}"]`);
@@ -257,12 +259,12 @@ try {
   await catBox(page, 'Séries | Drame').waitFor({ timeout: 10000 });
   await catBox(page, 'Séries | Drame').check();
   assert(num(await page.innerText('#stat-vod')) > 0 && num(await page.innerText('#stat-series')) > 0, 'compteurs films/séries');
-  await page.click('#tab-channels');
+  await showTab('channels');
   assert((await page.innerText('#tab-items-label')) === 'Séries', 'onglet Séries');
   await page.locator('#channels .link-btn').first().click();
   await waitFor(async () => /épisode/.test(await page.locator('#channels .ok-text').first().innerText()), 'épisodes affichés');
   if (shots) await page.screenshot({ path: join(shots, 'desktop-series.png') });
-  await page.click('#tab-summary');
+  await showSection('organize');
   assert(await page.locator('#sum-groups .kind-tag.vod').count() >= 1, 'groupe films dans le résumé');
   assert(await page.locator('#sum-groups .kind-tag.series').count() >= 1, 'groupe séries dans le résumé');
   await page.click('#save');
@@ -274,8 +276,51 @@ try {
   assert(/ S01 E01 - Épisode 1\n/.test(m3u3), 'nommage des épisodes');
   const { text: onlyMovies } = await fetchText(`${url}?content=vod`);
   assert(!onlyMovies.includes('/stream/') && onlyMovies.includes('/movie/'), 'filtre content=vod');
-  await page.click('#tab-categories');
+  await showTab('categories');
   await kindBtn('live').click();
+
+  // Personnalisation avancée (✎) : logo de remplacement et guide emprunté
+  await showTab('channels');
+  await page.fill('#search', 'FR: France 2');
+  const f2 = page.locator('#channels .channel').filter({ hasText: 'FR: France 2 HD' }).first();
+  await waitFor(async () => (await f2.count()) === 1, 'France 2 trouvée');
+  await f2.locator('.item-btn', { hasText: '✎' }).click();
+  await page.fill('#item-logo', 'https://logos.invalid/france2.png');
+  await page.fill('#item-epg', 'FR: TF1 HD (n° 800001)');
+  await page.click('#item-ok');
+  await page.fill('#search', '');
+  await page.click('#save');
+  await waitFor(async () => !(await page.isVisible('#dirty')), 'enregistrement logo + guide');
+  const f2Line = (await fetchText(url)).text.split('\n').find((l) => l.endsWith(',FR: France 2 HD'));
+  assert(f2Line && f2Line.includes('tvg-logo="https://logos.invalid/france2.png"'), `logo remplacé : ${f2Line}`);
+  await showTab('categories');
+
+  // Vue « Guide TV » : en ce moment, ce soir, recherche, aperçu
+  await page.click('#view-btn-guide');
+  await waitFor(async () => (await page.locator('#guide-list .guide-row').count()) > 3, 'guide : chaînes affichées', 20000);
+  assert((await page.inputValue('#guide-playlist')) === 'salon', 'playlist du guide');
+  const firstGuide = page.locator('#guide-list .guide-row').first();
+  assert(await firstGuide.evaluate((n) => n.classList.contains('mine')), 'favoris / groupes en tête du guide');
+  const withProg = page.locator('#guide-list .guide-row').filter({ has: page.locator('.g-time') }).first();
+  await waitFor(async () => (await withProg.count()) === 1, 'un programme en cours', 20000);
+  const progTitle = await withProg.locator('.g-prog strong').innerText();
+  if (shots) await page.screenshot({ path: join(shots, 'desktop-guide.png') });
+  await page.locator('[data-when="tonight"]').click();
+  await waitFor(async () => /à 21:00/.test(await page.innerText('#guide-status')), 'guide de ce soir');
+  await page.fill('#guide-search', progTitle.split(' ')[0]);
+  await waitFor(async () => /trouvé/.test(await page.innerText('#guide-status')), 'recherche dans le guide');
+  await page.check('#guide-mine');
+  await page.fill('#guide-search', '');
+  await page.locator('[data-when="now"]').click();
+  await waitFor(async () => (await page.locator('#guide-list .guide-row').count()) >= 1, 'filtre mes chaînes');
+  assert(await page.locator('#guide-list .guide-row:not(.mine)').count() === 0, 'seulement mes chaînes');
+  await page.locator('#guide-list .guide-row .item-btn').first().click();
+  await waitFor(() => page.isVisible('#preview'), 'aperçu ouvert');
+  await waitFor(async () => (await page.innerText('#preview-status')).length > 10, 'état de l\'aperçu');
+  if (shots) await page.screenshot({ path: join(shots, 'desktop-preview.png') });
+  await page.click('#preview-close');
+  await waitFor(async () => !(await page.isVisible('#preview')), 'aperçu fermé');
+  await page.click('#view-btn-playlists');
 
   // Vue « Catalogue fournisseur » (lecture seule) + export JSON
   await page.click('#view-btn-catalog');
@@ -372,8 +417,20 @@ try {
       const overflow = await p2.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
       assert(overflow <= 0, `${name}/${tab} : débordement horizontal de ${overflow}px`);
     }
+    for (const sec of ['organize', 'options', 'guide']) {
+      await p2.click(`#sec-btn-${sec}`);
+      const overflow = await p2.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+      assert(overflow <= 0, `${name}/${sec} : débordement horizontal de ${overflow}px`);
+    }
+    await p2.click('#sec-btn-content');
     await p2.click('#tab-categories');
     if (shots) await p2.screenshot({ path: join(shots, `${name}.png`) });
+    await p2.click('#view-btn-guide');
+    await p2.waitForSelector('#guide-list .guide-row', { timeout: 20000 });
+    const overflowGuide = await p2.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+    assert(overflowGuide <= 0, `${name}/guide : débordement horizontal de ${overflowGuide}px`);
+    if (shots) await p2.screenshot({ path: join(shots, `${name}-guide.png`) });
+    await p2.click('#view-btn-playlists');
     await p2.click('#view-btn-catalog');
     await p2.waitForSelector('#provider-tree details.tree-node');
     await p2.locator('#provider-tree > details.tree-node summary').first().click();

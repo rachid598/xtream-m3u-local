@@ -174,6 +174,7 @@ class Config:
     stream_takeover: bool = True
     failover_stall_seconds: float = 6.0   # bascule automatique : flux muet pendant N s → version suivante
     failover_slow_ratio: float = 0.35     # … ou débit < 35 % du meilleur débit observé (2 fenêtres de suite) ; 0 = jamais
+    failover_return_minutes: int = 10     # sur une version de secours : retenter la meilleure après N min (0 = jamais)
     provider_timezone: str = ""      # vide = fuseau annoncé par le fournisseur (server_info.timezone)
     provider_name: str = ""          # XTREAM_NAME : nom affiché du fournisseur principal
     extra_providers: tuple = ()      # ((nom, url, utilisateur, mot de passe), …) : XTREAM_URL_2 … _9
@@ -229,6 +230,7 @@ class Config:
             stream_takeover=_env_bool("STREAM_TAKEOVER", True),
             failover_stall_seconds=float(min(60, max(2, _env_int("FAILOVER_STALL_SECONDS", 6)))),
             failover_slow_ratio=min(90, max(0, _env_int("FAILOVER_SLOW_PERCENT", 35))) / 100,
+            failover_return_minutes=min(240, max(0, _env_int("FAILOVER_RETURN_MINUTES", 10))),
             provider_timezone=_timezone_env(),
             provider_name=os.environ.get("XTREAM_NAME", "").strip()[:40],
             extra_providers=_extra_providers(),
@@ -764,6 +766,21 @@ class Handler(BaseHTTPRequestHandler):
     emulator: XtreamEmulator
     request_token: str = ""
 
+    def end_headers(self) -> None:
+        # Aperçu dans l'interface Web (port WEB_PORT) : le navigateur lit le relais HLS de ce port.
+        origin = self.headers.get("Origin", "") if getattr(self, "headers", None) else ""
+        if origin and getattr(self, "path", "").startswith("/hls/"):
+            try:
+                parsed = urlsplit(origin)
+                host = (self.headers.get("Host") or "").rsplit(":", 1)[0].strip("[]").lower()
+                # Interface Web : son port (WEB_PORT), ou la même machine sur un port redirigé par Docker.
+                if parsed.port == self.config.web_port or (host and (parsed.hostname or "").lower() == host):
+                    self.send_header("Access-Control-Allow-Origin", origin)
+                    self.send_header("Vary", "Origin")
+            except ValueError:
+                pass
+        super().end_headers()
+
     def log_message(self, format: str, *args: object) -> None:
         # Ne jamais journaliser la query string (ACCESS_TOKEN).
         LOG.info("%s %s %s", self.client_address[0], self.command, urlsplit(self.path).path)
@@ -875,18 +892,37 @@ class Handler(BaseHTTPRequestHandler):
             raise ValueError("En-tête Host invalide : définir PUBLIC_BASE_URL")
         return "http://" + host
 
+    def current_device(self) -> dict | None:
+        """Appareil qui fait la requête : par son code (``?token=`` ou identifiants Xtream), sinon par son adresse."""
+        if self.devices is None:
+            return None
+        ip = self.client_address[0]
+        device = self.devices.find_by_token(getattr(self, "request_token", "") or "")
+        if device is not None:
+            self.devices.seen_from(device, ip)
+            return device
+        return self.devices.by_ip(ip)
+
     def open_session(self, kind: str, item_id: str, label: str, *, virtual: bool = False, provider: str | None = None):
         """Réserve une connexion fournisseur. Retourne la session, ou ``None`` après avoir répondu (409/503)."""
         provider = provider or self.api.provider_of(item_id)
+        device = self.current_device() or {}
         try:
             return self.streams.acquire(kind=kind, item_id=item_id, client=self.client_address[0],
-                                        label=label, virtual=virtual, provider=provider)
+                                        label=label, virtual=virtual, provider=provider,
+                                        device=device.get("name", ""), priority=device.get("priority", "normal"))
         except EvictedRecently:
             self._error(409, "Lecture arrêtée : la connexion au fournisseur a été donnée à un autre appareil "
                              "(réessaie dans 30 secondes ou choisis une autre chaîne)", head_only=False)
         except LimitReached as exc:
-            self._error(503, f"Limite de {exc.args[0]} connexion(s) simultanée(s) atteinte : arrête une autre "
-                             "lecture (interface Web, onglet Système)", head_only=False)
+            holder = exc.holder
+            if holder is not None:
+                who = f"« {holder.device} »" if holder.device else "un appareil prioritaire"
+                self._error(503, f"Connexion occupée : {who} regarde « {holder.channel or holder.label} » et passe en "
+                                 "priorité (interface Web, onglet Appareils)", head_only=False)
+            else:
+                self._error(503, f"Limite de {exc.args[0]} connexion(s) simultanée(s) atteinte : arrête une autre "
+                                 "lecture (interface Web, onglet Système)", head_only=False)
         return None
 
     def item_label(self, kind: str, item_id: str) -> str:
@@ -983,14 +1019,26 @@ class Handler(BaseHTTPRequestHandler):
             return
         state = {"headers_sent": False}
         index, switches, max_switches = 0, 0, 2 * len(ids)
+        session.channel = names[ids[0]]
+        wait_best = self.config.failover_return_minutes * 60  # retour à la meilleure version (0 = jamais)
         try:
             while not session.cancelled.is_set():
                 sid = ids[index]
                 session.label = names[ids[0]] + (f" → secours {index}/{len(ids) - 1} ({names[sid]})" if index else "")
-                outcome = self._pump_live(sid, session, state)
+                started = time.monotonic()
+                outcome = self._pump_live(sid, session, state, return_after=wait_best if index else 0)
                 if outcome in ("client", "cancelled"):
                     break
+                if outcome == "best":
+                    # La version de secours a tenu : on retente la meilleure (courte coupure).
+                    LOG.info("Retour à la meilleure version de %s après %d min", ids[0], int((time.monotonic() - started) / 60))
+                    index, switches = 0, 0
+                    session.switches += 1
+                    continue
+                if index == 0 and switches == 0 and time.monotonic() - started < 60 and wait_best:
+                    wait_best = min(wait_best * 2, 4 * 3600)  # meilleure version encore instable : patienter plus
                 switches += 1
+                session.switches += 1
                 if switches > max_switches:
                     LOG.warning("Bascule automatique : aucune version de la chaîne %s ne fonctionne", ids[0])
                     break
@@ -1008,8 +1056,8 @@ class Handler(BaseHTTPRequestHandler):
                 except (OSError, ValueError):
                     pass
 
-    def _pump_live(self, sid: str, session, state: dict) -> str:
-        """Relaie une version. Retourne client | cancelled | failed | stalled | slow | ended."""
+    def _pump_live(self, sid: str, session, state: dict, *, return_after: float = 0) -> str:
+        """Relaie une version. Retourne client | cancelled | failed | stalled | slow | ended | best."""
         stall = self.config.failover_stall_seconds
         request = Request(self.api.direct_stream(sid), headers={"User-Agent": self.config.user_agent, "Accept": "*/*"})
         try:
@@ -1051,6 +1099,8 @@ class Handler(BaseHTTPRequestHandler):
                 session.touch(len(chunk))
                 window += len(chunk)
                 now = time.monotonic()
+                if return_after and now - started >= return_after:
+                    return "best"
                 if now - window_start >= 10:
                     rate = window / (now - window_start)
                     if now - started > 15:  # après le démarrage (rafale initiale)
@@ -1470,7 +1520,8 @@ def make_api(config: Config):
 def make_streams(config: Config, api: XtreamAPI) -> StreamManager:
     def limit_for(provider: str) -> int:
         return config.max_connections if config.max_connections >= 0 else api.max_connections_hint(provider)
-    return StreamManager(limit_for, takeover=config.stream_takeover)
+    return StreamManager(limit_for, takeover=config.stream_takeover,
+                         history_path=str(Path(config.data_dir) / "history.json"))
 
 
 def make_series(config: Config, api: XtreamAPI) -> SeriesCache:

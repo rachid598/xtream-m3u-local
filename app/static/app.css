@@ -534,3 +534,54 @@ dialog .field { margin-bottom: 16px; }
 #options-box > summary { flex-wrap: wrap; }
 #options-pill { max-width: 100%; min-width: 0; }
 #options-pill-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+
+/* ------------------------------------------------- parties de l'éditeur */
+.section-nav { display: flex; gap: 6px; padding: 6px; background: var(--bg-elev); border: 1px solid var(--border); border-radius: var(--radius); overflow-x: auto; scrollbar-width: none; position: sticky; top: 8px; z-index: 5; box-shadow: var(--shadow); }
+.section-nav [role=tab] { flex: 1 0 auto; border: 0; border-radius: var(--radius-sm); padding: 10px 14px; font-weight: 700; justify-content: center; }
+.section-nav [role=tab][aria-selected=true] { background: var(--accent); color: #fff; border-bottom-color: transparent; }
+.sec-panel { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.sec-panel[hidden] { display: none; }
+.options-card .card-head h2 { margin: 0; }
+.options-card .epg-body { padding: 0; }
+.stack { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.stack > div + div { margin-top: 14px; }
+
+/* ------------------------------------------------------------- Guide TV */
+.guide-toolbar { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: flex-end; margin-bottom: 8px; }
+.guide-toolbar .field { margin: 0; min-width: 180px; }
+.guide-toolbar .search { flex: 1 1 220px; }
+.guide-toolbar .check-row { margin: 0; }
+.guide-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.guide-row { display: grid; grid-template-columns: auto minmax(120px, 220px) minmax(0, 1fr) auto; gap: 12px; align-items: center; padding: 8px 10px; border-radius: 10px; background: var(--bg-soft); border: 1px solid var(--border); }
+.guide-row.mine { border-left: 3px solid var(--accent); }
+.g-chan, .g-prog { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.g-chan strong, .g-prog strong { overflow-wrap: anywhere; }
+.g-time { font-size: 12px; color: var(--accent-strong); font-weight: 700; font-variant-numeric: tabular-nums; }
+.g-next, .g-desc { font-size: 12px; color: var(--text-faint); overflow-wrap: anywhere; }
+.g-desc { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.g-bar { height: 4px; border-radius: 99px; background: var(--border); overflow: hidden; margin: 3px 0; max-width: 360px; }
+.g-fill { display: block; height: 100%; width: 0; background: var(--accent); }
+
+/* --------------------------------------------------------------- aperçu */
+dialog.preview-dialog { width: min(920px, calc(100vw - 24px)); padding: 14px; }
+.preview-dialog .card-head { margin-bottom: 10px; }
+.preview-dialog h2 { margin: 0; font-size: 16px; overflow-wrap: anywhere; }
+#preview-video { width: 100%; aspect-ratio: 16 / 9; background: #000; border-radius: var(--radius-sm); }
+.preview-dialog p { margin: 8px 0 0; }
+#item-dialog { width: min(520px, calc(100vw - 24px)); }
+#item-dialog .field { margin-bottom: 12px; }
+#item-dialog input[type=url], #item-dialog input[type=number] { width: 100%; font: inherit; font-size: 14px; color: var(--text); background: var(--bg); border: 1px solid var(--border-strong); border-radius: var(--radius-sm); padding: 10px 12px; min-height: 40px; }
+
+/* ------------------------------------------------------------ appareils */
+.device-settings { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.device-settings .field { margin: 0; }
+.device-settings select, .device-settings input { width: 100%; }
+
+@media (max-width: 760px) {
+  .guide-row { grid-template-columns: auto minmax(0, 1fr) auto; }
+  .guide-row .g-prog { grid-column: 1 / -1; }
+  .guide-row > .item-btn { grid-column: 3; grid-row: 1; }
+  .device-settings { grid-template-columns: 1fr; }
+  .section-nav { top: 0; border-radius: 0 0 var(--radius) var(--radius); }
+  .section-nav [role=tab] { padding: 9px 10px; font-size: 13px; }
+}
