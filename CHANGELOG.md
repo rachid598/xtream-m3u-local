@@ -2,6 +2,14 @@
 
 Format inspiré de « Keep a Changelog ». Les versions suivent le versionnage sémantique.
 
+## [3.8.2] — 2026-11-18
+
+Essai réel chez un proche : « Code 502 » dans TiviMate, journaux du serveur : HTTP 429 du fournisseur (abonnement à une connexion déjà utilisé).
+
+### Corrigé
+- **Message « Abonnement occupé »** : quand le fournisseur refuse une connexion de plus (HTTP 429, 458, 509), le lecteur reçoit un HTTP 503 explicite avec `Retry-After`, au lieu d'un 502 qui faisait croire à une panne.
+- **Plus de réessais en rafale** : après un tel refus, le serveur répond directement pendant 30 s (ou le `Retry-After` du fournisseur, borné à 10–120 s) sans redemander ce fournisseur, pour toutes ses chaînes ; la bascule automatique n'essaie pas les autres versions (même abonnement).
+
 ## [3.8.1] — 2026-11-18
 
 Retour d'essai réel (TiviMate) : image figée à chaque bascule automatique, obligation de zapper ; 11 bascules en 12 min dont 8 « débit trop faible ».

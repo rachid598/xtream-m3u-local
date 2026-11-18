@@ -323,3 +323,33 @@ class SlowDetectionTests(unittest.TestCase):
         from app import server
         self.assertGreaterEqual(server.SLOW_WARMUP, 20)
         self.assertGreaterEqual(server.SLOW_WINDOWS, 3)
+
+
+class ProviderBusyTests(StackTestCase):
+    """Le fournisseur refuse une connexion de plus (429/458/509) : message clair, pas de réessais en rafale."""
+
+    def test_busy_message_and_pause(self):
+        status, body, headers = self.get(self.stack.proxy_base + "/stream/70.ts")
+        self.assertEqual(status, 503)
+        self.assertIn("Abonnement occupé", body.decode())
+        self.assertEqual(headers.get("Retry-After"), "12")  # Retry-After du fournisseur (10 à 120 s)
+        self.assertEqual(FakeXtream.busy_requests, 1)
+        # Réessais rapides du lecteur (et autres chaînes du même abonnement) : réponse immédiate, fournisseur épargné.
+        for path in ("/stream/70.ts", "/stream/42.ts", "/hls/42.m3u8"):
+            status, body, headers = self.get(self.stack.proxy_base + path)
+            self.assertEqual(status, 503, path)
+            self.assertIn("Réessaie dans", body.decode())
+            self.assertTrue(1 <= int(headers["Retry-After"]) <= 12)
+        self.assertEqual(FakeXtream.busy_requests, 1)
+        self.assertEqual(self.stack.streams.count(), 0)
+
+    def test_failover_does_not_try_other_versions_when_busy(self):
+        status, body, _ = self.get(self.stack.proxy_base + "/stream/70.ts?alt=61,50")
+        self.assertEqual(status, 503)
+        self.assertIn("Abonnement occupé", body.decode())
+        self.assertEqual(FakeXtream.busy_requests, 1)
+
+    def test_hls_busy(self):
+        status, body, _ = self.get(self.stack.proxy_base + "/hls/70.m3u8")
+        self.assertEqual(status, 503)
+        self.assertIn("Abonnement occupé", body.decode())

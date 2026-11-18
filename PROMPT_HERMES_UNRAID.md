@@ -19,7 +19,7 @@ XTREAM_PASSWORD=<<XTREAM_PASSWORD>>
 
 ## Paramètres fixes
 REPO=https://github.com/rachid598/xtream-m3u-local
-BRANCH=main            # (ou le tag de version publié, ex. v3.8.1)
+BRANCH=main            # (ou le tag de version publié, ex. v3.8.2)
 PORTS : 7777 (playlists/lecteurs) et 7778 (interface Web) — ne pas les changer
 CONTENEUR : xtream-m3u-local
 

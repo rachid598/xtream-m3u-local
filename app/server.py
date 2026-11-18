@@ -108,6 +108,10 @@ def _extra_providers() -> tuple:
     return tuple(extras)
 
 
+# Le fournisseur refuse une connexion de plus (abonnement déjà utilisé ailleurs) : 429, 458, 509.
+BUSY_CODES = (429, 458, 509)
+BUSY_PAUSE = 30     # secondes sans redemander le fournisseur après un refus (réessais rapides des lecteurs)
+
 SLOW_WARMUP = 25    # secondes ignorées au démarrage d'une version (rafale de remplissage du tampon)
 SLOW_WINDOWS = 3    # fenêtres de 10 s lentes d'affilée avant de basculer
 
@@ -918,6 +922,7 @@ class Handler(BaseHTTPRequestHandler):
     hls: HlsRegistry
     devices: "DeviceStore | None" = None
     emulator: XtreamEmulator
+    provider_busy: dict    # {fournisseur: fin de la pause après un refus « abonnement occupé »}
     failover_memory: dict  # bascule par reconnexion : {chaîne: version à servir, échéance, attente}
     request_token: str = ""
 
@@ -1058,9 +1063,42 @@ class Handler(BaseHTTPRequestHandler):
             return device
         return self.devices.by_ip(ip)
 
+    def busy_wait(self, provider: str) -> int:
+        """Secondes restantes de pause après un refus « abonnement occupé » de ce fournisseur."""
+        return max(0, int(self.provider_busy.get(provider, 0) - time.monotonic() + 0.999))
+
+    def mark_busy(self, item_id: str, exc: HTTPError) -> int:
+        """Le fournisseur refuse une connexion de plus : pause, pour ne pas prolonger son blocage."""
+        try:
+            pause = int((exc.headers or {}).get("Retry-After") or BUSY_PAUSE)
+        except (TypeError, ValueError, AttributeError):
+            pause = BUSY_PAUSE
+        pause = min(120, max(10, pause))
+        provider = self.api.provider_of(item_id)
+        self.provider_busy[provider] = max(self.provider_busy.get(provider, 0), time.monotonic() + pause)
+        LOG.warning("Abonnement occupé : le fournisseur refuse une connexion de plus (HTTP %s), pause de %d s",
+                    exc.code, pause)
+        return pause
+
+    def send_busy(self, wait: int, code: int | None = None, *, head_only: bool = False) -> None:
+        detail = f" (HTTP {code})" if code else ""
+        message = (f"Abonnement occupé : le fournisseur refuse une connexion de plus{detail}. Une autre lecture "
+                   f"utilise sans doute la connexion de l'abonnement (autre TV, autre application). "
+                   f"Réessaie dans {wait} s.")
+        try:
+            self.response(503, (message + "\n").encode(), "text/plain; charset=utf-8", head_only=head_only,
+                          extra={"Retry-After": str(max(1, wait))})
+        except (OSError, ValueError):
+            pass
+
     def open_session(self, kind: str, item_id: str, label: str, *, virtual: bool = False, provider: str | None = None):
         """Réserve une connexion fournisseur. Retourne la session, ou ``None`` après avoir répondu (409/503)."""
         provider = provider or self.api.provider_of(item_id)
+        wait = self.busy_wait(provider)
+        if wait:
+            # Refus récent du fournisseur : répondre tout de suite, sans le redemander (ça prolongerait le blocage).
+            self.send_busy(wait)
+            return None
         device = self.current_device() or {}
         try:
             return self.streams.acquire(kind=kind, item_id=item_id, client=self.client_address[0],
@@ -1141,7 +1179,13 @@ class Handler(BaseHTTPRequestHandler):
                         touch.touch(len(chunk))
         except HTTPError as exc:
             LOG.warning("Upstream stream error status=%s", exc.code)
-            if not headers_sent:
+            if exc.code in BUSY_CODES and track:
+                pause = self.mark_busy(track[1], exc)
+                if not headers_sent:
+                    self.send_busy(pause, exc.code, head_only=head_only)
+                else:
+                    self.close_connection = True
+            elif not headers_sent:
                 hint = " (limite de connexions simultanées atteinte ?)" if exc.code in (403, 429, 458, 503, 509) else ""
                 self._error(502, f"Le fournisseur a renvoyé HTTP {exc.code}{hint}", head_only=head_only)
             else:
@@ -1200,7 +1244,7 @@ class Handler(BaseHTTPRequestHandler):
                 session.label = names[ids[0]] + (f" → secours {index}/{len(ids) - 1} ({names[sid]})" if index else "")
                 started = time.monotonic()
                 outcome = self._pump_live(sid, session, state, return_after=wait_best if index else 0)
-                if outcome in ("client", "cancelled"):
+                if outcome in ("client", "cancelled", "busy"):
                     break
                 if outcome == "best":
                     # La version de secours a tenu : on retente la meilleure (courte coupure).
@@ -1237,6 +1281,8 @@ class Handler(BaseHTTPRequestHandler):
             self.streams.release(session)
             if state["headers_sent"]:
                 self.close_connection = True
+            elif state.get("busy"):
+                self.send_busy(*state["busy"])
             else:
                 try:
                     self._error(502, "Flux fournisseur inaccessible (toutes les versions ont été essayées)", head_only=False)
@@ -1251,6 +1297,10 @@ class Handler(BaseHTTPRequestHandler):
             upstream = urlopen(request, timeout=stall + 4)  # délai de démarrage un peu plus large
         except (HTTPError, URLError, TimeoutError, OSError, HTTPException, ValueError) as exc:
             LOG.warning("Version %s indisponible (%s)", sid, getattr(exc, "code", type(exc).__name__))
+            if isinstance(exc, HTTPError) and exc.code in BUSY_CODES:
+                # Même abonnement pour toutes les versions : inutile d'essayer les suivantes.
+                state["busy"] = (self.mark_busy(sid, exc), exc.code)
+                return "busy"
             return "failed"
         with upstream:
             session.attach(upstream.close)
@@ -1470,6 +1520,8 @@ class Handler(BaseHTTPRequestHandler):
                 final_url = upstream.geturl()
         except HTTPError as exc:
             LOG.warning("Upstream HLS error status=%s", exc.code)
+            if exc.code in BUSY_CODES and session is not None:
+                return self.send_busy(self.mark_busy(session.item_id, exc), exc.code, head_only=head_only)
             hint = " (limite de connexions simultanées atteinte ?)" if exc.code in (403, 429, 458, 503, 509) else ""
             return self._error(502, f"Le fournisseur a renvoyé HTTP {exc.code}{hint}", head_only=head_only)
         except (URLError, TimeoutError, OSError, HTTPException, ValueError):
@@ -1740,7 +1792,7 @@ def make_server(config: Config, *, host: str = "0.0.0.0", port: int | None = Non
     handler = type("ConfiguredHandler", (Handler,),
                    {"api": api, "config": config, "store": store, "epg": epg, "series": series,
                     "streams": streams, "hls": hls or HlsRegistry(), "devices": devices, "emulator": emulator,
-                    "failover_memory": {}})
+                    "failover_memory": {}, "provider_busy": {}})
     server = ThreadingHTTPServer((host, config.port if port is None else port), handler)
     server.daemon_threads = True
     return server

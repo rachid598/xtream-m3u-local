@@ -95,9 +95,9 @@ class PlaylistServerTests(StackTestCase):
 
     def test_upstream_connection_limit_reported(self):
         status, body, _ = self.get(self.stack.proxy_base + "/stream/44.ts")
-        self.assertEqual(status, 502)
+        self.assertEqual(status, 503)  # « abonnement occupé » (3.8.2), plus un 502 de panne
         self.assertIn("509".encode(), body)
-        self.assertIn("connexions".encode(), body)
+        self.assertIn("Abonnement occupé".encode(), body)
 
     def test_unknown_stream_and_paths(self):
         self.assertEqual(self.get(self.stack.proxy_base + "/stream/999.ts")[0], 502)

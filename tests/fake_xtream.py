@@ -123,6 +123,7 @@ class FakeXtream(BaseHTTPRequestHandler):
     timeshift_requests: list[str] = []
     epg_mode = "plain"  # plain | gzip | html | error
     epg_requests = 0
+    busy_requests = 0
 
     def log_message(self, *args):
         pass
@@ -237,6 +238,10 @@ class FakeXtream(BaseHTTPRequestHandler):
                 return self.send_body(404, b"nope", "text/plain")
             ctype = "application/vnd.apple.mpegurl" if url.path.endswith(".m3u8") else "video/mp2t"
             return self.send_body(200, files[url.path], ctype)
+        if url.path in (f"/live/{USERNAME}/{PASSWORD}/70.ts", f"/live/{USERNAME}/{PASSWORD}/70.m3u8"):
+            # Abonnement déjà utilisé ailleurs : le fournisseur refuse une connexion de plus.
+            type(self).busy_requests += 1
+            return self.send_body(429, b"Too Many Requests", "text/plain", {"Retry-After": "12"})
         if url.path == f"/live/{USERNAME}/{PASSWORD}/60.ts":
             # Bascule automatique : démarre puis se tait (saccade / coupure côté fournisseur).
             try:
@@ -331,3 +336,4 @@ def reset_fake() -> None:
     FakeXtream.timeshift_requests = []
     FakeXtream.epg_mode = "plain"
     FakeXtream.epg_requests = 0
+    FakeXtream.busy_requests = 0
