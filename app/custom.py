@@ -256,6 +256,7 @@ def validate_playlist(payload: object, *, slug: str | None = None) -> dict:
     result["dedupe"] = bool(payload.get("dedupe", False))
     result["hide_separators"] = bool(payload.get("hide_separators", False))
     result["failover"] = bool(payload.get("failover", False))
+    result["hq_logos"] = bool(payload.get("hq_logos", True))
     result["failover_any_category"] = bool(payload.get("failover_any_category", False))
     result["rules"] = _rules(payload.get("rules"))
     result["item_names"] = _item_names(payload.get("item_names"))

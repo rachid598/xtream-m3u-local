@@ -172,6 +172,34 @@ def run(api, epg, series, streams, store, config) -> list[dict]:
                                f"{len(failover_playlists) - MAX_FAILOVER_CHECKS} playlist(s) supplémentaire(s) "
                                "avec bascule automatique non testée(s) (limite de diagnostic)."))
 
+    # 2c. Logos haute qualité -------------------------------------------------------------
+    from . import logos as logo_lib
+    library = logo_lib.current()
+    hq_playlists = [p for p in playlists if p.get("hq_logos", True)]
+    if library is None:
+        results.append(_result("logos", "Logos haute qualité", "skipped", "Désactivés (LOGO_COUNTRIES vide)."))
+    else:
+        info = library.status()
+        countries = ", ".join(info["countries"])
+        if not info["channels"]:
+            detail = ("Index en cours de téléchargement (base iptv-org)…" if info["loading"] else
+                      f"Index indisponible : {info['error'] or 'pas encore téléchargé'}. Les logos du fournisseur restent utilisés.")
+            results.append(_result("logos", "Logos haute qualité", "warn", detail))
+        else:
+            covered = total = 0
+            for saved in hq_playlists[:MAX_FAILOVER_CHECKS]:
+                try:
+                    entries = select_items(api, saved, "live")[0]
+                except Exception:
+                    continue
+                total += len(entries)
+                covered += sum(1 for item, _ in entries if item.get("logo_hq"))
+            detail = (f"{info['channels']} logos indexés ({countries}), {info['images']} image(s) en cache"
+                      + (f" ; {covered}/{total} chaînes des playlists ont un logo haute qualité" if total else "") + ".")
+            if info["error"]:
+                detail += " Dernière mise à jour de l'index en échec (l'ancien index reste utilisé)."
+            results.append(_result("logos", "Logos haute qualité", "ok" if not info["error"] else "warn", detail))
+
     # 3. Guide ---------------------------------------------------------------------------
     xmltv_result = None
     if config.enable_epg and config.epg_source != "api":

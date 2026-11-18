@@ -12,9 +12,12 @@ from __future__ import annotations
 import argparse
 import logging
 import random
+import struct
 import threading
 import time
+import zlib
 
+from app import logos
 from app.custom import PlaylistStore
 from app.devices import DeviceStore
 from app.server import Config, XtreamAPI, make_epg, make_series, make_server, make_streams
@@ -128,6 +131,36 @@ def build_catalog(total: int) -> None:
         fake_xtream.SERIES_INFO[str(sid)] = {"info": {}, "episodes": seasons}
 
 
+def demo_png(rgb: tuple[int, int, int], width: int = 64, height: int = 36) -> bytes:
+    """Image PNG unie (sans dépendance) pour simuler un logo haute qualité."""
+    def chunk(tag: bytes, data: bytes) -> bytes:
+        return struct.pack(">I", len(data)) + tag + data + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)
+    row = b"\x00" + bytes(rgb) * width
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(row * height)) + chunk(b"IEND", b""))
+
+
+def demo_logos(data_dir: str) -> logos.LogoLibrary:
+    """Bibliothèque de logos hors ligne : quelques chaînes françaises (tv-logos) et marocaines (iptv-org)."""
+    tvl, db = "https://tvl.demo.invalid/countries", "https://db.demo.invalid/data"
+    colors = {"tf1": (0, 70, 160), "france-2": (200, 0, 30), "m6": (90, 90, 90), "canal-plus": (10, 10, 10)}
+    files = {f"{tvl}/france/0_all_logos_mosaic.md": "\n".join(f"[{n}]:{n}-fr.png" for n in colors).encode(),
+             f"{db}/channels.csv": b"id,name,alt_names,network,owners,country,categories,is_nsfw,launched,closed,replaced_by,website\n"
+                                   b"2M.ma,2M,,,,MA,general,FALSE,,,,\n",
+             f"{db}/logos.csv": b"channel,feed,in_use,tags,width,height,format,url\n"
+                                b"2M.ma,,TRUE,,64,36,PNG,https://img.demo.invalid/2m.png\n",
+             "https://img.demo.invalid/2m.png": demo_png((230, 120, 0))}
+    files.update({f"{tvl}/france/{n}-fr.png": demo_png(rgb) for n, rgb in colors.items()})
+
+    def fetch(url: str, limit: int) -> tuple[bytes, str]:
+        if url not in files:
+            raise OSError("absent de la démo")
+        return files[url], ""
+    library = logos.LogoLibrary(data_dir, source=db, tvlogos=tvl, fetch=fetch)
+    library.refresh(force=True)
+    return library
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--channels", type=int, default=1500)
@@ -148,6 +181,7 @@ def main() -> None:
     series = make_series(config, api)
     streams = make_streams(config, api)
     devices = DeviceStore(args.data)
+    logos.install(demo_logos(args.data))
     proxy = make_server(config, host=args.host, api=api, store=store, epg=epg, series=series,
                         streams=streams, devices=devices)
     web = make_web_server(config, api, store, host=args.host, epg=epg, series=series,

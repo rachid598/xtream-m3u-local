@@ -29,6 +29,7 @@ services:
       FAILOVER_STALL_SECONDS: "${FAILOVER_STALL_SECONDS:-6}"
       FAILOVER_SLOW_PERCENT: "${FAILOVER_SLOW_PERCENT:-35}"
       FAILOVER_RETURN_MINUTES: "${FAILOVER_RETURN_MINUTES:-10}"
+      LOGO_COUNTRIES: "${LOGO_COUNTRIES:-FR,BE,MA}"
       PROVIDER_TIMEZONE: "${PROVIDER_TIMEZONE:-}"
       XTREAM_NAME: "${XTREAM_NAME:-}"
       # Abonnement supplémentaire facultatif (catalogues fusionnés) ; jusqu'à _9

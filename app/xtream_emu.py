@@ -13,7 +13,7 @@ import time
 import zlib
 from datetime import datetime, timezone
 
-from .builder import CUSTOM_PREFIX, GROUP_PREFIX, select_items
+from .builder import CUSTOM_PREFIX, GROUP_PREFIX, display_logo, select_items
 from .custom import UNCATEGORIZED
 
 LOG = logging.getLogger("xtream-m3u-local.xtream")
@@ -113,7 +113,8 @@ class XtreamEmulator:
         raw = self.api.kind_state(kind).raw_by_id.get(item_id)
         return dict(self._redact(raw)) if isinstance(raw, dict) else {}
 
-    def items(self, device: dict, kind: str, category_id: str | None = None, *, api_epg_ids: bool = False) -> list[dict]:
+    def items(self, device: dict, kind: str, category_id: str | None = None, *, api_epg_ids: bool = False,
+              base: str = "") -> list[dict]:
         entries, _, _ = self.entries(device, kind)
         result = []
         for position, (item, group) in enumerate(entries, start=1):
@@ -124,7 +125,7 @@ class XtreamEmulator:
             if kind == "live":
                 result.append({
                     "num": num, "name": item["name"], "stream_type": "live", "stream_id": as_int(item["stream_id"]),
-                    "stream_icon": item.get("logo", ""),
+                    "stream_icon": display_logo(item, base),
                     "epg_channel_id": item.get("epg_id") or (f"xtream-{item['stream_id']}" if api_epg_ids else ""),
                     "added": str(self.raw("live", item["stream_id"]).get("added") or "0"), "is_adult": 0,
                     "category_id": cid, "category_ids": [as_int(cid)], "custom_sid": "",

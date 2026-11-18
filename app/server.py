@@ -26,9 +26,9 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, quote, urlencode, urlsplit
 from urllib.request import Request, urlopen
 
-from . import __version__
+from . import __version__, logos
 from .httputil import accepts_gzip, encode_body, etag_matches, etag_of, gzip_stream
-from .builder import FAVORITES_GROUP, GROUP_PREFIX, add_favorites, select_items
+from .builder import FAVORITES_GROUP, GROUP_PREFIX, add_favorites, display_logo, select_items
 from .devices import DeviceStore
 from .providers import UnknownProvider
 from .hls import MAX_MANIFEST_BYTES, SEGMENT_MIME, HlsRegistry, rewrite_manifest, segment_ext
@@ -764,8 +764,9 @@ def playlist(config: Config, entries: list[tuple[dict, str]], categories: dict[s
             # Pas d'identifiant EPG fournisseur : identifiant du guide complété par l'API.
             attrs.append(f'tvg-id="{escape_attribute(xml_channel_id(channel))}"')
         attrs.append(f'tvg-name="{escape_attribute(name)}"')
-        if channel.get("logo"):
-            attrs.append(f'tvg-logo="{escape_attribute(channel["logo"])}"')
+        logo = display_logo(channel, base)
+        if logo:
+            attrs.append(f'tvg-logo="{escape_attribute(logo)}"')
         kind = channel.get("kind", "live")
         if channel.get("num") and kind == "live":
             attrs.append(f'tvg-chno="{channel["num"]}"')
@@ -1298,7 +1299,8 @@ class Handler(BaseHTTPRequestHandler):
                 data = emu.categories(device, kind_of[action])
             elif action in kind_of:
                 data = emu.items(device, kind_of[action], arg("category_id") or None,
-                                 api_epg_ids=self.config.enable_epg and self.config.epg_source != "xmltv")
+                                 api_epg_ids=self.config.enable_epg and self.config.epg_source != "xmltv",
+                                 base=self.public_base())
             elif action == "get_series_info" and arg("series_id").isdigit():
                 data = (emu.passthrough("get_series_info", series_id=arg("series_id"))
                         if emu.allows(device, "series", arg("series_id")) else {})
@@ -1504,6 +1506,9 @@ class Handler(BaseHTTPRequestHandler):
                 "Playlists personnalisees : /p/<nom>.m3u (gestion sur le port de l'interface Web)\n"
             )
             return self.response(HTTPStatus.OK, text.encode(), "text/plain; charset=utf-8", head_only=head_only)
+        # Logos haute qualité (images publiques en cache) : sans jeton, comme les logos du fournisseur.
+        if path.startswith("/logo/") and logos.serve(self, path, head_only=head_only):
+            return
         # Serveur Xtream local : authentification par identifiants d'appareil (pas de ?token=).
         if path == "/player_api.php":
             return self.handle_player_api(qs, head_only=head_only)
@@ -1737,6 +1742,10 @@ def main() -> None:
     series = make_series(config, api)
     streams = make_streams(config, api)
     devices = DeviceStore(config.data_dir)
+    library = logos.from_env(config.data_dir)
+    logos.install(library)
+    if library is not None:
+        library.refresh_in_background()  # index des logos haute qualité (au plus une fois par semaine)
     server = make_server(config, api=api, store=store, epg=epg, series=series, streams=streams, devices=devices)
     web = make_web_server(config, api, store, epg=epg, series=series, streams=streams, devices=devices)
     worker = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.5}, daemon=True)

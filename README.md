@@ -100,6 +100,15 @@ Un abonnement autorise souvent une seule connexion. Le serveur compte les lectur
 
 Par défaut, les versions de secours viennent uniquement des **catégories cochées** dans la playlist : une catégorie décochée n'en fournit jamais, même identique à l'originale. Trois aides pour éviter l'oubli : dans l'onglet **Catégories**, une catégorie qui ne diffère d'une ou plusieurs autres que par la qualité (ex. « FRANCE FHD | OTT » / « FRANCE HD | OTT ») propose **🔗 Cocher aussi les catégories liées** en un clic ; dans **Mes groupes**, un groupe sans aucun secours l'affiche clairement ; l'option **« Secours hors catégories cochées »** (sous Bascule automatique, dans Options) cherche dans tout le catalogue du fournisseur, même les catégories non cochées — ces versions ne sont jamais ajoutées à la playlist, elles ne servent qu'en dernier recours. Le **diagnostic** teste chaque playlist concernée et donne le pourcentage de chaînes avec un secours.
 
+## Logos haute qualité
+
+Option de playlist **« Logos haute qualité »** (cochée par défaut, dans Options) : les logos du fournisseur, souvent petits ou flous, sont remplacés par ceux de deux bases ouvertes :
+
+- **tv-logo/tv-logos** (prioritaire) : PNG transparents et homogènes d'environ 512 px, pour la France et la Belgique (TF1, France 2, Canal+, beIN Sports, RMC Sport, La Une, RTL-TVI…) ;
+- **iptv-org** : logos de milliers de chaînes avec noms alternatifs, dont le **Maroc** (2M, Al Aoula, Arryadia, Medi 1 TV…).
+
+Le rapprochement utilise le nom normalisé (sans pays, qualité ni accents : « FR: TF1 FHD » → « tf1 ») ; une chaîne annoncée d'un autre pays (« UK: … », catégorie « US | … ») n'est jamais remplacée. Un logo choisi à la main (✎) reste prioritaire. L'index (~1 000 logos) est téléchargé au démarrage puis une fois par semaine (`DATA_DIR/cache/logos/`) ; chaque image est téléchargée **une seule fois**, en arrière-plan, puis servie par le serveur : `http://<serveur>:7777/logo/<clé>.png`, sans jeton (images publiques). Si une image ne peut pas être téléchargée, le lecteur est redirigé vers l'original. Le guide XMLTV garde les logos du fournisseur. Le diagnostic indique le nombre de logos indexés, d'images en cache et la couverture de chaque playlist. Pays choisis par `LOGO_COUNTRIES` (défaut `FR,BE,MA`).
+
 ## Guide des programmes (EPG)
 
 - `EPG_SOURCE=auto` (défaut) : programmes de `xmltv.php` (ou `EPG_URL`), complétés **chaîne par chaîne par l'API Xtream** (`get_simple_data_table`) pour les chaînes absentes — ou toutes si `xmltv.php` ne fonctionne pas ; cache 6 h, préchargement à l'enregistrement ;
@@ -144,6 +153,8 @@ Ajouter `XTREAM_URL_2`, `XTREAM_USERNAME_2`, `XTREAM_PASSWORD_2` (et `XTREAM_NAM
 | `FAILOVER_STALL_SECONDS` | `6` | Bascule automatique : version suivante si le flux reste muet N secondes |
 | `FAILOVER_RETURN_MINUTES` | `10` | Bascule automatique : retenter la meilleure version après N minutes sur une version de secours (`0` = jamais) |
 | `FAILOVER_SLOW_PERCENT` | `35` | … ou si son débit tombe sous ce % du meilleur débit observé (2 fois 10 s ; `0` = jamais) |
+| `LOGO_COUNTRIES` | `FR,BE,MA` | Logos haute qualité : pays dont les logos sont indexés et mis en cache (vide = désactivé) |
+| `LOGO_SOURCE` | iptv-org | Dossier `data` de la base iptv-org (`channels.csv`, `logos.csv`), pour un miroir |
 | `PROVIDER_TIMEZONE` | auto | Fuseau du serveur Xtream pour le replay (ex. `Europe/Paris`) |
 | `ENABLE_EPG` | `true` | Guide des programmes |
 | `EPG_SOURCE` | `auto` | `auto`, `xmltv` ou `api` |

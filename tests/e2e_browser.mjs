@@ -242,6 +242,12 @@ try {
   const m3uLines = (await fetchText(url)).text.split('\n');
   const tf1Url = m3uLines[m3uLines.findIndex((l) => l.endsWith(',FR: TF1 4K')) + 1];
   assert(/\/stream\/800012\.ts\?alt=800001(&|$)/.test(tf1Url), `URL avec version de secours : ${tf1Url}`);
+  // Logos haute qualité (option cochée par défaut) : logo local en cache dans la playlist
+  const tf1Info = m3uLines.find((l) => l.endsWith(',FR: TF1 4K'));
+  assert(/tvg-logo="http:\/\/[^"]+\/logo\/[0-9a-f]{16}\.png"/.test(tf1Info), `logo HQ dans la playlist : ${tf1Info}`);
+  const hqLogo = tf1Info.match(/tvg-logo="([^"]+)"/)[1];
+  const logoResponse = await fetch(hqLogo);
+  assert(logoResponse.ok && logoResponse.headers.get('content-type') === 'image/png', 'logo HQ servi en PNG');
   // Chaîne virtuelle : ses versions de secours sont visibles dans la liste
   await showTab('channels');
   await page.fill('#search', 'FR: TF1');
@@ -252,6 +258,8 @@ try {
   await tf1Row.locator('.alt-list summary').click();
   assert(/FR: TF1 HD/.test(await tf1Row.locator('.alt-list ol').innerText()), 'secours listé');
   assert((await tf1Row.locator('input').isChecked()) === wasOn, 'déplier ne coche/décoche pas la chaîne');
+  await waitFor(async () => (await tf1Row.locator('.thumb img').count()) === 1
+    && /\/logo\/[0-9a-f]{16}\.png$/.test(await tf1Row.locator('.thumb img').getAttribute('src')), 'vignette logo HQ');
   const hdRow = page.locator('#channels .channel').filter({ hasText: 'FR: TF1 HD' }).first();
   assert((await hdRow.locator('.badge.warn').innerText()) === 'Secours 1/1', 'badge Secours 1/1');
   await page.fill('#search', '');

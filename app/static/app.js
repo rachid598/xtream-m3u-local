@@ -452,6 +452,7 @@
     data.dedupe = $('opt-dedupe').checked;
     data.failover = $('opt-failover').checked;
     data.failover_any_category = $('opt-failover-any').checked;
+    data.hq_logos = $('opt-hq-logos').checked;
     data.hide_separators = $('opt-separators').checked;
     data.favorites_name = $('opt-fav-name').value.trim() || '★ Favoris';
     data.rules = state.rules.map((r) => ({ ...r }));
@@ -717,6 +718,7 @@
     if ($('opt-catchup').checked) parts.push('Replay');
     if ($('opt-dedupe').checked) parts.push('Sans doublons');
     if ($('opt-separators').checked) parts.push('Sans séparateurs');
+    if ($('opt-hq-logos').checked) parts.push('Logos HQ');
     if ($('opt-failover').checked && $('opt-dedupe').checked && $('opt-live-format').value !== 'hls') parts.push('Bascule auto');
     $('opt-failover-hint').classList.toggle('warn-text', $('opt-failover').checked && (!$('opt-dedupe').checked || $('opt-live-format').value === 'hls'));
     $('opt-failover-any').disabled = !$('opt-failover').checked;
@@ -882,13 +884,17 @@
   }
 
   function thumb(c, kind = state.kind) {
-    const logo = state.itemLogos[keyOf(c, kind)] || c.logo;
+    const hq = kind === 'live' && c.logo_hq && $('opt-hq-logos').checked ? c.logo_hq : '';
+    const logo = state.itemLogos[keyOf(c, kind)] || hq || c.logo;
     const box = h('span', { class: `thumb${kind === 'live' ? '' : ' poster'}`, 'aria-hidden': 'true', text: String(c.name).replace(/[^\p{L}\p{N}]/gu, '').slice(0, 2).toUpperCase() || 'TV' });
     if (logo) {
-      const img = h('img', { alt: '', loading: 'lazy', decoding: 'async', referrerpolicy: 'no-referrer' });
-      img.addEventListener('load', () => { box.textContent = ''; box.append(img); }, { once: true });
+      // Image ajoutée tout de suite : une image « lazy » hors de la page ne se charge jamais.
+      const img = h('img', { alt: '', loading: 'lazy', decoding: 'async', referrerpolicy: 'no-referrer', class: 'pending' });
+      const initials = box.firstChild;
+      img.addEventListener('load', () => { initials.remove(); img.classList.remove('pending'); }, { once: true });
       img.addEventListener('error', () => img.remove(), { once: true });
       img.src = logo;
+      box.append(img);
     }
     return box;
   }
@@ -1642,6 +1648,7 @@
     $('opt-dedupe').checked = Boolean(p && p.dedupe);
     $('opt-failover').checked = Boolean(p && p.failover);
     $('opt-failover-any').checked = Boolean(p && p.failover_any_category);
+    $('opt-hq-logos').checked = !p || p.hq_logos !== false;
     $('opt-separators').checked = Boolean(p && p.hide_separators);
     $('opt-fav-name').value = (p && p.favorites_name) || '★ Favoris';
     state.rules = p && p.rules ? p.rules.map((r) => ({ ...r })) : [];
@@ -2261,6 +2268,7 @@
   $('opt-catchup').addEventListener('change', () => { renderOptionsPill(); renderStats(); });
   $('opt-dedupe').addEventListener('change', () => { renderOptionsPill(); refresh(); });
   $('opt-failover').addEventListener('change', () => { renderOptionsPill(); refresh({ channels: false }); });
+  $('opt-hq-logos').addEventListener('change', () => { renderOptionsPill(); refresh(); });
   $('opt-failover-any').addEventListener('change', () => { renderOptionsPill(); refresh({ channels: false }); });
   $('opt-separators').addEventListener('change', () => { renderOptionsPill(); refresh(); });
   $('opt-fav-name').addEventListener('input', () => renderStats());

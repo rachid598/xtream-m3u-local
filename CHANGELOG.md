@@ -2,6 +2,16 @@
 
 Format inspiré de « Keep a Changelog ». Les versions suivent le versionnage sémantique.
 
+## [3.8.0] — 2026-11-17
+
+### Ajouté
+- **Logos haute qualité** (option de playlist « Logos haute qualité », cochée par défaut) : remplace les logos du fournisseur par des logos propres pour les chaînes **françaises, belges et marocaines** — PNG transparents ~512 px de tv-logo/tv-logos en priorité, puis la base iptv-org (noms alternatifs, Maroc). Index rafraîchi chaque semaine, images téléchargées une fois et gardées en cache dans `/data/cache/logos`, servies par `/logo/<clé>.png` (port 7777 pour les lecteurs, 7778 pour l'interface). Utilisés dans les playlists M3U, le serveur Xtream local, le Guide TV et les vignettes de l'éditeur. Un logo choisi à la main reste prioritaire ; une chaîne d'un autre pays n'est jamais remplacée.
+- Variables `LOGO_COUNTRIES` (défaut `FR,BE,MA`, vide = désactivé) et `LOGO_SOURCE`.
+- **Diagnostic** : section « Logos haute qualité » (logos indexés, images en cache, couverture des playlists).
+
+### Corrigé
+- **Vignettes de l'éditeur** : les logos ne s'affichaient jamais (une image « lazy » créée hors de la page n'est jamais chargée par le navigateur).
+
 ## [3.7.0] — 2026-11-17
 
 Suite à une question utilisateur sur la bascule automatique : une catégorie décochée n'a jamais servi de secours, même avec « Masquer les doublons » et « Bascule automatique » activés.

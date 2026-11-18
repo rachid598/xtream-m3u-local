@@ -11,14 +11,14 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
-from . import __version__
+from . import __version__, logos
 from .httputil import encode_body
 from .custom import InvalidPlaylist, PlaylistStore, validate_playlist
 from .epg import EpgCache
 import threading
 import time
 
-from .builder import select_items
+from .builder import display_logo, select_items
 from .custom import SLUG_RE, filter_kind, uses
 from .epg import EpgUnavailable, read_schedule, xml_channel_id
 from .builder import CUSTOM_PREFIX, normalize
@@ -151,6 +151,8 @@ class WebHandler(BaseHTTPRequestHandler):
                 return self.output(200, (STATIC_DIR / name).read_bytes(), ctype)
             except OSError:
                 return self.json(500, {"error": "Fichier d'interface manquant"})
+        if path.startswith("/logo/") and logos.serve(self, path, head_only=self.command == "HEAD"):
+            return
         if path == "/api/status":
             return self.json(200, self.status(include_account=qs.get("account", [""])[0] == "1"))
         if path == "/api/playlists":
@@ -357,6 +359,7 @@ class WebHandler(BaseHTTPRequestHandler):
             "data_file": str(self.store.path),
             "series_cache": self.series.stats() if self.series is not None else None,
             "epg_mode": self.config.epg_source,
+            "logos": logos.current().status() if logos.current() else None,
         }
         # Le token des lecteurs n'est transmis que si l'interface est protégée par mot de passe.
         if self.config.access_token and self.config.web_password:
@@ -547,7 +550,7 @@ class WebHandler(BaseHTTPRequestHandler):
         for channel, group in ordered:
             programmes = (schedule.get(xml_channel_id(channel).lower())
                           or schedule.get(f"xtream-{channel['stream_id']}") or [])
-            info = {"id": channel["stream_id"], "name": channel["name"], "logo": channel.get("logo", ""),
+            info = {"id": channel["stream_id"], "name": channel["name"], "logo": display_logo(channel),
                     "group": names.get(group) or group_names.get(group, ""), "num": channel.get("num", ""),
                     "mine": group.startswith(CUSTOM_PREFIX) or channel["stream_id"] in favorites}
             if channel.get("alternates"):
@@ -659,6 +662,7 @@ def catalog_payload(channels: list[dict], categories: dict[str, str], api: Xtrea
             entry["provider"] = info["provider"]
         category_list.append(entry)
     channel_list = []
+    library = logos.current() if kind == "live" else None
     for c in channels:
         entry = {
             "stream_id": c["stream_id"],
@@ -669,6 +673,9 @@ def catalog_payload(channels: list[dict], categories: dict[str, str], api: Xtrea
             "epg": bool(c["epg_id"]),
             "num": c["num"],
         }
+        hq = library.match(c["name"], categories.get(c["category_id"], "")) if library else None
+        if hq:
+            entry["logo_hq"] = f"/logo/{hq}.png"
         for extra in ("ext", "year", "rating", "archive"):
             if c.get(extra):
                 entry[extra] = c[extra]

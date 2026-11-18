@@ -260,6 +260,34 @@ def extend_alternates_from_catalog(entries: list[tuple[dict, str]], items: list[
     return result
 
 
+def apply_hq_logos(entries: list[tuple[dict, str]], categories: dict[str, str]) -> list[tuple[dict, str]]:
+    """Logos haute qualité (option ``hq_logos``) : ``logo_hq`` = chemin local ``/logo/<clé>.png``.
+
+    Le logo du fournisseur reste dans ``logo`` (guide XMLTV, repli) ; :func:`display_logo` choisit.
+    Les images manquantes sont téléchargées en arrière-plan.
+    """
+    from . import logos as logo_lib
+    library = logo_lib.current()
+    if library is None:
+        return entries
+    library.maybe_refresh()
+    result, keys = [], []
+    for item, group in entries:
+        key = library.match(item["name"], categories.get(item.get("category_id", ""), ""))
+        if key:
+            item = {**item, "logo_hq": f"/logo/{key}.png"}
+            keys.append(key)
+        result.append((item, group))
+    if keys:
+        library.prefetch(keys)
+    return result
+
+
+def display_logo(item: dict, base: str = "") -> str:
+    """Logo à montrer : logo haute qualité local (adresse absolue avec ``base``) sinon celui du fournisseur."""
+    return base + item["logo_hq"] if item.get("logo_hq") else item.get("logo", "")
+
+
 def item_key(item: dict) -> str:
     kind = item.get("kind", "live")
     if kind == "movie":
@@ -293,6 +321,8 @@ def select_items(api, saved: dict, kind: str, *, refresh: bool = False) -> tuple
         entries = dedupe(entries)
         if saved.get("failover") and saved.get("failover_any_category"):
             entries = extend_alternates_from_catalog(entries, items)
+    if kind == "live" and saved.get("hq_logos", True):
+        entries = apply_hq_logos(entries, categories)
     names = saved.get("item_names") or {}
     numbers = saved.get("item_numbers") or {} if kind == "live" else {}
     logos = saved.get("item_logos") or {}
@@ -312,6 +342,7 @@ def select_items(api, saved: dict, kind: str, *, refresh: bool = False) -> tuple
                     item["custom_num"] = True
                 if key in logos:
                     item["logo"] = logos[key]
+                    item.pop("logo_hq", None)  # logo choisi à la main : prioritaire
                 if sid in epg_from:
                     # Guide emprunté à une autre chaîne : son identifiant EPG (xmltv) et sa source API.
                     item["epg_from"] = epg_from[sid]
