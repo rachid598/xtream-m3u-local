@@ -353,3 +353,31 @@ class ProviderBusyTests(StackTestCase):
         status, body, _ = self.get(self.stack.proxy_base + "/hls/70.m3u8")
         self.assertEqual(status, 503)
         self.assertIn("Abonnement occupé", body.decode())
+
+
+class QuotaFollowsSourceTests(unittest.TestCase):
+    """La place est réservée chez le fournisseur de la version réellement lue (bascule multi-fournisseurs)."""
+
+    def test_move_to_full_provider_is_refused_then_allowed(self):
+        manager = StreamManager(lambda provider: 1)
+        salon = manager.acquire(kind="live", item_id="1", client="10.0.0.2", provider="1", device="Salon")
+        chambre = manager.acquire(kind="live", item_id="2", client="10.0.0.3", provider="2", device="Chambre")
+        self.assertFalse(manager.move(salon, "2"))      # fournisseur 2 déjà occupé : version sautée
+        self.assertEqual(salon.provider, "1")
+        self.assertFalse(chambre.cancelled.is_set())     # personne n'est coupé pour une version de secours
+        manager.release(chambre)
+        self.assertTrue(manager.move(salon, "2"))
+        self.assertEqual(salon.provider, "2")
+        # La place chez le fournisseur 1 est libérée.
+        other = manager.acquire(kind="live", item_id="3", client="10.0.0.4", provider="1", device="Bureau")
+        self.assertFalse(salon.cancelled.is_set())
+        manager.release(other)
+        manager.release(salon)
+
+    def test_same_address_different_devices_are_distinct(self):
+        manager = StreamManager(lambda provider: 2)
+        a = manager.acquire(kind="live", item_id="1", client="203.0.113.7", device="Maman")
+        b = manager.acquire(kind="live", item_id="1", client="203.0.113.7", device="Sœur")
+        self.assertFalse(a.cancelled.is_set())           # même adresse (proxy), même chaîne, deux appareils
+        manager.release(a)
+        manager.release(b)

@@ -59,7 +59,7 @@ def _size(headers: dict) -> str:
     return f", {size / 1e6:.1f} Mo" if size >= 1e6 else f", {size / 1e3:.0f} Ko"
 
 
-def run(api, epg, series, streams, store, config) -> list[dict]:
+def run(api, epg, series, streams, store, config, devices=None) -> list[dict]:
     from .server import UpstreamError  # import local : évite une dépendance circulaire
     results: list[dict] = []
     ua = config.user_agent
@@ -200,6 +200,9 @@ def run(api, epg, series, streams, store, config) -> list[dict]:
                 detail += " Dernière mise à jour de l'index en échec (l'ancien index reste utilisé)."
             results.append(_result("logos", "Logos haute qualité", "ok" if not info["error"] else "warn", detail))
 
+    # 2d. Accès distant ------------------------------------------------------------------
+    results.append({**remote_check(config, devices), "ms": 0})
+
     # 3. Guide ---------------------------------------------------------------------------
     xmltv_result = None
     if config.enable_epg and config.epg_source != "api":
@@ -307,3 +310,40 @@ def run(api, epg, series, streams, store, config) -> list[dict]:
     else:
         results.append(_result("stream-replay", "Replay", "skipped", "Aucune chaîne avec replay (tv_archive) dans ce compte"))
     return results
+
+
+def remote_check(config, devices) -> dict:
+    """Accès hors du réseau local : fermé, ou ouvert avec les protections attendues."""
+    label = "Accès distant"
+    web = (" L'interface Web est joignable hors du réseau local (WEB_REMOTE=true, mot de passe obligatoire)."
+           if config.web_remote else " L'interface Web reste réservée au réseau local.")
+    if not config.remote_access:
+        return _result("remote", label, "warn" if config.web_remote else "ok",
+                       "Fermé : seules les connexions du réseau local sont acceptées sur le port des lecteurs "
+                       "(REMOTE_ACCESS=false)." + web)
+    try:
+        listed = devices.list() if devices is not None else []
+    except Exception:
+        listed = []
+    if not listed:
+        return _result("remote", label, "error",
+                       "Ouvert (REMOTE_ACCESS=true) mais aucun appareil : personne ne peut se connecter "
+                       "de l'extérieur. Crée un appareil (onglet Appareils) pour chaque personne.")
+    problems = []
+    open_devices = [d for d in listed if not d.get("playlist")]
+    if open_devices:
+        problems.append(f"{len(open_devices)} appareil(s) sans playlist : accès à tout le catalogue à distance "
+                        "(lie chaque appareil à une playlist)")
+    if not config.public_base_url.startswith("https://"):
+        problems.append("PUBLIC_BASE_URL n'est pas en https:// : codes et identifiants circulent en clair")
+    if not config.trusted_proxies:
+        problems.append("TRUSTED_PROXIES vide : derrière un reverse proxy, toutes les connexions semblent venir "
+                        "de lui (blocage des essais et lectures par appareil faussés)")
+    if config.web_remote:
+        problems.append("interface Web exposée (WEB_REMOTE=true)")
+    base = (f"Ouvert avec code obligatoire : {len(listed)} appareil(s), "
+            f"{len(listed) - len(open_devices)} limité(s) à leur playlist ; mode direct et playlist complète refusés "
+            "à distance ; adresse bloquée 15 min après 10 codes faux.")
+    if problems:
+        return _result("remote", label, "warn", base + " À vérifier : " + " ; ".join(problems) + ".")
+    return _result("remote", label, "ok", base + web)

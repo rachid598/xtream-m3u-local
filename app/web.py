@@ -11,7 +11,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
-from . import __version__, logos
+from . import __version__, access, logos
 from .httputil import encode_body
 from .custom import InvalidPlaylist, PlaylistStore, validate_playlist
 from .epg import EpgCache
@@ -118,8 +118,21 @@ class WebHandler(BaseHTTPRequestHandler):
         return user_ok and pass_ok
 
     def check_auth(self) -> bool:
+        ip, remote = access.client_address(self.client_address[0], self.headers, self.config.trusted_proxies)
+        if remote:
+            # L'interface de gestion reste sur le réseau local, sauf WEB_REMOTE=true (mot de passe obligatoire).
+            if not self.config.web_remote:
+                self.output(403, "Interface Web réservée au réseau local (WEB_REMOTE=false)\n".encode(),
+                            "text/plain; charset=utf-8")
+                return False
+            wait = self.guard.blocked_for(ip)
+            if wait:
+                self.output(429, f"Trop d'essais : réessaie dans {wait} s\n".encode(), "text/plain; charset=utf-8")
+                return False
         if self.authorized():
             return True
+        if remote and self.headers.get("Authorization") and self.guard.fail(ip):
+            LOG.warning("Interface Web : %s bloquée %d min (trop d'essais de mot de passe)", ip, access.BLOCK_SECONDS // 60)
         self.output(401, "Authentification requise\n".encode(), "text/plain; charset=utf-8", auth_challenge=True)
         return False
 
@@ -289,7 +302,7 @@ class WebHandler(BaseHTTPRequestHandler):
             return
         from .diagnostic import run
         started = time.time()
-        results = run(self.api, self.epg, self.series, self.streams, self.store, self.config)
+        results = run(self.api, self.epg, self.series, self.streams, self.store, self.config, self.devices)
         return self.json(200, {"started_at": int(started), "seconds": round(time.time() - started, 1),
                                "version": __version__, "results": results})
 
@@ -723,7 +736,7 @@ def make_web_server(config: Config, api: XtreamAPI, store: PlaylistStore, *, hos
     devices = devices if devices is not None else DeviceStore(config.data_dir)
     handler = type("ConfiguredWebHandler", (WebHandler,),
                    {"config": config, "api": api, "store": store, "epg": epg, "series": series,
-                    "streams": streams, "devices": devices})
+                    "streams": streams, "devices": devices, "guard": access.FailureGuard()})
     server = ThreadingHTTPServer((host, config.web_port if port is None else port), handler)
     server.daemon_threads = True
     return server

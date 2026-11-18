@@ -156,3 +156,50 @@ class MultiProviderTests(StackTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ProviderCacheIsolationTests(unittest.TestCase):
+    """Chaque fournisseur a sa copie disque du catalogue (avant 3.9.0 : un seul fichier partagé)."""
+
+    def api(self, tmp, user):
+        from app.server import Config, XtreamAPI
+        return XtreamAPI(Config("http://provider.invalid", user, "pw", data_dir=tmp))
+
+    def test_separate_files_and_foreign_copy_ignored(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            a, b = self.api(tmp, "alice"), self.api(tmp, "bob")
+            self.assertNotEqual(a._cache_file("live"), b._cache_file("live"))
+            self.assertNotIn("alice", str(a._cache_file("live")))  # identifiant haché, jamais en clair
+            a._save("live", [{"stream_id": 1, "name": "Chaîne A", "category_id": "1"}], [], None)
+            b._save("live", [{"stream_id": 2, "name": "Chaîne B", "category_id": "1"}], [], None)
+            fresh_a, fresh_b = self.api(tmp, "alice"), self.api(tmp, "bob")
+            fresh_a._restore("live")
+            fresh_b._restore("live")
+            self.assertEqual([c["name"] for c in fresh_a.kind_state("live").items], ["Chaîne A"])
+            self.assertEqual([c["name"] for c in fresh_b.kind_state("live").items], ["Chaîne B"])
+            # Copie d'un autre fournisseur placée sous le mauvais nom : ignorée.
+            import shutil
+            shutil.copy(a._cache_file("live"), b._cache_file("live"))
+            other = self.api(tmp, "bob")
+            other._restore("live")
+            self.assertIsNone(other.kind_state("live").items)
+
+    def test_migration_of_old_shared_cache(self):
+        import tempfile
+        from pathlib import Path
+        from app.server import migrate_catalog_cache
+        with tempfile.TemporaryDirectory() as tmp:
+            a = self.api(tmp, "alice")
+            a._save("live", [{"stream_id": 1, "name": "Ancien", "category_id": "1"}], [], None)
+            old = Path(tmp) / "cache" / "catalog-live.json.gz"
+            a._cache_file("live").rename(old)
+            migrate_catalog_cache(tmp, [a])                      # un seul fournisseur : renommée
+            self.assertFalse(old.exists())
+            self.assertTrue(a._cache_file("live").exists())
+            a._cache_file("live").rename(old)
+            b = self.api(tmp, "bob")
+            migrate_catalog_cache(tmp, [a, b])                   # plusieurs : à qui ? supprimée
+            self.assertFalse(old.exists())
+            self.assertFalse(a._cache_file("live").exists())
+            self.assertFalse(b._cache_file("live").exists())

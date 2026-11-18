@@ -71,8 +71,9 @@ class StreamSession:
         self._closer: Callable[[], None] | None = None
 
     @property
-    def key(self) -> tuple[str, str, str]:
-        return (self.client, self.kind, self.item_id)
+    def key(self) -> tuple[str, str, str, str]:
+        # Adresse + appareil : deux TV derrière la même adresse (box, reverse proxy) restent distinctes.
+        return (self.client, self.device, self.kind, self.item_id)
 
     def attach(self, closer: Callable[[], None]) -> None:
         """Fonction qui ferme la connexion fournisseur (appelée en cas de coupure)."""
@@ -184,7 +185,7 @@ class StreamManager:
         evicted: list[StreamSession] = []
         with self._lock:
             self._expire()
-            key = (client, kind, item_id)
+            key = (client, device, kind, item_id)
             if key in self._cooldown:
                 raise EvictedRecently()
             if virtual:
@@ -204,7 +205,8 @@ class StreamManager:
                                 key=lambda s: s.started)
                 rank = PRIORITY_RANK.get(priority, 1)
                 while len(active) >= limit:
-                    same_client = [s for s in active if s.client == client]
+                    # Même appareil (même adresse et même appareil connu) : il change de chaîne, on remplace.
+                    same_client = [s for s in active if s.client == client and s.device == device]
                     if not same_client and not self.takeover:
                         # Reprise désactivée : on ne coupe jamais un autre appareil.
                         raise LimitReached(limit)
@@ -231,6 +233,19 @@ class StreamManager:
         for victim in evicted:
             victim.closed.wait(1.5)
         return session
+
+    def move(self, session: StreamSession, provider: str) -> bool:
+        """Bascule vers une version d'un autre fournisseur : la place est prise chez lui, sans couper personne.
+
+        Retourne ``False`` si ce fournisseur n'a plus de place (la version est alors sautée)."""
+        with self._lock:
+            self._expire()
+            limit = self.limit(provider)
+            used = sum(1 for s in self._sessions.values() if s.provider == provider and s is not session)
+            if limit and used >= limit:
+                return False
+            session.provider = provider
+            return True
 
     def release(self, session: StreamSession) -> None:
         with self._lock:

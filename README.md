@@ -157,6 +157,9 @@ Ajouter `XTREAM_URL_2`, `XTREAM_USERNAME_2`, `XTREAM_PASSWORD_2` (et `XTREAM_NAM
 | `FAILOVER_MODE` | `reconnect` | `reconnect` : coupe la connexion, le lecteur se reconnecte sur la version qui marche ; `splice` : enchaîne les versions dans le même flux (peut figer l'image) |
 | `LOGO_COUNTRIES` | `FR,BE,MA` | Logos haute qualité : pays dont les logos sont indexés et mis en cache (vide = désactivé) |
 | `LOGO_SOURCE` | iptv-org | Dossier `data` de la base iptv-org (`channels.csv`, `logos.csv`), pour un miroir |
+| `REMOTE_ACCESS` | `false` | Accepter les connexions hors du réseau local sur 7777 (code d'appareil obligatoire, voir « Accès distant ») |
+| `TRUSTED_PROXIES` | vide | Reverse proxys dont l'en-tête `X-Forwarded-For` est lu, ex. `172.18.0.0/16` |
+| `WEB_REMOTE` | `false` | Interface Web joignable hors du réseau local (exige `WEB_PASSWORD`) — déconseillé |
 | `PROVIDER_TIMEZONE` | auto | Fuseau du serveur Xtream pour le replay (ex. `Europe/Paris`) |
 | `ENABLE_EPG` | `true` | Guide des programmes |
 | `EPG_SOURCE` | `auto` | `auto`, `xmltv` ou `api` |
@@ -178,9 +181,35 @@ curl -s http://IP_UNRAID:7777/p/salon.m3u | head -n 5
 curl -s "http://IP_UNRAID:7777/player_api.php?username=tv-du-salon&password=CODE" | head -c 300
 ```
 
+## Accès distant (famille hors de chez toi)
+
+Fermé par défaut : toute connexion qui ne vient pas du réseau local (10.x, 172.16-31.x, 192.168.x) est refusée, Tailscale (100.64.0.0/10) compris. Pour l'ouvrir : `REMOTE_ACCESS=true`. À distance :
+
+- **un code d'appareil est toujours exigé** (onglet Appareils : un appareil par personne, lié à sa playlist ; supprimer l'appareil coupe l'accès) — lien M3U `https://…/p/<playlist>.m3u?token=<code>` ou connexion Xtream (serveur, utilisateur, mot de passe de l'appareil) ;
+- un appareil ne lit **que sa playlist** : autres playlists, chaînes, films, épisodes, replay et HLS hors de sa playlist → 404 (cette règle s'applique aussi sur le réseau local dès qu'un code d'appareil est utilisé) ; `/playlist.m3u` et `/xmltv.php` lui donnent sa playlist et son guide, jamais tout le catalogue ;
+- `mode=direct` (identifiants du fournisseur dans les liens) est refusé ;
+- 10 codes faux en 10 minutes depuis une adresse → adresse bloquée 15 minutes ;
+- l'interface Web (7778) reste réservée au réseau local, sauf `WEB_REMOTE=true` (exige `WEB_PASSWORD`) — déconseillé ;
+- le diagnostic (section « Accès distant ») signale ce qui manque : appareils sans playlist, adresse publique sans https, proxy non déclaré.
+
+**Le plus simple et le plus sûr : Tailscale.** Application Tailscale sur Unraid et sur la TV / le téléphone de chaque personne invitée ; rien n'est publié sur Internet. Adresse à donner : `http://<adresse Tailscale du serveur>:7777`, avec `REMOTE_ACCESS=true`.
+
+**Avec un nom de domaine et Traefik** (ou Nginx Proxy Manager) : n'expose **que le port 7777**, en HTTPS, et seulement les chemins des lecteurs. Exemple d'étiquettes Docker pour Traefik :
+
+```yaml
+labels:
+  - traefik.enable=true
+  - traefik.http.routers.iptv.rule=Host(`tv.mondomaine.fr`) && (PathPrefix(`/p/`) || PathPrefix(`/stream/`) || PathPrefix(`/hls/`) || PathPrefix(`/live/`) || PathPrefix(`/movie/`) || PathPrefix(`/series/`) || PathPrefix(`/timeshift/`) || PathPrefix(`/logo/`) || Path(`/player_api.php`) || Path(`/get.php`) || Path(`/xmltv.php`) || Path(`/streaming/timeshift.php`))
+  - traefik.http.routers.iptv.entrypoints=websecure
+  - traefik.http.routers.iptv.tls.certresolver=letsencrypt
+  - traefik.http.services.iptv.loadbalancer.server.port=7777
+```
+
+et dans l'environnement du conteneur : `REMOTE_ACCESS=true`, `PUBLIC_BASE_URL=https://tv.mondomaine.fr`, `TRUSTED_PROXIES=<réseau Docker de Traefik>` (ex. `172.18.0.0/16`). Sans `TRUSTED_PROXIES`, une requête relayée par un proxy est toujours traitée comme distante (jamais « locale » par erreur), mais le serveur ne voit que l'adresse du proxy : blocage des essais et lectures par appareil moins précis. **Cloudflare** : enregistrement DNS en « DNS seulement » (nuage gris) — leurs conditions interdisent de faire passer de la vidéo par leur proxy (nuage orange) ou un tunnel gratuit. Rappel : un abonnement à une connexion ne permet qu'une lecture à la fois, chez toi ou chez eux.
+
 ## Sécurité et limites
 
-- **Réseau local uniquement.** Ne redirige pas 7777/7778 vers Internet. Sur un réseau partagé : `WEB_PASSWORD` (gestion) et l'option « exiger un code d'appareil » (lecteurs).
+- **Réseau local par défaut.** Ne redirige pas 7777/7778 vers Internet sans lire « Accès distant » ci-dessus ; 7778 (gestion) ne doit jamais être exposé. Sur un réseau partagé : `WEB_PASSWORD` (gestion) et l'option « exiger un code d'appareil » (lecteurs).
 - Les identifiants Xtream restent dans le conteneur : absents des playlists (hors `mode=direct`), des manifestes HLS, de l'API Web, des exports et sauvegardes, des journaux et du diagnostic.
 - `devices.json` contient les codes d'appareils (droits 0600). Protection CSRF de l'API, CSP stricte sans script inline, validation de toutes les entrées, écritures atomiques avec copie `.bak`.
 - Démarrage en root uniquement pour corriger les droits de `/data`, puis UID 99 / GID 100.

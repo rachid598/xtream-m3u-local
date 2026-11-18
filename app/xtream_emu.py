@@ -87,6 +87,19 @@ class XtreamEmulator:
             return False
         return any(item["stream_id"] == item_id for item, _ in entries)
 
+    def allows_episode(self, device: dict, episode_id: str, series_cache) -> bool:
+        """Un épisode est permis s'il appartient à une série de la playlist de l'appareil (épisodes déjà connus)."""
+        if series_cache is None:
+            return False
+        try:
+            entries, _, _ = self.entries(device, "series")
+        except Exception:
+            return False
+        for item, _ in entries:
+            if any(str(ep.get("id")) == episode_id for ep in series_cache.known(item["stream_id"]) or []):
+                return True
+        return False
+
     def alternates(self, device: dict, item_id: str) -> list[str]:
         """Versions de secours d'une chaîne si la playlist de l'appareil a la bascule automatique."""
         try:

@@ -6,6 +6,7 @@ Bibliothèque standard Python uniquement, y compris pour le relais des flux TS.
 from __future__ import annotations
 
 import gzip
+import hashlib
 import hmac
 import json
 import logging
@@ -26,7 +27,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, quote, urlencode, urlsplit
 from urllib.request import Request, urlopen
 
-from . import __version__, logos
+from . import __version__, access, logos
 from .httputil import accepts_gzip, encode_body, etag_matches, etag_of, gzip_stream
 from .builder import FAVORITES_GROUP, GROUP_PREFIX, add_favorites, display_logo, select_items
 from .devices import DeviceStore
@@ -116,6 +117,20 @@ SLOW_WARMUP = 25    # secondes ignorées au démarrage d'une version (rafale de 
 SLOW_WINDOWS = 3    # fenêtres de 10 s lentes d'affilée avant de basculer
 
 
+def _trusted_proxies() -> tuple:
+    try:
+        return access.parse_networks(os.environ.get("TRUSTED_PROXIES", ""))
+    except ValueError:
+        raise ValueError("TRUSTED_PROXIES : adresses ou réseaux attendus, ex. 172.18.0.0/16,192.168.1.2") from None
+
+
+def _web_remote() -> bool:
+    enabled = _env_bool("WEB_REMOTE", False)
+    if enabled and not os.environ.get("WEB_PASSWORD", ""):
+        raise ValueError("WEB_REMOTE=true exige WEB_PASSWORD (interface Web joignable hors du réseau local)")
+    return enabled
+
+
 def _failover_mode() -> str:
     value = os.environ.get("FAILOVER_MODE", "").strip().lower() or "reconnect"
     if value not in ("reconnect", "splice"):
@@ -196,6 +211,9 @@ class Config:
     provider_timezone: str = ""      # vide = fuseau annoncé par le fournisseur (server_info.timezone)
     provider_name: str = ""          # XTREAM_NAME : nom affiché du fournisseur principal
     extra_providers: tuple = ()      # ((nom, url, utilisateur, mot de passe), …) : XTREAM_URL_2 … _9
+    remote_access: bool = False      # REMOTE_ACCESS : accepter les connexions hors du réseau local (code obligatoire)
+    trusted_proxies: tuple = ()      # TRUSTED_PROXIES : reverse proxys dont on lit X-Forwarded-For
+    web_remote: bool = False         # WEB_REMOTE : interface Web joignable hors du réseau local (mot de passe exigé)
 
     @property
     def credentials(self) -> list[tuple[str, str]]:
@@ -254,6 +272,9 @@ class Config:
             provider_name=os.environ.get("XTREAM_NAME", "").strip()[:40],
             extra_providers=_extra_providers(),
             series_fetch_seconds=max(0, _env_int("SERIES_FETCH_SECONDS", 20)),
+            remote_access=_env_bool("REMOTE_ACCESS", False),
+            trusted_proxies=_trusted_proxies(),
+            web_remote=_web_remote(),
         )
 
 
@@ -360,6 +381,8 @@ class XtreamAPI:
         self._refreshing: set[str] = set()
         self._refreshing_lock = threading.Lock()
         self._cache_dir = Path(config.data_dir) / "cache"
+        # Identifiant stable du fournisseur (adresse + utilisateur, haché) : un cache disque par fournisseur.
+        self.provider_key = provider_key(config.xtream_url, config.username)
 
     def paused_for(self) -> float:
         """Secondes restantes de pause après un « trop de requêtes » du fournisseur."""
@@ -570,14 +593,14 @@ class XtreamAPI:
 
     # ------------------------------------------------------- copie sur disque
     def _cache_file(self, kind: str) -> Path:
-        return self._cache_dir / f"catalog-{kind}.json.gz"
+        return self._cache_dir / f"catalog-{self.provider_key}-{kind}.json.gz"
 
     def _save(self, kind: str, streams: list, categories_raw: list, categories_error: str | None) -> None:
         """Copie du catalogue brut (aucun identifiant : les réponses sont expurgées des champs sensibles)."""
         try:
             self._cache_dir.mkdir(parents=True, exist_ok=True)
-            data = {"saved_at": time.time(), "streams": redact_raw(streams), "categories": categories_raw,
-                    "categories_error": categories_error}
+            data = {"saved_at": time.time(), "provider": self.provider_key, "streams": redact_raw(streams),
+                    "categories": categories_raw, "categories_error": categories_error}
             tmp = self._cache_file(kind).with_suffix(".tmp")
             with gzip.open(tmp, "wt", encoding="utf-8", compresslevel=1) as f:
                 json.dump(data, f, ensure_ascii=False, separators=(",", ":"))
@@ -599,6 +622,9 @@ class XtreamAPI:
                 streams, categories = data["streams"], data.get("categories") or []
                 if not isinstance(streams, list):
                     raise ValueError
+                if data.get("provider") not in (None, self.provider_key):
+                    LOG.warning("Copie disque du catalogue %s d'un autre fournisseur : ignorée", kind)
+                    return
             except FileNotFoundError:
                 return
             except (OSError, ValueError, KeyError, TypeError, EOFError):
@@ -923,6 +949,10 @@ class Handler(BaseHTTPRequestHandler):
     devices: "DeviceStore | None" = None
     emulator: XtreamEmulator
     provider_busy: dict    # {fournisseur: fin de la pause après un refus « abonnement occupé »}
+    guard: access.FailureGuard  # essais de code ratés (connexions distantes)
+    client_ip: str = ""         # adresse réelle du client (derrière un reverse proxy déclaré)
+    remote: bool = False        # connexion hors du réseau local
+    request_device: "dict | None" = None  # appareil authentifié : ses droits limitent la requête
     failover_memory: dict  # bascule par reconnexion : {chaîne: version à servir, échéance, attente}
     request_token: str = ""
 
@@ -942,8 +972,8 @@ class Handler(BaseHTTPRequestHandler):
         super().end_headers()
 
     def log_message(self, format: str, *args: object) -> None:
-        # Ne jamais journaliser la query string (ACCESS_TOKEN).
-        LOG.info("%s %s %s", self.client_address[0], self.command, urlsplit(self.path).path)
+        # Ne jamais journaliser la query string (ACCESS_TOKEN) ni le mot de passe d'un appareil dans le chemin.
+        LOG.info("%s %s %s", self.client_ip or self.client_address[0], self.command, mask_path(urlsplit(self.path).path))
 
     def log_error(self, format: str, *args: object) -> None:
         LOG.debug("HTTP error: " + format, *args)
@@ -1038,11 +1068,36 @@ class Handler(BaseHTTPRequestHandler):
         if received and expected and hmac.compare_digest(received.encode(), expected.encode()):
             self.request_token = received
             return True
-        if received and self.devices is not None and self.devices.find_by_token(received):
+        device = self.devices.find_by_token(received) if received and self.devices is not None else None
+        if device is not None:
             self.request_token = received
+            self.request_device = device
             return True
-        required = bool(expected) or (self.devices is not None and self.devices.require_token)
+        if received:
+            self.note_failure()
+        # Hors du réseau local, un code est toujours exigé.
+        required = self.remote or bool(expected) or (self.devices is not None and self.devices.require_token)
         return not required
+
+    def note_failure(self) -> None:
+        """Code ou identifiants refusés : compte l'essai (connexions distantes seulement)."""
+        if self.remote and self.guard.fail(self.client_ip):
+            LOG.warning("Accès distant : %s bloquée %d min (trop d'essais de code)", self.client_ip,
+                        access.BLOCK_SECONDS // 60)
+
+    def scoped(self) -> "dict | None":
+        """Appareil dont les droits limitent la requête (``None`` : accès complet)."""
+        device = self.request_device
+        return device if device and device.get("playlist") else None
+
+    def device_allows(self, kind: str, item_id: str) -> bool:
+        """Règle commune : un appareil lié à une playlist ne lit que ce qu'elle contient."""
+        device = self.scoped()
+        if device is None:
+            return True
+        if kind == "episode":
+            return self.emulator.allows_episode(device, item_id, self.series)
+        return self.emulator.allows(device, {"movie": "vod", "timeshift": "live", "hls": "live"}.get(kind, kind), item_id)
 
     def public_base(self) -> str:
         if self.config.public_base_url:
@@ -1056,8 +1111,8 @@ class Handler(BaseHTTPRequestHandler):
         """Appareil qui fait la requête : par son code (``?token=`` ou identifiants Xtream), sinon par son adresse."""
         if self.devices is None:
             return None
-        ip = self.client_address[0]
-        device = self.devices.find_by_token(getattr(self, "request_token", "") or "")
+        ip = self.client_ip or self.client_address[0]
+        device = self.request_device or self.devices.find_by_token(getattr(self, "request_token", "") or "")
         if device is not None:
             self.devices.seen_from(device, ip)
             return device
@@ -1101,7 +1156,7 @@ class Handler(BaseHTTPRequestHandler):
             return None
         device = self.current_device() or {}
         try:
-            return self.streams.acquire(kind=kind, item_id=item_id, client=self.client_address[0],
+            return self.streams.acquire(kind=kind, item_id=item_id, client=self.client_ip or self.client_address[0],
                                         label=label, virtual=virtual, provider=provider,
                                         device=device.get("name", ""), priority=device.get("priority", "normal"))
         except EvictedRecently:
@@ -1229,7 +1284,8 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 remembered = None
         index = ids.index(remembered["sid"]) if remembered else 0
-        session = self.open_session("live", ids[0], names[ids[0]])
+        # La place est réservée chez le fournisseur de la version réellement ouverte.
+        session = self.open_session("live", ids[0], names[ids[0]], provider=self.api.provider_of(ids[index]))
         if session is None:
             return
         state = {"headers_sent": False}
@@ -1243,7 +1299,11 @@ class Handler(BaseHTTPRequestHandler):
                 sid = ids[index]
                 session.label = names[ids[0]] + (f" → secours {index}/{len(ids) - 1} ({names[sid]})" if index else "")
                 started = time.monotonic()
-                outcome = self._pump_live(sid, session, state, return_after=wait_best if index else 0)
+                provider = self.api.provider_of(sid)
+                if provider != session.provider and (self.busy_wait(provider) or not self.streams.move(session, provider)):
+                    outcome = "full"  # version chez un autre fournisseur sans place libre : sautée, sans l'appeler
+                else:
+                    outcome = self._pump_live(sid, session, state, return_after=wait_best if index else 0)
                 if outcome in ("client", "cancelled", "busy"):
                     break
                 if outcome == "best":
@@ -1378,7 +1438,12 @@ class Handler(BaseHTTPRequestHandler):
     def device_from(self, username: str, password: str) -> dict | None:
         if self.devices is None or not username or not password:
             return None
-        return self.devices.authenticate(username, password)
+        device = self.devices.authenticate(username, password)
+        if device is None:
+            self.note_failure()
+        else:
+            self.request_device = device
+        return device
 
     def send_json(self, data: object, *, head_only: bool, status: int = 200) -> None:
         body = json.dumps(data, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
@@ -1431,7 +1496,9 @@ class Handler(BaseHTTPRequestHandler):
             return self._error(403, "Identifiants d'appareil invalides", head_only=head_only)
         self.request_token = device["password"]
         catalog_kind = {"live": "live", "movie": "vod", "series": "series"}[kind]
-        if kind != "series" and not self.emulator.allows(device, catalog_kind, item_id):
+        allowed = (self.device_allows("episode", item_id) if kind == "series"
+                   else self.emulator.allows(device, catalog_kind, item_id) if device.get("playlist") else True)
+        if not allowed:
             return self._error(404, "Contenu absent de la playlist de cet appareil", head_only=head_only)
         ext = ext.lower()
         if kind == "live":
@@ -1466,6 +1533,12 @@ class Handler(BaseHTTPRequestHandler):
         if device is None:
             return self._error(403, "Identifiants d'appareil invalides", head_only=head_only)
         self.request_token = device["password"]
+        return self.serve_device_files(device, path, qs, head_only=head_only, refresh=refresh)
+
+    def serve_device_files(self, device: dict, path: str, qs: dict[str, list[str]], *, head_only: bool,
+                           refresh: bool) -> None:
+        """Playlist (``/get.php``) ou guide (``/xmltv.php``) d'un appareil."""
+        username, password = device["username"], device["password"]
         saved = self.emulator.saved_for(device)
         try:
             if path == "/xmltv.php":
@@ -1549,6 +1622,9 @@ class Handler(BaseHTTPRequestHandler):
         live = HLS_LIVE_RE.fullmatch(path)
         if live:
             stream_id = live.group(1)
+            if not self.device_allows("live", stream_id):
+                self._error(404, "Chaîne absente de la playlist de cet appareil", head_only=head_only)
+                return True
             if head_only:
                 self.response(200, b"", "application/vnd.apple.mpegurl", head_only=True)
                 return True
@@ -1602,8 +1678,19 @@ class Handler(BaseHTTPRequestHandler):
         qs = parse_qs(parts.query, keep_blank_values=True)
         path = parts.path
         refresh = qs.get("refresh", [""])[0] == "1"
+        self.request_device = None
+        self.client_ip, self.remote = access.client_address(self.client_address[0], self.headers,
+                                                            self.config.trusted_proxies)
         if path == "/health":
             return self.response(HTTPStatus.OK, b"OK\n", "text/plain; charset=utf-8", head_only=head_only)
+        if self.remote:
+            if not self.config.remote_access:
+                return self._error(403, "Accès distant désactivé : ce serveur n'accepte que le réseau local "
+                                        "(REMOTE_ACCESS=true pour l'ouvrir, avec un code par appareil)", head_only=head_only)
+            wait = self.guard.blocked_for(self.client_ip)
+            if wait:
+                return self.response(429, f"Trop d'essais de code : réessaie dans {wait} s\n".encode(),
+                                     "text/plain; charset=utf-8", head_only=head_only, extra={"Retry-After": str(wait)})
         if path == "/":
             text = (
                 f"Xtream M3U Local {__version__}\n"
@@ -1631,8 +1718,17 @@ class Handler(BaseHTTPRequestHandler):
             return self.handle_device_files(path, qs, head_only=head_only, refresh=refresh)
         if not self.authorized(qs):
             return self._error(HTTPStatus.FORBIDDEN, "Token requis ou invalide (?token=...)", head_only=head_only)
+        if qs.get("mode", [""])[0] == "direct" and (self.remote or self.request_device is not None):
+            # Le mode direct écrit les identifiants du fournisseur dans les liens : réseau local et code global seulement.
+            return self._error(403, "mode=direct indisponible avec un code d'appareil ou hors du réseau local",
+                               head_only=head_only)
         if path.startswith("/hls/") and self.handle_hls(path, head_only=head_only):
             return
+        device = self.scoped()
+        if device is not None and path in ("/playlist.m3u", "/get.php", "/epg.xml", "/xmltv.php"):
+            # Appareil lié à une playlist : sa playlist et son guide, jamais tout le catalogue.
+            return self.serve_device_files(device, "/xmltv.php" if path in ("/epg.xml", "/xmltv.php") else "/get.php",
+                                           qs, head_only=head_only, refresh=refresh)
         if path in ("/playlist.m3u", "/get.php"):
             mode = qs.get("mode", ["proxy"])[0]
             fmt = qs.get("format", ["ts"])[0]
@@ -1669,6 +1765,8 @@ class Handler(BaseHTTPRequestHandler):
             slug, ext = custom_match.groups()
             if ext == "xml" and not self.config.enable_epg:
                 return self._error(404, "EPG désactivé (ENABLE_EPG=false)", head_only=head_only)
+            if device is not None and slug != device.get("playlist"):
+                return self._error(404, "Playlist introuvable", head_only=head_only)
             try:
                 saved = self.store.get(slug)
             except RuntimeError:
@@ -1699,10 +1797,14 @@ class Handler(BaseHTTPRequestHandler):
                                  extra={"X-Series-Pending": str(incomplete)} if incomplete else None)
         shift = TIMESHIFT_RE.fullmatch(path)
         if shift:
+            if not self.device_allows("live", shift.group(1)):
+                return self._error(404, "Chaîne absente de la playlist de cet appareil", head_only=head_only)
             return self.handle_timeshift(shift.group(1), qs, head_only=head_only)
         vod = VOD_RE.fullmatch(path)
         if vod:
             kind, item_id, ext = vod.group(1), vod.group(2), vod.group(3).lower()
+            if not self.device_allows("episode" if kind == "series" else "vod", item_id):
+                return self._error(404, "Contenu absent de la playlist de cet appareil", head_only=head_only)
             # Films et épisodes : Range transmis (avance rapide) ; HEAD relayé pour la taille du fichier.
             return self.relay(self.api.direct_url(kind, item_id, ext), head_only=head_only,
                               default_type=mime_for(ext), track=(kind, item_id))
@@ -1715,7 +1817,13 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_header("Cache-Control", "no-store")
                 self.end_headers()
                 return
-            alternates = parse_alternates(qs.get("alt", [""])[0])
+            if not self.device_allows("live", match.group(1)):
+                return self._error(404, "Chaîne absente de la playlist de cet appareil", head_only=head_only)
+            if device is not None:
+                # Versions de secours décidées par le serveur (playlist de l'appareil), pas par l'adresse.
+                alternates = self.emulator.alternates(device, match.group(1))
+            else:
+                alternates = parse_alternates(qs.get("alt", [""])[0])
             if alternates:
                 return self.relay_live([match.group(1), *alternates])
             return self.relay(self.api.direct_stream(match.group(1)), head_only=False,
@@ -1730,6 +1838,14 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_file(guide, "application/xml; charset=utf-8", head_only=head_only,
                                   filename="epg.xml")
         return self._error(404, "Page introuvable", head_only=head_only)
+
+
+_SECRET_PATH = re.compile(r"^/(live|movie|series|timeshift)/([^/]+)/([^/]+)/")
+
+
+def mask_path(path: str) -> str:
+    """« /live/salon/abc123/42.ts » → « /live/salon/***/42.ts » (mot de passe d'appareil hors des journaux)."""
+    return _SECRET_PATH.sub(lambda m: f"/{m.group(1)}/{m.group(2)}/***/", path, count=1)
 
 
 def shutil_copy(src, dst, size: int = 256 * 1024) -> None:
@@ -1752,10 +1868,38 @@ def make_epg(config: Config, api: XtreamAPI) -> EpgCache:
     return epg
 
 
+def provider_key(url: str, username: str) -> str:
+    """Identifiant stable et non réversible d'un abonnement (pour nommer ses fichiers de cache)."""
+    return hashlib.sha256(f"{url}\n{username}".encode("utf-8")).hexdigest()[:12]
+
+
+def migrate_catalog_cache(data_dir: str, apis: list) -> None:
+    """Anciennes copies partagées ``catalog-<type>.json.gz`` (avant 3.9.0).
+
+    Un seul fournisseur : elles lui appartiennent, renommées. Plusieurs : impossible de savoir à qui elles
+    sont (chaque fournisseur écrasait celle des autres), supprimées : chaque catalogue sera rechargé.
+    """
+    cache = Path(data_dir) / "cache"
+    for kind in KINDS:
+        old = cache / f"catalog-{kind}.json.gz"
+        if not old.exists():
+            continue
+        try:
+            new = apis[0]._cache_file(kind)
+            if len(apis) == 1 and not new.exists():
+                os.replace(old, new)
+            else:
+                old.unlink()
+        except OSError:
+            LOG.warning("Ancienne copie du catalogue %s non migrée", kind)
+
+
 def make_api(config: Config):
     """Client Xtream : simple, ou façade multi-fournisseurs si XTREAM_URL_2… est défini."""
     if not config.extra_providers:
-        return XtreamAPI(config)
+        api = XtreamAPI(config)
+        migrate_catalog_cache(config.data_dir, [api])
+        return api
     from .providers import ProviderSet
     base = replace(config, extra_providers=())
     apis = [XtreamAPI(base)]
@@ -1763,6 +1907,7 @@ def make_api(config: Config):
     for name, url, user, password in config.extra_providers:
         apis.append(XtreamAPI(replace(base, xtream_url=url, username=user, password=password, provider_name=name)))
         names.append(name)
+    migrate_catalog_cache(config.data_dir, apis)
     return ProviderSet(apis, names)
 
 
@@ -1792,7 +1937,7 @@ def make_server(config: Config, *, host: str = "0.0.0.0", port: int | None = Non
     handler = type("ConfiguredHandler", (Handler,),
                    {"api": api, "config": config, "store": store, "epg": epg, "series": series,
                     "streams": streams, "hls": hls or HlsRegistry(), "devices": devices, "emulator": emulator,
-                    "failover_memory": {}, "provider_busy": {}})
+                    "failover_memory": {}, "provider_busy": {}, "guard": access.FailureGuard()})
     server = ThreadingHTTPServer((host, config.port if port is None else port), handler)
     server.daemon_threads = True
     return server

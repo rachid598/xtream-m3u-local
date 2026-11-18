@@ -2,6 +2,21 @@
 
 Format inspiré de « Keep a Changelog ». Les versions suivent le versionnage sémantique.
 
+## [3.9.0] — 2026-11-18
+
+Suite de l'audit (issue n° 7) et de la demande « accès à distance pour la famille ».
+
+### Ajouté
+- **Accès distant sécurisé** (`REMOTE_ACCESS`, fermé par défaut) : hors du réseau local, code d'appareil obligatoire, mode direct et catalogue complet refusés, adresse bloquée 15 min après 10 codes faux. `TRUSTED_PROXIES` : adresse réelle derrière Traefik / Nginx Proxy Manager (une requête relayée par un proxy non déclaré est toujours distante). Interface Web réservée au réseau local (`WEB_REMOTE` pour l'ouvrir, mot de passe obligatoire). Guide Tailscale et Traefik dans le README.
+- **Diagnostic « Accès distant »** : fermé / ouvert, appareils sans playlist, adresse publique sans https, proxy non déclaré.
+
+### Corrigé (audit)
+- **Droits par appareil sur toutes les routes** : avec un code d'appareil (M3U ou Xtream), seules les chaînes, films, épisodes, replays et HLS de sa playlist sont lisibles ; versions de secours décidées par le serveur ; `/playlist.m3u` et `/xmltv.php` renvoient sa playlist et son guide. Les épisodes de séries n'étaient pas vérifiés en mode Xtream.
+- **Journaux** : le mot de passe d'appareil présent dans les chemins Xtream (`/live/<utilisateur>/<mot de passe>/…`) est masqué.
+- **Un cache de catalogue par fournisseur** : avec plusieurs abonnements, tous écrivaient dans le même fichier (le 2ᵉ pouvait reprendre le catalogue du 1ᵉʳ au démarrage). Fichier `catalog-<identifiant haché>-<type>.json.gz`, copie d'un autre fournisseur ignorée ; ancien fichier renommé (un abonnement) ou supprimé (plusieurs).
+- **Quota sur la source réellement lue** : la bascule vers une version d'un autre fournisseur prend la place chez ce fournisseur (version sautée s'il est plein, sans couper personne).
+- **Lectures identifiées par appareil** : deux TV derrière la même adresse (box, reverse proxy) ne se coupent plus l'une l'autre en croyant être le même appareil.
+
 ## [3.8.2] — 2026-11-18
 
 Essai réel chez un proche : « Code 502 » dans TiviMate, journaux du serveur : HTTP 429 du fournisseur (abonnement à une connexion déjà utilisé).

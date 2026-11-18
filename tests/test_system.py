@@ -76,6 +76,7 @@ class DiagnosticTests(StackTestCase):
             "account": "ok", "catalog-live": "ok", "catalog-vod": "ok", "catalog-series": "ok",
             "failover": "skipped",        # aucune playlist n'utilise la bascule automatique
             "logos": "skipped",           # LOGO_COUNTRIES non installé dans les tests
+            "remote": "ok",               # accès distant fermé (défaut)
             "epg-xmltv": "ok", "epg-api": "warn",   # 1 chaîne sur 3 a des programmes via l'API
             "stream-ts": "warn",          # le faux flux n'est pas du vrai MPEG-TS
             "stream-hls": "ok", "stream-movie": "ok", "stream-episode": "ok", "stream-replay": "ok"})
