@@ -283,6 +283,8 @@ try {
   await page.fill('#dialog-input', 'Zenith');
   await page.click('#dialog-ok');
   const zenithCard = page.locator('#cg-list .cg-card').first();
+  // La nouvelle carte est rendue après la fermeture de la fenêtre : attendre qu'elle soit bien la première.
+  await waitFor(async () => (await zenithCard.locator('input').first().inputValue()) === 'Zenith', 'carte Zenith en premier');
   await zenithCard.locator('textarea').fill('Zenith');
   await waitFor(async () => num(await zenithCard.locator('.num').innerText()) === 1, 'groupe Zenith rempli (dédoublonné)');
   await waitFor(async () => zenithCard.locator('.warn-text').isVisible(), 'avertissement : aucun secours pour Zenith');

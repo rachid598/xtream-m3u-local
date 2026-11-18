@@ -326,7 +326,9 @@ label { display: block; font-size: 12.5px; font-weight: 600; color: var(--text-s
 .summary-grid .card-head h3 { margin: 0; }
 .sum-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
 .sum-list li { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 7px 10px; border-radius: 8px; background: var(--bg-soft); font-size: 13px; }
-.sum-list li span:first-child { overflow-wrap: anywhere; min-width: 0; }
+.sum-list li span:first-child { overflow-wrap: anywhere; min-width: 0; flex: 1 1 8em; }
+.sum-list li { flex-wrap: wrap; }
+#history-list .num { flex: 1 1 auto; text-align: right; overflow-wrap: anywhere; }
 .sum-list .num { color: var(--text-faint); font-variant-numeric: tabular-nums; flex: none; }
 .sum-list .x { font: inherit; background: none; border: 0; color: var(--text-faint); cursor: pointer; font-size: 16px; line-height: 1; padding: 2px 6px; border-radius: 6px; }
 .sum-list .x:hover { color: var(--danger); background: var(--danger-soft); }

@@ -108,6 +108,17 @@ def _extra_providers() -> tuple:
     return tuple(extras)
 
 
+SLOW_WARMUP = 25    # secondes ignorées au démarrage d'une version (rafale de remplissage du tampon)
+SLOW_WINDOWS = 3    # fenêtres de 10 s lentes d'affilée avant de basculer
+
+
+def _failover_mode() -> str:
+    value = os.environ.get("FAILOVER_MODE", "").strip().lower() or "reconnect"
+    if value not in ("reconnect", "splice"):
+        raise ValueError("FAILOVER_MODE doit valoir reconnect ou splice")
+    return value
+
+
 def _timezone_env() -> str:
     value = os.environ.get("PROVIDER_TIMEZONE", "").strip()
     if value:
@@ -176,6 +187,8 @@ class Config:
     failover_stall_seconds: float = 6.0   # bascule automatique : flux muet pendant N s → version suivante
     failover_slow_ratio: float = 0.35     # … ou débit < 35 % du meilleur débit observé (2 fenêtres de suite) ; 0 = jamais
     failover_return_minutes: int = 10     # sur une version de secours : retenter la meilleure après N min (0 = jamais)
+    failover_mode: str = "reconnect"      # reconnect : couper la connexion, le lecteur se reconnecte sur la bonne version ;
+                                          # splice : enchaîner les versions dans le même flux (lecteurs sans reconnexion)
     provider_timezone: str = ""      # vide = fuseau annoncé par le fournisseur (server_info.timezone)
     provider_name: str = ""          # XTREAM_NAME : nom affiché du fournisseur principal
     extra_providers: tuple = ()      # ((nom, url, utilisateur, mot de passe), …) : XTREAM_URL_2 … _9
@@ -232,6 +245,7 @@ class Config:
             failover_stall_seconds=float(min(60, max(2, _env_int("FAILOVER_STALL_SECONDS", 6)))),
             failover_slow_ratio=min(90, max(0, _env_int("FAILOVER_SLOW_PERCENT", 35))) / 100,
             failover_return_minutes=min(240, max(0, _env_int("FAILOVER_RETURN_MINUTES", 10))),
+            failover_mode=_failover_mode(),
             provider_timezone=_timezone_env(),
             provider_name=os.environ.get("XTREAM_NAME", "").strip()[:40],
             extra_providers=_extra_providers(),
@@ -904,6 +918,7 @@ class Handler(BaseHTTPRequestHandler):
     hls: HlsRegistry
     devices: "DeviceStore | None" = None
     emulator: XtreamEmulator
+    failover_memory: dict  # bascule par reconnexion : {chaîne: version à servir, échéance, attente}
     request_token: str = ""
 
     def end_headers(self) -> None:
@@ -1149,18 +1164,36 @@ class Handler(BaseHTTPRequestHandler):
     def relay_live(self, ids: list[str]) -> None:
         """Direct avec bascule automatique : si la version lue coupe, se tait ou rame, passer à la suivante.
 
-        Une seule connexion fournisseur à la fois (la précédente est fermée avant d'ouvrir la suivante) ;
-        les flux MPEG-TS sont enchaînés dans la même réponse, le lecteur continue sans changer de chaîne.
+        Une seule connexion fournisseur à la fois (la précédente est fermée avant d'ouvrir la suivante).
+        Tant que rien n'a été envoyé au lecteur, les versions sont essayées l'une après l'autre.
+        Ensuite, mode ``reconnect`` (défaut) : la connexion est fermée et la version qui marche est
+        mémorisée ; le lecteur se reconnecte et la reçoit directement (un flux MPEG-TS d'une autre version
+        — autre codec, résolution, horloge — collé à la suite fige l'image de nombreux lecteurs).
+        Mode ``splice`` : les versions sont enchaînées dans la même réponse.
         """
         ids = list(dict.fromkeys(ids))
         names = {sid: self.item_label("live", sid) for sid in ids}
+        reconnect = self.config.failover_mode == "reconnect"
+        memory = self.failover_memory
+        now = time.monotonic()
+        remembered = memory.get(ids[0]) if reconnect else None
+        if remembered and (remembered["sid"] not in ids or now >= remembered["until"]):
+            if remembered["sid"] != ids[0]:
+                # Délai écoulé : on retente la meilleure version (« essai », pour allonger l'attente si elle flanche).
+                remembered = {"sid": ids[0], "until": now + 6 * 3600, "wait": remembered["wait"], "trial": now}
+                memory[ids[0]] = remembered
+            else:
+                remembered = None
+        index = ids.index(remembered["sid"]) if remembered else 0
         session = self.open_session("live", ids[0], names[ids[0]])
         if session is None:
             return
         state = {"headers_sent": False}
-        index, switches, max_switches = 0, 0, 2 * len(ids)
+        switches, tried, max_switches = 0, 0, 2 * len(ids)
         session.channel = names[ids[0]]
-        wait_best = self.config.failover_return_minutes * 60  # retour à la meilleure version (0 = jamais)
+        base_wait = self.config.failover_return_minutes * 60  # retour à la meilleure version (0 = jamais)
+        wait_best = remembered["wait"] if remembered else base_wait
+        outcome = ""
         try:
             while not session.cancelled.is_set():
                 sid = ids[index]
@@ -1172,20 +1205,34 @@ class Handler(BaseHTTPRequestHandler):
                 if outcome == "best":
                     # La version de secours a tenu : on retente la meilleure (courte coupure).
                     LOG.info("Retour à la meilleure version de %s après %d min", ids[0], int((time.monotonic() - started) / 60))
-                    index, switches = 0, 0
                     session.switches += 1
+                    if reconnect:
+                        memory[ids[0]] = {"sid": ids[0], "until": time.monotonic() + 6 * 3600, "wait": wait_best,
+                                          "trial": time.monotonic()}
+                        break
+                    index, switches = 0, 0
                     continue
-                if index == 0 and switches == 0 and time.monotonic() - started < 60 and wait_best:
+                trial = memory.get(ids[0], {}).get("trial") if reconnect else (started if index == 0 and switches == 0 else None)
+                if index == 0 and trial and time.monotonic() - trial < 60 and wait_best:
                     wait_best = min(wait_best * 2, 4 * 3600)  # meilleure version encore instable : patienter plus
                 switches += 1
+                tried += 1
                 session.switches += 1
-                if switches > max_switches:
+                if tried > max_switches:
                     LOG.warning("Bascule automatique : aucune version de la chaîne %s ne fonctionne", ids[0])
                     break
                 index = (index + 1) % len(ids)
                 LOG.info("Bascule automatique (%s) : %s → %s", outcome, sid, ids[index])
+                if reconnect:
+                    hold = wait_best if wait_best else 6 * 3600
+                    memory[ids[0]] = {"sid": ids[index], "until": time.monotonic() + (hold if index else 6 * 3600),
+                                      "wait": wait_best, "trial": None}
+                    if state["headers_sent"]:
+                        break  # le lecteur se reconnecte et reçoit directement la version suivante
                 if index == 0:
                     time.sleep(1)  # toutes les versions essayées : petite pause avant de recommencer
+            if reconnect and index == 0 and outcome in ("client", "cancelled"):
+                memory.pop(ids[0], None)  # la meilleure version a tenu jusqu'au bout : rien à mémoriser
         finally:
             self.streams.release(session)
             if state["headers_sent"]:
@@ -1218,7 +1265,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.end_headers()
                 state["headers_sent"] = True
             reader = getattr(upstream, "read1", upstream.read)
-            window, window_start, best_rate, slow_windows = 0, time.monotonic(), 0.0, 0
+            window, window_start, slow_windows = 0, time.monotonic(), 0
+            rates: list[float] = []  # débits par fenêtre de 10 s, rafale de démarrage exclue
             started = window_start
             ratio = self.config.failover_slow_ratio
             while True:
@@ -1243,11 +1291,16 @@ class Handler(BaseHTTPRequestHandler):
                     return "best"
                 if now - window_start >= 10:
                     rate = window / (now - window_start)
-                    if now - started > 15:  # après le démarrage (rafale initiale)
-                        slow_windows = slow_windows + 1 if ratio and best_rate and rate < best_rate * ratio else 0
-                        if slow_windows >= 2:
+                    if now - started > SLOW_WARMUP:
+                        # Référence = médiane des fenêtres récentes : ni la rafale de démarrage (le fournisseur
+                        # remplit le tampon du lecteur), ni un pic d'une scène chargée ne la faussent.
+                        baseline = sorted(rates)[len(rates) // 2] if len(rates) >= 2 else 0.0
+                        slow = bool(ratio and baseline and rate < baseline * ratio)
+                        slow_windows = slow_windows + 1 if slow else 0
+                        if slow_windows >= SLOW_WINDOWS:
                             return "slow"
-                    best_rate = max(best_rate, rate)
+                        if not slow:
+                            rates = (rates + [rate])[-6:]
                     window, window_start = 0, now
 
     def build_custom_m3u(self, saved: dict, qs: dict[str, list[str]], *, epg_path: str, refresh: bool = False,
@@ -1686,7 +1739,8 @@ def make_server(config: Config, *, host: str = "0.0.0.0", port: int | None = Non
     emulator = XtreamEmulator(api, store, config, streams, redact=lambda value: redact(value, config))
     handler = type("ConfiguredHandler", (Handler,),
                    {"api": api, "config": config, "store": store, "epg": epg, "series": series,
-                    "streams": streams, "hls": hls or HlsRegistry(), "devices": devices, "emulator": emulator})
+                    "streams": streams, "hls": hls or HlsRegistry(), "devices": devices, "emulator": emulator,
+                    "failover_memory": {}})
     server = ThreadingHTTPServer((host, config.port if port is None else port), handler)
     server.daemon_threads = True
     return server

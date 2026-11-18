@@ -2,6 +2,15 @@
 
 Format inspiré de « Keep a Changelog ». Les versions suivent le versionnage sémantique.
 
+## [3.8.1] — 2026-11-18
+
+Retour d'essai réel (TiviMate) : image figée à chaque bascule automatique, obligation de zapper ; 11 bascules en 12 min dont 8 « débit trop faible ».
+
+### Corrigé
+- **Bascule automatique sans image figée** : au lieu d'enchaîner la version de secours dans le même flux (autre codec, résolution et horloge : la plupart des lecteurs gardent la dernière image), le serveur ferme la connexion et mémorise la version qui marche ; le lecteur se reconnecte tout seul et la reçoit directement (≈ un zap automatique). Même principe pour le retour à la meilleure qualité. Ancien comportement : `FAILOVER_MODE=splice`.
+- **Fausses alertes « débit trop faible »** : la référence était le meilleur débit observé, rafale de démarrage comprise (le fournisseur remplit le tampon du lecteur) ; le débit normal paraissait donc « trop lent » au bout d'une minute. Désormais : 25 premières secondes ignorées, référence = médiane des fenêtres récentes, 3 fenêtres lentes d'affilée (30 s) avant de basculer.
+- **Historique sur téléphone** : dans « Dernières lectures », le nom de la chaîne s'affichait une lettre par ligne.
+
 ## [3.8.0] — 2026-11-17
 
 ### Ajouté

@@ -190,8 +190,22 @@ class FailoverTests(StackTestCase):
         from app.server import parse_alternates
         self.assertEqual(parse_alternates("4,1,x,4,../9,1234567890123"), ["4", "1"])
 
+    def test_reconnect_mode_closes_then_serves_working_version(self):
+        stack = self.make_stack(failover_stall_seconds=1.0)  # mode par défaut : reconnect
+        self.assertEqual(stack.config.failover_mode, "reconnect")
+        # 1re connexion : 60 envoie un peu puis se tait → connexion fermée (pas de flux collé).
+        status, body, _ = self.get(stack.proxy_base + "/stream/60.ts?alt=62,61")
+        self.assertEqual((status, body), (200, b"A" * 4096))
+        # Le lecteur se reconnecte : 62 (absent) est passé avant tout envoi, 61 est servi directement.
+        status, body, _ = self.get(stack.proxy_base + "/stream/60.ts?alt=62,61")
+        self.assertEqual(status, 200)
+        self.assertTrue(body.startswith(b"B" * 10240), body[:20])
+        self.assertNotIn(b"A", body)
+        # 61 s'est terminée (fin du faux flux) : la reconnexion suivante repart de la meilleure version.
+        self.assertEqual(stack.proxy.RequestHandlerClass.failover_memory["60"]["sid"], "60")
+
     def test_relay_switches_to_next_version(self):
-        stack = self.make_stack(failover_stall_seconds=1.0)
+        stack = self.make_stack(failover_stall_seconds=1.0, failover_mode="splice")
         start = time.monotonic()
         status, body, _ = self.get(stack.proxy_base + "/stream/60.ts?alt=62,61")
         self.assertEqual(status, 200)
@@ -266,7 +280,8 @@ class DevicePriorityTests(unittest.TestCase):
 
 class ReturnToBestTests(StackTestCase):
     def test_returns_to_best_version_after_a_while(self):
-        stack = self.make_stack(failover_stall_seconds=1.0, failover_return_minutes=0.04)  # ≈ 2,4 s
+        stack = self.make_stack(failover_stall_seconds=1.0, failover_return_minutes=0.04,  # ≈ 2,4 s
+                                failover_mode="splice")
         seen = b""
         with urlopen(stack.proxy_base + "/stream/60.ts?alt=50", timeout=15) as r:
             start = time.monotonic()
@@ -282,3 +297,29 @@ class ReturnToBestTests(StackTestCase):
         self.assertTrue(0 <= first_a < first_g, seen[:20])
         self.assertGreaterEqual(seen.count(b"A" * 1024), 8, "retour à la meilleure version")
         self.assertGreater(seen.rfind(b"A" * 1024), first_g)
+
+
+class ReconnectReturnTests(StackTestCase):
+    def test_backup_closes_after_delay_then_best_is_retried(self):
+        stack = self.make_stack(failover_stall_seconds=1.0, failover_return_minutes=0.04)  # ≈ 2,4 s
+        memory = stack.proxy.RequestHandlerClass.failover_memory
+        url = stack.proxy_base + "/stream/60.ts?alt=50"
+        self.assertEqual(self.get(url)[1], b"A" * 4096)       # 60 se tait → fermé, 50 mémorisée
+        self.assertEqual(memory["60"]["sid"], "50")
+        start = time.monotonic()
+        status, body, _ = self.get(url)                        # 50 servie, puis fermée au bout de ~2,4 s
+        self.assertEqual(status, 200)
+        self.assertTrue(body and set(body) == {0x47}, body[:10])
+        self.assertLess(time.monotonic() - start, 10)
+        self.assertEqual((memory["60"]["sid"], bool(memory["60"]["trial"])), ("60", True))  # essai de la meilleure
+        self.assertTrue(self.get(url)[1].startswith(b"A"))    # reconnexion : la meilleure version est retentée
+        # Elle flanche aussitôt : retour sur 50 avec une attente doublée.
+        self.assertEqual(memory["60"]["sid"], "50")
+        self.assertAlmostEqual(memory["60"]["wait"], 0.04 * 60 * 2, places=3)
+
+
+class SlowDetectionTests(unittest.TestCase):
+    def test_startup_burst_is_not_the_reference(self):
+        from app import server
+        self.assertGreaterEqual(server.SLOW_WARMUP, 20)
+        self.assertGreaterEqual(server.SLOW_WINDOWS, 3)
