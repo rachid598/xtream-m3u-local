@@ -157,23 +157,31 @@ class XtreamEmulator:
             result.append(entry)
         return result
 
-    def account(self, device: dict, host: str, port: str) -> dict:
-        provider = self.api.account() or {}
+    def account(self, device: dict, host: str, port: str, scheme: str = "http") -> dict:
+        # Profils : l'appareil voit l'abonnement de sa playlist (expiration, connexions), pas celui d'un autre.
+        profile = str(self.saved_for(device).get("provider") or "1")
+        apis = getattr(self.api, "apis", None)
+        source = apis[int(profile) - 1] if apis and int(profile) <= len(apis) else self.api
+        provider = source.account() or {}
         tz = self.api.provider_timezone()
         now = datetime.now(tz if tz is not None else timezone.utc)
-        limit = self.streams.limit() if self.streams is not None else 0
+        limit = self.streams.limit(profile) if self.streams is not None else 0
+        active = self.streams.count(profile) if self.streams is not None else 0
         return {
             "user_info": {
                 "username": device["username"], "password": device["password"],
                 "message": "Xtream M3U Local", "auth": 1, "status": provider.get("status") or "Active",
                 "exp_date": str(provider.get("exp_date") or ""), "is_trial": "0",
-                "active_cons": str(self.streams.count() if self.streams is not None else 0),
+                "active_cons": str(active),
                 "created_at": str(device.get("created_at") or ""),
                 "max_connections": str(limit or provider.get("max_connections") or "1"),
                 "allowed_output_formats": ["m3u8", "ts"],
             },
             "server_info": {
-                "url": host, "port": port, "https_port": "", "server_protocol": "http", "rtmp_port": "",
+                # Derrière un reverse proxy HTTPS (PUBLIC_BASE_URL=https://…), les lecteurs doivent construire
+                # des adresses https : sinon ils appellent http://domaine:80.
+                "url": host, "port": port if scheme == "http" else "80",
+                "https_port": port if scheme == "https" else "", "server_protocol": scheme, "rtmp_port": "",
                 "timezone": getattr(tz, "key", "UTC"), "timestamp_now": int(time.time()),
                 "time_now": now.strftime("%Y-%m-%d %H:%M:%S"), "process": True,
             },

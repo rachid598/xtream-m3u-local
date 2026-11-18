@@ -36,6 +36,12 @@
   </div>
 </header>
 
+<div class="profile-bar" id="profile-bar" hidden>
+  <span class="profile-label">Profil</span>
+  <div class="views" id="profile-buttons" role="group" aria-label="Profil (abonnement)"></div>
+  <span class="hint" id="profile-hint">Chaque profil a son abonnement, ses playlists et ses appareils.</span>
+</div>
+
 <div id="expiry-banner" class="banner" role="alert" hidden></div>
 
 <div class="layout" id="view-playlists">
@@ -286,6 +292,11 @@
     <section class="card options-card" id="options-box">
       <div class="card-head"><h2><span aria-hidden="true">⚙️</span> Options de la playlist</h2><span class="pill" id="options-pill"><span id="options-pill-text">MPEG-TS</span></span></div>
         <div class="epg-body">
+          <div class="option-row" id="opt-provider-row" hidden>
+            <label for="opt-provider">Abonnement utilisé par cette playlist</label>
+            <select id="opt-provider"></select>
+            <p class="hint">Une playlist d'un profil n'utilise que son abonnement (chaînes, secours, connexions). « Tous les abonnements » mélange les catalogues : réservé à tes propres playlists.</p>
+          </div>
           <div class="option-row">
             <label for="opt-live-format">Format des chaînes en direct</label>
             <select id="opt-live-format">

@@ -1462,7 +1462,9 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if not action:
                 base = urlsplit(self.public_base())
-                data = emu.account(device, base.hostname or "", str(base.port or 80))
+                scheme = "https" if base.scheme == "https" else "http"
+                data = emu.account(device, base.hostname or "", str(base.port or (443 if scheme == "https" else 80)),
+                                   scheme)
             elif action.endswith("_categories") and action in kind_of:
                 data = emu.categories(device, kind_of[action])
             elif action in kind_of:

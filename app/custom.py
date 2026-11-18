@@ -257,6 +257,12 @@ def validate_playlist(payload: object, *, slug: str | None = None) -> dict:
     result["hide_separators"] = bool(payload.get("hide_separators", False))
     result["failover"] = bool(payload.get("failover", False))
     result["hq_logos"] = bool(payload.get("hq_logos", True))
+    # Profil = abonnement (1 = XTREAM_URL, 2 = XTREAM_URL_2…) : la playlist n'utilise que ce fournisseur.
+    # Vide = tous les abonnements mélangés (playlists d'avant les profils, secours d'un abonnement à l'autre).
+    provider = str(payload.get("provider") or "").strip()
+    if provider and not (provider.isdigit() and 1 <= int(provider) <= 9):
+        raise InvalidPlaylist("Profil (abonnement) invalide")
+    result["provider"] = provider
     result["failover_any_category"] = bool(payload.get("failover_any_category", False))
     result["rules"] = _rules(payload.get("rules"))
     result["item_names"] = _item_names(payload.get("item_names"))

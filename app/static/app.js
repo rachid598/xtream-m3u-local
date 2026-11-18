@@ -17,7 +17,7 @@
       prefix: 'series:', fields: ['series_category_ids', 'included_series_ids', 'excluded_series_ids'], actions: 'get_series_categories et get_series', categoriesAction: 'get_series_categories' },
   };
   const emptyCatalog = () => ({ categories: [], categoryNames: new Map(), channels: [], channelById: new Map(),
-    channelsByCat: new Map(), catalogLoaded: false, categoriesError: null, loading: null });
+    channelsByCat: new Map(), catalogLoaded: false, categoriesError: null, loading: null, raw: null });
   const emptySelection = () => ({ selected: new Set(), included: new Set(), excluded: new Set() });
 
   // ------------------------------------------------------------------ état
@@ -27,6 +27,9 @@
     cat: { live: emptyCatalog(), vod: emptyCatalog(), series: emptyCatalog() },
     sel: { live: emptySelection(), vod: emptySelection(), series: emptySelection() },
     playlists: [],
+    profiles: [],            // abonnements configurés [{id, name}] (profils : moi, ma sœur…)
+    profile: '1',            // profil sélectionné
+    accounts: [],            // comptes des abonnements (onglet Système, badge)
     editing: null,           // slug de la playlist ouverte (null = nouvelle)
     groupOrder: [],          // ordre personnalisé des groupes (clés : "12", "vod:3", "series:7")
     groupNames: {},          // noms de groupes personnalisés {clé: nom}
@@ -112,6 +115,56 @@
       if (value) localStorage.setItem(key, value); else localStorage.removeItem(key);
     } catch (_) { /* navigation privée */ }
     return '';
+  }
+
+  // ------------------------------------------------------------ profils
+  // Un profil = un abonnement (XTREAM_URL, XTREAM_URL_2…) avec ses playlists et ses appareils.
+  const multiProfile = () => state.profiles.length > 1;
+  const profileName = (id) => (state.profiles.find((p) => p.id === String(id)) || {}).name || `Abonnement ${id}`;
+  const playlistProfile = (p) => (p && p.provider) || '';
+  // Playlist du profil sélectionné ; une playlist « tous les abonnements » est visible dans chaque profil.
+  const inProfile = (p) => !multiProfile() || !playlistProfile(p) || playlistProfile(p) === state.profile;
+  const catalogProvider = () => (multiProfile() ? $('opt-provider').value : '');
+
+  function renderProfileBar() {
+    $('profile-bar').hidden = !multiProfile();
+    if (!multiProfile()) return;
+    $('profile-buttons').replaceChildren(...state.profiles.map((p) => h('button', {
+      type: 'button', class: 'view-btn', 'aria-pressed': String(p.id === state.profile), text: p.name,
+      onclick: () => switchProfile(p.id),
+    })));
+  }
+
+  function renderProviderSelect(value) {
+    const select = $('opt-provider');
+    $('opt-provider-row').hidden = !multiProfile();
+    const options = multiProfile()
+      ? [...state.profiles.map((p) => [p.id, p.name]), ['', 'Tous les abonnements (mélange)']]
+      : [[value || '', 'Abonnement principal']];
+    select.replaceChildren(...options.map(([id, name]) => h('option', { value: id, text: name })));
+    select.value = options.some(([id]) => id === (value || '')) ? (value || '') : options[0][0];
+  }
+
+  /** Catalogues filtrés sur l'abonnement de la playlist ouverte (tous si « mélange »). */
+  function reapplyCatalogs() {
+    for (const kind of KINDS) if (state.cat[kind].raw) applyCatalog(state.cat[kind].raw);
+  }
+
+  async function switchProfile(id) {
+    if (id === state.profile) return;
+    if (!(await confirmLeave())) return;
+    state.profile = id;
+    storage('xtream-m3u-profile', id);
+    renderProfileBar();
+    const sorted = [...state.playlists].sort((a, b) => collator.compare(a.name, b.name));
+    load(sorted.find((p) => playlistProfile(p) === id) || sorted.find(inProfile) || null);
+    renderPlaylists();
+    renderGuidePlaylists();
+    renderAccountPill();
+    if (state.view === 'devices') loadDevices();
+    if (state.view === 'guide') loadGuide();
+    if (state.view === 'catalog') renderProvider();
+    toast(`Profil « ${profileName(id)} »`);
   }
 
   async function request(path, method = 'GET', body) {
@@ -453,6 +506,7 @@
     data.failover = $('opt-failover').checked;
     data.failover_any_category = $('opt-failover-any').checked;
     data.hq_logos = $('opt-hq-logos').checked;
+    data.provider = $('opt-provider').value;
     data.hide_separators = $('opt-separators').checked;
     data.favorites_name = $('opt-fav-name').value.trim() || '★ Favoris';
     data.rules = state.rules.map((r) => ({ ...r }));
@@ -759,18 +813,23 @@
     const list = $('saved');
     list.replaceChildren();
     if (!state.playlists.length) {
-      list.append(h('li', { class: 'empty', text: 'Aucune playlist. Crée la première avec « + Nouvelle ».' }));
+      list.append(h('li', { class: 'empty', text: multiProfile()
+        ? `Aucune playlist dans le profil « ${profileName(state.profile)} ». Crée-la avec « + Nouvelle ».`
+        : 'Aucune playlist. Crée la première avec « + Nouvelle ».' }));
       return;
     }
-    const sorted = [...state.playlists].sort((a, b) => collator.compare(a.name, b.name));
+    const sorted = [...state.playlists].filter(inProfile).sort((a, b) => collator.compare(a.name, b.name));
     for (const p of sorted) {
       const parts = KINDS.filter((k) => state.cat[k].catalogLoaded && usesKind(p, k)).map((k) => noun(countFor(p, k), k));
       const count = parts.length ? ` · ${parts.join(' · ')}` : '';
       list.append(h('li', null, h('button', {
         type: 'button', class: 'playlist-item', 'aria-current': p.slug === state.editing ? 'true' : 'false',
         onclick: () => openPlaylist(p.slug),
-      }, h('span', { class: 'pl-name', text: p.name }), h('span', { class: 'pl-meta', text: `/p/${p.slug}.m3u${count}` }))));
+      }, h('span', { class: 'pl-name', text: p.name },
+        multiProfile() && !playlistProfile(p) ? h('span', { class: 'pl-tag', text: 'tous abonnements' }) : null),
+      h('span', { class: 'pl-meta', text: `/p/${p.slug}.m3u${count}` }))));
     }
+    if (!sorted.length) list.append(h('li', { class: 'empty', text: `Aucune playlist dans le profil « ${profileName(state.profile)} ». Crée-la avec « + Nouvelle ».` }));
   }
 
   function categoryStats() {
@@ -1459,7 +1518,7 @@
   function renderGuidePlaylists() {
     const select = $('guide-playlist');
     const current = select.value || state.editing || storage('xtream-m3u-guide') || '';
-    select.replaceChildren(...state.playlists.filter((p) => usesKind(p, 'live'))
+    select.replaceChildren(...state.playlists.filter((p) => usesKind(p, 'live') && inProfile(p))
       .map((p) => h('option', { value: p.slug, text: p.name, selected: p.slug === current })));
     if (!select.value && select.options.length) select.value = select.options[0].value;
   }
@@ -1651,6 +1710,8 @@
     $('opt-hq-logos').checked = !p || p.hq_logos !== false;
     $('opt-separators').checked = Boolean(p && p.hide_separators);
     $('opt-fav-name').value = (p && p.favorites_name) || '★ Favoris';
+    renderProviderSelect(p ? playlistProfile(p) : state.profile);
+    reapplyCatalogs();
     state.rules = p && p.rules ? p.rules.map((r) => ({ ...r })) : [];
     state.favorites = p && p.favorites ? [...p.favorites] : [];
     state.itemNames = p && p.item_names ? { ...p.item_names } : {};
@@ -1786,14 +1847,18 @@
   }
 
   function renderDevicePlaylistSelect(select, value) {
-    select.replaceChildren(h('option', { value: '', text: 'Tout le catalogue (sans séries en M3U)' }));
-    for (const p of [...state.playlists].sort((a, b) => collator.compare(a.name, b.name))) {
+    select.replaceChildren();
+    // Profils : un nouvel appareil est lié à une playlist (« tout le catalogue » mélangerait les abonnements).
+    if (!multiProfile()) select.append(h('option', { value: '', text: 'Tout le catalogue (sans séries en M3U)' }));
+    else if (!value && select.id !== 'device-playlist') select.append(h('option', { value: '', text: 'Tout le catalogue de tous les abonnements (déconseillé)' }));
+    for (const p of [...state.playlists].filter(inProfile).sort((a, b) => collator.compare(a.name, b.name))) {
       select.append(h('option', { value: p.slug, text: `${p.name} (/p/${p.slug}.m3u)` }));
     }
     if (value && !state.playlists.some((p) => p.slug === value)) {
       select.append(h('option', { value, text: `${value} (playlist supprimée !)` }));
     }
     select.value = value || '';
+    if (!select.value && select.options.length) select.value = select.options[0].value;
   }
 
   function deviceCard(d) {
@@ -1873,8 +1938,16 @@
         ? 'Les URL sans code (ou avec un code supprimé) sont refusées. Les liens générés reprennent le code de l\'appareil.'
         : 'Option désactivée : les playlists restent accessibles sans code sur ton réseau local. Les identifiants Xtream restent toujours nécessaires.';
     const list = $('devices-list');
-    list.replaceChildren(...devicesData.devices.map(deviceCard));
-    if (!devicesData.devices.length) list.append(h('p', { class: 'empty', text: 'Aucun appareil pour le moment. Ajoute ta première TV ci-dessus.' }));
+    // Profils : les appareils dont la playlist appartient au profil (sans playlist : profil principal).
+    const visible = devicesData.devices.filter((d) => {
+      if (!multiProfile()) return true;
+      const p = state.playlists.find((x) => x.slug === d.playlist);
+      return p ? inProfile(p) : state.profile === '1';
+    });
+    list.replaceChildren(...visible.map(deviceCard));
+    if (!visible.length) list.append(h('p', { class: 'empty', text: multiProfile()
+      ? `Aucun appareil dans le profil « ${profileName(state.profile)} ». Ajoute sa TV ci-dessus, liée à une de ses playlists.`
+      : 'Aucun appareil pour le moment. Ajoute ta première TV ci-dessus.' }));
   }
 
   // ------------------------------------------------------------- système
@@ -1917,7 +1990,7 @@
         h('span', { class: 'dot live-dot' }),
         h('span', { class: 'grow' },
           h('span', { class: 's-title', text: s.label || s.item_id }),
-          h('span', { class: 's-meta', text: `${KIND_LABEL[s.kind] || s.kind} · ${s.device ? `${s.device}${s.priority === 'high' ? ' (prioritaire)' : s.priority === 'low' ? ' (priorité basse)' : ''}` : `appareil ${s.client}`} · depuis ${formatDuration(s.seconds)} · ${formatBytes(s.bytes)}${s.switches ? ` · ${plural(s.switches, 'bascule', 'bascules')}` : ''}` })),
+          h('span', { class: 's-meta', text: `${KIND_LABEL[s.kind] || s.kind} · ${s.device ? `${s.device}${s.priority === 'high' ? ' (prioritaire)' : s.priority === 'low' ? ' (priorité basse)' : ''}` : `appareil ${s.client}`} · depuis ${formatDuration(s.seconds)} · ${formatBytes(s.bytes)}${s.switches ? ` · ${plural(s.switches, 'bascule', 'bascules')}` : ''}${multiProfile() ? ` · ${profileName(s.provider)}` : ''}` })),
         h('button', { type: 'button', class: 'btn small danger', text: 'Arrêter', onclick: async (event) => {
           event.target.disabled = true;
           try { await request(`/api/streams/${s.id}/stop`, 'POST'); toast('Lecture arrêtée'); } catch (error) { toast(error.message, 'error'); }
@@ -2049,9 +2122,12 @@
     const kind = catalog.kind || 'live';
     const target = state.cat[kind];
     ruleCache.clear();
-    target.categories = catalog.categories.map((cat) => ({ ...cat, _search: `${norm(cat.name)} #${cat.category_id}` }));
+    target.raw = catalog;
+    const provider = catalogProvider();
+    const keep = (x) => !provider || (x.profile || '1') === provider;
+    target.categories = catalog.categories.filter(keep).map((cat) => ({ ...cat, _search: `${norm(cat.name)} #${cat.category_id}` }));
     target.categoryNames = new Map(target.categories.map((cat) => [cat.category_id, cat.name]));
-    target.channels = catalog.channels.map((c) => ({ ...c, _search: norm(`${c.name} ${c.year || ''}`) }));
+    target.channels = catalog.channels.filter(keep).map((c) => ({ ...c, _search: norm(`${c.name} ${c.year || ''}`) }));
     target.channelById = new Map(target.channels.map((c) => [c.stream_id, c]));
     target.channelsByCat = new Map();
     for (const c of target.channels) {
@@ -2210,6 +2286,7 @@
       const status = await request('/api/status?account=1');
       renderAccountFacts(status);
       state.account = status.account;
+      state.accounts = status.providers || [];
       renderExpiry(state.account);
       renderAccountPill();
     } catch (_) { /* facultatif */ }
@@ -2218,7 +2295,9 @@
   /** Badge de l'abonnement. Connexions : le compteur du fournisseur n'est lu qu'à l'ouverture de la page
    *  (et il est souvent en retard) ; on prend le plus grand avec les lectures relayées par ce serveur. */
   function renderAccountPill() {
-    const a = state.account;
+    const a = multiProfile()
+      ? ((state.accounts.find((x) => String(x.index) === state.profile) || {}).account || null)
+      : state.account;
     if (!a) return;
     const parts = [];
     if (a.status) parts.push(a.status === 'Active' ? 'Abonnement actif' : `Abonnement : ${a.status}`);
@@ -2239,6 +2318,10 @@
     if (status.status === 'fulfilled') {
       state.status = status.value;
       $('version').textContent = `version ${state.status.version}`;
+      state.profiles = state.status.profiles || [];
+      const remembered = storage('xtream-m3u-profile');
+      state.profile = state.profiles.some((p) => p.id === remembered) ? remembered : '1';
+      renderProfileBar();
       if (state.status.token_required && !state.status.access_token) {
         $('token-card').hidden = false;
         $('token').value = storage('xtream-m3u-token');
@@ -2248,7 +2331,8 @@
     }
     if (playlists.status === 'fulfilled') state.playlists = playlists.value;
     else showError(playlists.reason.message);
-    load(state.playlists.length ? [...state.playlists].sort((a, b) => collator.compare(a.name, b.name))[0] : null);
+    const firstInProfile = [...state.playlists].sort((a, b) => collator.compare(a.name, b.name));
+    load(firstInProfile.find((p) => multiProfile() && playlistProfile(p) === state.profile) || firstInProfile.find(inProfile) || null);
     const fromHash = Object.keys(VIEWS).find((v) => VIEWS[v] === location.hash);
     if (fromHash && fromHash !== 'playlists') switchView(fromHash);
     loadStreams();
@@ -2269,6 +2353,7 @@
   $('opt-dedupe').addEventListener('change', () => { renderOptionsPill(); refresh(); });
   $('opt-failover').addEventListener('change', () => { renderOptionsPill(); refresh({ channels: false }); });
   $('opt-hq-logos').addEventListener('change', () => { renderOptionsPill(); refresh(); });
+  $('opt-provider').addEventListener('change', () => { reapplyCatalogs(); refresh(); });
   $('opt-failover-any').addEventListener('change', () => { renderOptionsPill(); refresh({ channels: false }); });
   $('opt-separators').addEventListener('change', () => { renderOptionsPill(); refresh(); });
   $('opt-fav-name').addEventListener('input', () => renderStats());

@@ -441,6 +441,12 @@ dialog .field { margin-bottom: 16px; }
 .card .hint code, .card .muted code { font-size: 11.5px; }
 
 /* ------------------------------------------------------------ streams */
+.profile-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 8px 24px; border-bottom: 1px solid var(--border); background: var(--bg-soft); }
+.profile-bar .profile-label { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--text-faint); }
+.profile-bar .views { background: var(--bg); }
+.profile-bar .hint { margin: 0; }
+@media (max-width: 640px) { .profile-bar { padding: 8px 16px; } .profile-bar .hint { display: none; } }
+.pl-tag { display: inline-block; margin-left: 6px; font-size: 11px; font-weight: 650; color: var(--text-faint); }
 .pill-btn { cursor: pointer; font: inherit; font-size: 12.5px; }
 .pill-btn:hover { background: var(--bg-hover); }
 .live-dot { background: var(--danger) !important; box-shadow: 0 0 0 3px var(--danger-soft); animation: pulse 1.6s infinite; }

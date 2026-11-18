@@ -10,6 +10,7 @@ Aucune vraie chaîne n'est diffusée (les flux renvoient quelques octets factice
 from __future__ import annotations
 
 import argparse
+from dataclasses import replace
 import logging
 import random
 import struct
@@ -20,7 +21,7 @@ import zlib
 from app import logos
 from app.custom import PlaylistStore
 from app.devices import DeviceStore
-from app.server import Config, XtreamAPI, make_epg, make_series, make_server, make_streams
+from app.server import Config, make_api, make_epg, make_series, make_server, make_streams
 from app.web import make_web_server
 from tests import fake_xtream
 
@@ -168,6 +169,8 @@ def main() -> None:
     parser.add_argument("--web-port", type=int, default=7778)
     parser.add_argument("--data", default="demo-data")
     parser.add_argument("--host", default="127.0.0.1")
+    parser.add_argument("--profiles", action="store_true",
+                        help="deux abonnements (profils « Moi » et « Sœur ») sur le même faux fournisseur")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     build_catalog(args.channels)
@@ -175,7 +178,10 @@ def main() -> None:
     provider, provider_url = fake_xtream.start_fake()
     config = Config(provider_url, fake_xtream.USERNAME, fake_xtream.PASSWORD, port=args.port,
                     web_port=args.web_port, data_dir=args.data)
-    api = XtreamAPI(config)
+    if args.profiles:
+        config = replace(config, provider_name="Moi",
+                         extra_providers=(("Sœur", provider_url, fake_xtream.USERNAME, fake_xtream.PASSWORD),))
+    api = make_api(config)
     store = PlaylistStore(args.data)
     epg = make_epg(config, api)
     series = make_series(config, api)

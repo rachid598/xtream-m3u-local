@@ -373,6 +373,7 @@ class WebHandler(BaseHTTPRequestHandler):
             "series_cache": self.series.stats() if self.series is not None else None,
             "epg_mode": self.config.epg_source,
             "logos": logos.current().status() if logos.current() else None,
+            "profiles": profiles(self.api, self.config),
         }
         # Le token des lecteurs n'est transmis que si l'interface est protégée par mot de passe.
         if self.config.access_token and self.config.web_password:
@@ -653,6 +654,12 @@ class WebHandler(BaseHTTPRequestHandler):
             return self.json(500, {"error": "Impossible de modifier /data"})
 
 
+def profiles(api, config) -> list[dict]:
+    """Profils = abonnements configurés (``XTREAM_URL``, ``XTREAM_URL_2``…), chacun avec son nom."""
+    names = getattr(api, "names", None) or [config.provider_name or "Mon abonnement"]
+    return [{"id": str(i), "name": name} for i, name in enumerate(names, start=1)]
+
+
 def catalog_payload(channels: list[dict], categories: dict[str, str], api: XtreamAPI | None = None,
                     kind: str = "live") -> dict:
     """Catalogue pour le navigateur : aucun identifiant fournisseur, toutes les catégories avec compteurs.
@@ -660,6 +667,7 @@ def catalog_payload(channels: list[dict], categories: dict[str, str], api: Xtrea
     Même structure pour le direct, les films et les séries (clé ``channels`` = éléments).
     """
     st = api.kind_state(kind) if api else None
+    multi = len(getattr(api, "apis", ())) > 1
     counts: Counter[str] = Counter()
     for channel in channels:
         for cid in channel["category_ids"]:
@@ -673,6 +681,8 @@ def catalog_payload(channels: list[dict], categories: dict[str, str], api: Xtrea
                  "source": info.get("source", "provider")}
         if info.get("provider"):
             entry["provider"] = info["provider"]
+        if multi:
+            entry["profile"] = api.provider_of(cid) if cid != "none" else "1"
         category_list.append(entry)
     channel_list = []
     library = logos.current() if kind == "live" else None
@@ -686,6 +696,8 @@ def catalog_payload(channels: list[dict], categories: dict[str, str], api: Xtrea
             "epg": bool(c["epg_id"]),
             "num": c["num"],
         }
+        if multi:
+            entry["profile"] = api.provider_of(c["stream_id"])
         hq = library.match(c["name"], categories.get(c["category_id"], "")) if library else None
         if hq:
             entry["logo_hq"] = f"/logo/{hq}.png"

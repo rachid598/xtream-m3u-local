@@ -116,9 +116,20 @@ Le rapprochement utilise le nom normalisé (sans pays, qualité ni accents : « 
 - `/p/<nom>.xml` : guide de la playlist (léger) ; `/epg.xml` ou **`/xmltv.php`** : guide de toutes les chaînes, complété pour les chaînes des playlists (au plus `EPG_API_MAX_CHANNELS`) ;
 - chaînes sans identifiant EPG fournisseur : `tvg-id="xtream-<id>"`.
 
-## Plusieurs abonnements
+## Plusieurs abonnements et profils (famille)
 
-Ajouter `XTREAM_URL_2`, `XTREAM_USERNAME_2`, `XTREAM_PASSWORD_2` (et `XTREAM_NAME_2`), jusqu'à `_9`. Les catalogues sont fusionnés (une catégorie de même nom forme un seul groupe dans les lecteurs) ; chaque flux est relayé vers le bon fournisseur, avec sa limite de connexions et son fuseau. Les identifiants des fournisseurs 2 à 9 sont décalés (`k × 10¹¹ + id`) pour rester numériques et uniques.
+Ajouter `XTREAM_URL_2`, `XTREAM_USERNAME_2`, `XTREAM_PASSWORD_2` (et `XTREAM_NAME_2`), jusqu'à `_9`.
+
+**Profils.** Dès qu'il y a deux abonnements, une barre « Profil » apparaît en haut de l'interface : un profil par abonnement, avec son nom (`XTREAM_NAME` pour le principal, `XTREAM_NAME_2`…), par exemple « Moi » et « Ma sœur ». Dans un profil :
+
+- les playlists créées n'utilisent **que son abonnement** : catalogue, catégories, recherche, versions de secours, limite de connexions — même une règle automatique ou une catégorie de même nom ne mélange jamais les deux ;
+- la liste des playlists, le Guide TV, les appareils et le badge d'abonnement (expiration, connexions) sont ceux du profil ;
+- un appareil est lié à une playlist du profil ; en mode Xtream, il voit l'abonnement de son profil (expiration, connexions) ;
+- option « Abonnement utilisé par cette playlist » (partie Options) : le profil, ou « Tous les abonnements (mélange) » pour tes propres playlists qui combinent les deux (secours d'un abonnement à l'autre). Les playlists créées avant les profils restent en « mélange » tant que tu ne changes pas cette option.
+
+Limite : le guide XMLTV (`xmltv.php`) vient du fournisseur principal ; les chaînes des autres abonnements sont complétées par l'API, chaîne par chaîne.
+
+Sans profils : Les catalogues sont fusionnés (une catégorie de même nom forme un seul groupe dans les lecteurs) ; chaque flux est relayé vers le bon fournisseur, avec sa limite de connexions et son fuseau. Les identifiants des fournisseurs 2 à 9 sont décalés (`k × 10¹¹ + id`) pour rester numériques et uniques.
 
 ## Adresses du port 7777
 

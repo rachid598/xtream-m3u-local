@@ -129,6 +129,42 @@ class MultiProviderTests(StackTestCase):
         self.assertIn(f"/series/{2 * OFFSET + 9000}.mp4", m3u)
         self.assertEqual(self.get(f"{self.base}/series/{2 * OFFSET + 9000}.mp4")[1], b"EPISODE")
 
+    def test_profiles_keep_subscriptions_apart(self):
+        status = json.loads(self.get(self.web_base + "/api/status")[1])
+        self.assertEqual(status["profiles"], [{"id": "1", "name": "A"}, {"id": "2", "name": "B"}])
+        catalog = json.loads(self.get(self.web_base + "/api/catalog")[1])
+        by_profile = {c["stream_id"]: c["profile"] for c in catalog["channels"]}
+        self.assertEqual((by_profile["42"], by_profile[str(2 * OFFSET + 42)]), ("1", "2"))
+        self.assertEqual({c["category_id"]: c["profile"] for c in catalog["categories"]}[str(2 * OFFSET + 1)], "2")
+        # Playlist de la sœur (profil 2) : même avec une catégorie de A cochée par erreur, rien de A.
+        status, _ = self.send(self.web_base + "/api/playlists", "POST",
+                              {"slug": "soeur", "name": "Sœur", "provider": "2",
+                               "category_ids": ["1", str(2 * OFFSET + 1)],
+                               "rules": [{"kind": "live", "match": "contains", "value": "actualit"}]})
+        self.assertEqual(status, 201)
+        data = self.get(self.base + "/p/soeur.m3u")[1].decode()
+        self.assertIn(f"/stream/{2 * OFFSET + 42}.ts", data)
+        self.assertNotIn("/stream/42.ts", data)
+        # Son appareil Xtream voit son abonnement à elle.
+        device = self.send(self.web_base + "/api/devices", "POST", {"name": "Sœur TV", "playlist": "soeur"})[1]
+        q = {"username": device["username"], "password": device["password"]}
+        live = json.loads(self.get(self.base + "/player_api.php?" + urlencode({**q, "action": "get_live_streams"}))[1])
+        self.assertTrue(live and all(c["stream_id"] >= 2 * OFFSET for c in live))
+        self.assertEqual(self.get(self.base + "/stream/42.ts?" + urlencode({"token": device["password"]}))[0], 404)
+        self.assertEqual(self.send(self.web_base + "/api/playlists", "POST",
+                                   {"slug": "x", "name": "X", "provider": "12"})[0], 400)
+
+    def test_https_server_info_behind_proxy(self):
+        self.create_playlist()
+        device = self.send(self.web_base + "/api/devices", "POST", {"name": "TV", "playlist": "mix"})[1]
+        from app.xtream_emu import XtreamEmulator
+        emu = self.proxy.RequestHandlerClass.emulator
+        self.assertIsInstance(emu, XtreamEmulator)
+        info = emu.account(device, "tv.example.org", "443", "https")["server_info"]
+        self.assertEqual((info["server_protocol"], info["https_port"], info["port"]), ("https", "443", "80"))
+        info = emu.account(device, "192.168.1.10", "7777")["server_info"]
+        self.assertEqual((info["server_protocol"], info["port"], info["https_port"]), ("http", "7777", ""))
+
     def test_xtream_emulation_numeric_ids(self):
         self.create_playlist()
         device = self.send(self.web_base + "/api/devices", "POST", {"name": "TV", "playlist": "mix"})[1]

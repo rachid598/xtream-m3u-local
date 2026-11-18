@@ -2,6 +2,18 @@
 
 Format inspiré de « Keep a Changelog ». Les versions suivent le versionnage sémantique.
 
+## [3.10.0] — 2026-11-18
+
+Demande : gérer chez soi l'abonnement et la playlist de sa sœur, sans tout mélanger.
+
+### Ajouté
+- **Profils** : avec plusieurs abonnements (`XTREAM_URL_2`…), barre « Profil » en haut de l'interface (un profil par abonnement, nommé par `XTREAM_NAME`, `XTREAM_NAME_2`…). Playlists, catalogue, Guide TV, appareils et badge d'abonnement filtrés par profil ; une playlist d'un profil n'utilise que son abonnement (chaînes, règles, secours, connexions). Option « Abonnement utilisé par cette playlist » (ou « Tous les abonnements » pour les playlists mixtes ; les playlists existantes le restent).
+- Serveur Xtream local : un appareil voit l'expiration et les connexions de l'abonnement de son profil.
+- Démo : `python -m tools.demo --profiles` ; test navigateur `tests/e2e_profiles.mjs`.
+
+### Corrigé
+- **Serveur Xtream derrière un reverse proxy HTTPS** : `server_info` annonçait toujours `http` et le port 80 ; avec `PUBLIC_BASE_URL=https://…`, les lecteurs reçoivent maintenant `server_protocol: https` et le bon `https_port`.
+
 ## [3.9.0] — 2026-11-18
 
 Suite de l'audit (issue n° 7) et de la demande « accès à distance pour la famille ».
