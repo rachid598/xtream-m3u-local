@@ -2005,6 +2005,16 @@
     loadAccount();
     loadHistory();
     loadProviders();
+    loadSettings();
+  }
+
+  async function loadSettings() {
+    let data;
+    try { data = await request('/api/settings'); } catch (_) { return; }
+    $('tailscale-local').checked = data.tailscale_local;
+    $('tailscale-local').disabled = !data.editable;
+    $('remote-hint').textContent = `Cette page est ouverte depuis ${data.client_ip}${data.client_tailscale ? ' (Tailscale)' : ''}.`
+      + (data.remote_access ? ' Accès distant avec code d\'appareil : activé (REMOTE_ACCESS).' : '');
   }
 
   // ---------------------------------------------------------- abonnements
@@ -2426,6 +2436,22 @@
   $('opt-failover').addEventListener('change', () => { renderOptionsPill(); refresh({ channels: false }); });
   $('opt-hq-logos').addEventListener('change', () => { renderOptionsPill(); refresh(); });
   $('opt-provider').addEventListener('change', () => { reapplyCatalogs(); refresh(); });
+  $('tailscale-local').addEventListener('change', async (event) => {
+    const on = event.target.checked;
+    if (on && !(await ask({ title: 'Tailscale = mon réseau local ?', okLabel: 'Activer',
+      text: 'Tous les appareils de ton réseau Tailscale auront le même accès que chez toi (interface Web et playlists, sans code). À éviter si tu as partagé ton serveur Tailscale avec d\'autres personnes : pour elles, utilise plutôt un code d\'appareil.' }))) {
+      event.target.checked = false;
+      return;
+    }
+    try {
+      await request('/api/settings', 'PUT', { tailscale_local: on });
+      toast(on ? 'Tailscale traité comme ton réseau local' : 'Tailscale traité comme un accès distant');
+    } catch (error) {
+      event.target.checked = !on;
+      toast(error.message, 'error');
+    }
+    loadSettings();
+  });
   $('provider-form').addEventListener('submit', async (event) => {
     event.preventDefault();
     const button = $('provider-add');

@@ -163,3 +163,33 @@ class RemoteDiagnosticTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TailscaleSettingTests(StackTestCase):
+    """Case « Tailscale = mon réseau local » (Système → Accès à distance)."""
+    overrides = {"trusted_proxies": PROXY}
+
+    def setUp(self):
+        super().setUp()
+        from app import settings
+        self.settings = settings
+        settings.install(settings.Settings(self.tmp.name))
+        self.create({"slug": "salon", "name": "Salon", "category_ids": ["1"]})
+
+    def tearDown(self):
+        self.settings.install(None)
+        super().tearDown()
+
+    def test_toggle(self):
+        tailscale = {"X-Forwarded-For": "100.68.27.125"}
+        self.assertEqual(self.get(self.stack.web_base + "/api/status", tailscale)[0], 403)
+        self.assertEqual(self.get(self.stack.proxy_base + "/p/salon.m3u", tailscale)[0], 403)
+        status, data = self.send(self.stack.web_base + "/api/settings", "PUT", {"tailscale_local": True, "inconnu": 1})
+        self.assertEqual((status, data["tailscale_local"], "inconnu" in data), (200, True, False))
+        self.assertEqual(self.get(self.stack.web_base + "/api/status", tailscale)[0], 200)
+        self.assertEqual(self.get(self.stack.proxy_base + "/p/salon.m3u", tailscale)[0], 200)
+        info = json.loads(self.get(self.stack.web_base + "/api/settings", tailscale)[1])
+        self.assertEqual((info["client_ip"], info["client_tailscale"]), ("100.68.27.125", True))
+        self.assertEqual(self.get(self.stack.web_base + "/api/status", REMOTE)[0], 403)  # Internet : inchangé
+        self.send(self.stack.web_base + "/api/settings", "PUT", {"tailscale_local": False})
+        self.assertEqual(self.get(self.stack.web_base + "/api/status", tailscale)[0], 403)

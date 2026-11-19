@@ -27,7 +27,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, quote, urlencode, urlsplit
 from urllib.request import Request, urlopen
 
-from . import __version__, access, logos, provider_store
+from . import __version__, access, logos, provider_store, settings
 from .httputil import accepts_gzip, encode_body, etag_matches, etag_of, gzip_stream
 from .builder import FAVORITES_GROUP, GROUP_PREFIX, add_favorites, display_logo, select_items
 from .devices import DeviceStore
@@ -1733,7 +1733,7 @@ class Handler(BaseHTTPRequestHandler):
         refresh = qs.get("refresh", [""])[0] == "1"
         self.request_device = None
         self.client_ip, self.remote = access.client_address(self.client_address[0], self.headers,
-                                                            self.config.trusted_proxies, self.config.local_networks)
+                                                            self.config.trusted_proxies, settings.local_networks(self.config))
         if path == "/health":
             return self.response(HTTPStatus.OK, b"OK\n", "text/plain; charset=utf-8", head_only=head_only)
         if self.remote:
@@ -2097,6 +2097,7 @@ def main() -> None:
     from .web import make_web_server
     providers = provider_store.ProviderStore(config.data_dir)
     provider_store.install(providers)
+    settings.install(settings.Settings(config.data_dir))  # réglages de l'interface (ex. Tailscale = réseau local)
     from .providers import ApiHolder
     api = ApiHolder(make_api(config, providers))  # remplaçable à chaud (abonnements de l'interface)
     store = PlaylistStore(config.data_dir)

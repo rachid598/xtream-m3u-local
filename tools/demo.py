@@ -186,6 +186,8 @@ def main() -> None:
     from app.providers import ApiHolder
     providers = provider_store.ProviderStore(args.data)
     provider_store.install(providers)
+    from app import settings
+    settings.install(settings.Settings(args.data))
     api = ApiHolder(make_api(config, providers))  # abonnements ajoutables depuis l'interface
     store = PlaylistStore(args.data)
     epg = make_epg(config, api)

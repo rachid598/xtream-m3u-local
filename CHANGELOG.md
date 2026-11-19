@@ -2,6 +2,11 @@
 
 Format inspiré de « Keep a Changelog ». Les versions suivent le versionnage sémantique.
 
+## [3.14.0] — 2026-11-19
+
+### Ajouté
+- **Système → « Accès à distance »** : case « Tailscale = mon réseau local » (100.64.0.0/10 et fd7a:115c:a1e0::/48), sans toucher à la configuration du conteneur ; confirmation à l'activation ; l'adresse d'où la page est ouverte est affichée. Réglage gardé dans `/data/settings.json`.
+
 ## [3.13.0] — 2026-11-19
 
 Journaux réels en 3.12.0 : même à 1-2 appels par seconde, le fournisseur bloque (429) au bout d'environ une minute et refuse alors aussi les chaînes.

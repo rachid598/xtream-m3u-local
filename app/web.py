@@ -11,7 +11,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
-from . import __version__, access, logos, provider_store
+from . import __version__, access, logos, provider_store, settings
 from .httputil import encode_body
 from .custom import InvalidPlaylist, PlaylistStore, validate_playlist
 from .epg import EpgCache
@@ -120,7 +120,7 @@ class WebHandler(BaseHTTPRequestHandler):
 
     def check_auth(self) -> bool:
         ip, remote = access.client_address(self.client_address[0], self.headers, self.config.trusted_proxies,
-                                           self.config.local_networks)
+                                           settings.local_networks(self.config))
         if remote:
             # L'interface de gestion reste sur le réseau local, sauf WEB_REMOTE=true (mot de passe obligatoire).
             if not self.config.web_remote:
@@ -197,6 +197,8 @@ class WebHandler(BaseHTTPRequestHandler):
             return self.devices_status()
         if path == "/api/providers":
             return self.json(200, self.providers_status())
+        if path == "/api/settings":
+            return self.json(200, self.settings_status())
         if path == "/api/backup":
             return self.backup()
         if path == "/api/epg":
@@ -210,6 +212,16 @@ class WebHandler(BaseHTTPRequestHandler):
                 return self.json(502, {"error": "Épisodes indisponibles (get_series_info)"})
             return self.json(200, {"series_id": series_match.group(1), "episodes": episodes})
         return self.json(404, {"error": "Route introuvable"})
+
+    # ------------------------------------------------------------ réglages
+    def settings_status(self) -> dict:
+        store = settings.current()
+        values = store.get() if store is not None else dict(settings.DEFAULTS)
+        ip, remote = access.client_address(self.client_address[0], self.headers, self.config.trusted_proxies,
+                                           settings.local_networks(self.config))
+        tailscale = any(access._in(access._ip(ip), [n]) for n in settings.TAILSCALE)
+        return {**values, "editable": store is not None, "client_ip": ip, "client_tailscale": tailscale,
+                "remote_access": self.config.remote_access}
 
     # ---------------------------------------------------------- abonnements
     def providers_editable(self) -> bool:
@@ -557,6 +569,18 @@ class WebHandler(BaseHTTPRequestHandler):
         provider = PROVIDER_API.fullmatch(urlsplit(self.path).path)
         if provider:
             return self.provider_write("PUT", int(provider.group(1)))
+        if urlsplit(self.path).path == "/api/settings":
+            body = self.read_payload()
+            if body is None:
+                return
+            store = settings.current()
+            if store is None:
+                return self.json(409, {"error": "Réglages non modifiables dans ce mode de démarrage"})
+            try:
+                store.update(body)
+            except OSError:
+                return self.json(500, {"error": "Impossible d'enregistrer /data/settings.json"})
+            return self.json(200, self.settings_status())
         match = SLUG_API.fullmatch(urlsplit(self.path).path)
         if not match:
             return self.json(404, {"error": "Route introuvable"})

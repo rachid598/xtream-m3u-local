@@ -215,7 +215,7 @@ Fermé par défaut : toute connexion qui ne vient pas du réseau local (10.x, 17
 - l'interface Web (7778) reste réservée au réseau local, sauf `WEB_REMOTE=true` (exige `WEB_PASSWORD`) — déconseillé ;
 - le diagnostic (section « Accès distant ») signale ce qui manque : appareils sans playlist, adresse publique sans https, proxy non déclaré.
 
-**Le plus simple et le plus sûr : Tailscale.** Application Tailscale sur Unraid et sur la TV / le téléphone de chaque personne invitée ; rien n'est publié sur Internet. Adresse à donner : `http://<adresse Tailscale du serveur>:7777`, avec `REMOTE_ACCESS=true`. Si ton réseau Tailscale ne contient que tes propres appareils (gestion à distance de ton serveur), `LOCAL_NETWORKS=100.64.0.0/10` le fait considérer comme ton réseau local, interface Web comprise.
+**Le plus simple et le plus sûr : Tailscale.** Application Tailscale sur Unraid et sur la TV / le téléphone de chaque personne invitée ; rien n'est publié sur Internet. Adresse à donner : `http://<adresse Tailscale du serveur>:7777`, avec `REMOTE_ACCESS=true`. Si ton réseau Tailscale ne contient que tes propres appareils (gestion à distance de ton serveur), coche **Système → Accès à distance → « Tailscale = mon réseau local »** : ils ont alors le même accès que chez toi, interface Web comprise, sans code. Le réglage est gardé dans `/data/settings.json`. Équivalent dans la configuration du conteneur : `LOCAL_NETWORKS=100.64.0.0/10`. Pour toute personne à qui tu as partagé ton serveur Tailscale, laisse plutôt la case décochée et donne-lui un code d'appareil.
 
 **Avec un nom de domaine et Traefik** (ou Nginx Proxy Manager) : n'expose **que le port 7777**, en HTTPS, et seulement les chemins des lecteurs. Exemple d'étiquettes Docker pour Traefik :
 

@@ -471,6 +471,16 @@
       <div class="card-head"><h2>Abonnement</h2><span class="hint" id="sys-version"></span></div>
       <dl class="facts" id="account-facts"><dt>État</dt><dd>Chargement…</dd></dl>
     </section>
+    <section class="card" id="remote-card">
+      <div class="card-head">
+        <div>
+          <h2>Accès à distance</h2>
+          <p class="muted small">Par défaut, seul ton réseau local (box, Wi-Fi) a accès à ce serveur.</p>
+        </div>
+      </div>
+      <label class="check-row"><input type="checkbox" id="tailscale-local"> <span><strong>Tailscale = mon réseau local</strong> : tes appareils connectés à Tailscale (téléphone, ordinateur, TV chez quelqu'un d'autre) ont le même accès que chez toi, interface Web comprise, sans code supplémentaire. À n'activer que si ton réseau Tailscale ne contient que tes propres appareils.</span></label>
+      <p class="hint" id="remote-hint"></p>
+    </section>
     <section class="card" id="providers-card">
       <div class="card-head">
         <div>
