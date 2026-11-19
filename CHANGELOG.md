@@ -2,6 +2,17 @@
 
 Format inspiré de « Keep a Changelog ». Les versions suivent le versionnage sémantique.
 
+## [3.12.0] — 2026-11-19
+
+Journaux réels : en ouvrant l'interface, des milliers d'appels « guide par chaîne » en quelques secondes → « 429 » du fournisseur (pause 60 s) et ~2 500 lignes d'avertissement ; cause probable du noir de 30 s au démarrage de TiviMate (guide et flux demandés en même temps).
+
+### Ajouté
+- **Guides EPG externes** (`EPG_EXTRA_URLS`, `.xml` / `.xml.gz` / `.zip`) : utilisés après le guide du fournisseur et **avant** l'API ; chaîne trouvée par identifiant ou par nom ; programmes renommés vers les identifiants de la playlist. Diagnostic par guide (chaînes, couverture des playlists).
+
+### Corrigé
+- **Appels « guide par chaîne » freinés** : 2 par seconde au maximum (`EPG_API_PER_SECOND`), en attente 20 s quand une lecture démarre (priorité à la vidéo), au plus `EPG_API_MAX_CHANNELS` par playlist, journal résumé (une ligne par minute au lieu d'une par chaîne).
+- Avec `EPG_SOURCE=xmltv` et des guides externes, les chaînes sans identifiant EPG reçoivent `tvg-id="xtream-<id>"` pour que leurs programmes externes s'affichent.
+
 ## [3.11.0] — 2026-11-19
 
 ### Ajouté

@@ -177,7 +177,7 @@ def main() -> None:
     fake_xtream.FakeXtream.serve_any = True
     provider, provider_url = fake_xtream.start_fake()
     config = Config(provider_url, fake_xtream.USERNAME, fake_xtream.PASSWORD, port=args.port,
-                    web_port=args.web_port, data_dir=args.data)
+                    web_port=args.web_port, data_dir=args.data, epg_api_per_second=0)  # faux fournisseur : pas de limite
     if args.profiles:
         config = replace(config, provider_name="Moi",
                          extra_providers=(("Sœur", provider_url, fake_xtream.USERNAME, fake_xtream.PASSWORD),))

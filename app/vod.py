@@ -189,8 +189,20 @@ class KeyedCache:
 
     def __init__(self, fetch: Callable[[str], object], data_dir: str, *, max_age: int = 24 * 3600,
                  workers: int = 4, normalize: Callable[[object], list[dict]] = None,
-                 subdir: str = "series", label: str = "série"):
+                 subdir: str = "series", label: str = "série", min_interval: float = 0.0,
+                 summarize: bool = False):
         self._fetch = fetch
+        # Débit limité : au plus un appel au fournisseur toutes les ``min_interval`` secondes (tous threads
+        # confondus) — des milliers d'appels d'un coup déclenchent son « 429 trop de requêtes ».
+        self.min_interval = max(0.0, min_interval)
+        self._rate_lock = threading.Lock()
+        self._next_slot = 0.0
+        # Priorité à la vidéo : ``defer()`` renvoie le nombre de secondes à attendre (flux qui démarre).
+        self.defer: Callable[[], float] | None = None
+        # Journal résumé (une ligne par minute) au lieu d'une ligne par élément en échec.
+        self._summarize = summarize
+        self._quiet_failures = 0
+        self._last_summary = 0.0
         self._normalize = normalize or normalize_episodes
         self._label = label
         self.directory = Path(data_dir) / "cache" / subdir
@@ -233,15 +245,45 @@ class KeyedCache:
             LOG.warning("Cache des séries non inscriptible")
 
     # ------------------------------------------------------- récupération
+    def _wait_turn(self) -> None:
+        waited = 0.0
+        while self.defer is not None and waited < 30:
+            pause = min(5.0, max(0.0, float(self.defer() or 0)))
+            if not pause:
+                break
+            time.sleep(pause)
+            waited += pause
+        if self.min_interval:
+            with self._rate_lock:
+                now = time.monotonic()
+                slot = max(now, self._next_slot)
+                self._next_slot = slot + self.min_interval
+            if slot > now:
+                time.sleep(slot - now)
+
+    def _note_failure(self, sid: str, exc: Exception) -> None:
+        if not self._summarize:
+            LOG.warning("Données %s %s indisponibles (%s)", self._label, sid, type(exc).__name__)
+            return
+        with self._lock:
+            self._quiet_failures += 1
+            now = time.monotonic()
+            if now - self._last_summary < 60:
+                return
+            count, self._quiet_failures, self._last_summary = self._quiet_failures, 0, now
+        LOG.warning("Données %s indisponibles pour %d élément(s) (%s) ; nouvel essai dans 5 min",
+                    self._label, count, type(exc).__name__)
+
     def _task(self, sid: str) -> list[dict] | None:
         try:
+            self._wait_turn()
             episodes = self._normalize(self._fetch(sid))
             self._store(sid, episodes)
             with self._lock:
                 self._failed.pop(sid, None)
             return episodes
         except Exception as exc:  # erreur réseau/API : on garde l'ancienne copie éventuelle
-            LOG.warning("Données %s %s indisponibles (%s)", self._label, sid, type(exc).__name__)
+            self._note_failure(sid, exc)
             with self._lock:
                 self._failed[sid] = time.monotonic()
             return None

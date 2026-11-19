@@ -124,6 +124,14 @@ def _trusted_proxies() -> tuple:
         raise ValueError("TRUSTED_PROXIES : adresses ou réseaux attendus, ex. 172.18.0.0/16,192.168.1.2") from None
 
 
+def _epg_extra_urls() -> tuple:
+    urls = tuple(u for u in re.split(r"[\s,;]+", os.environ.get("EPG_EXTRA_URLS", "").strip()) if u)
+    for url in urls:
+        if urlsplit(url).scheme not in ("http", "https") or not urlsplit(url).netloc:
+            raise ValueError("EPG_EXTRA_URLS : adresses http(s) de guides XMLTV (.xml, .xml.gz ou .zip) attendues")
+    return urls[:5]
+
+
 def _local_networks() -> tuple:
     try:
         return access.parse_networks(os.environ.get("LOCAL_NETWORKS", ""))
@@ -208,6 +216,7 @@ class Config:
     epg_url: str = ""
     epg_fetch_seconds: int = 15
     epg_api_max_channels: int = 1000
+    epg_api_per_second: int = 2      # EPG_API_PER_SECOND : appels « guide par chaîne » par seconde (0 = sans limite)
     max_connections: int = -1        # -1 = auto (valeur de l'abonnement), 0 = illimité
     stream_takeover: bool = True
     failover_stall_seconds: float = 6.0   # bascule automatique : flux muet pendant N s → version suivante
@@ -221,7 +230,14 @@ class Config:
     remote_access: bool = False      # REMOTE_ACCESS : accepter les connexions hors du réseau local (code obligatoire)
     trusted_proxies: tuple = ()      # TRUSTED_PROXIES : reverse proxys dont on lit X-Forwarded-For
     web_remote: bool = False         # WEB_REMOTE : interface Web joignable hors du réseau local (mot de passe exigé)
+    epg_extra_urls: tuple = ()       # EPG_EXTRA_URLS : guides XMLTV externes (avant les appels API chaîne par chaîne)
     local_networks: tuple = ()       # LOCAL_NETWORKS : réseaux en plus considérés locaux (ex. Tailscale 100.64.0.0/10)
+
+    @property
+    def guide_ids(self) -> bool:
+        """Les chaînes sans identifiant EPG reçoivent ``xtream-<id>`` : le guide de la playlist peut les compléter
+        (API du fournisseur ou guide externe)."""
+        return self.enable_epg and (self.epg_source != "xmltv" or bool(self.epg_extra_urls))
 
     @property
     def credentials(self) -> list[tuple[str, str]]:
@@ -270,6 +286,7 @@ class Config:
             epg_url=_epg_url(),
             epg_fetch_seconds=max(0, _env_int("EPG_FETCH_SECONDS", 15)),
             epg_api_max_channels=max(0, _env_int("EPG_API_MAX_CHANNELS", 1000)),
+            epg_api_per_second=max(0, min(50, _env_int("EPG_API_PER_SECOND", 2))),
             max_connections=_max_connections(),
             stream_takeover=_env_bool("STREAM_TAKEOVER", True),
             failover_stall_seconds=float(min(60, max(2, _env_int("FAILOVER_STALL_SECONDS", 6)))),
@@ -284,6 +301,7 @@ class Config:
             trusted_proxies=_trusted_proxies(),
             web_remote=_web_remote(),
             local_networks=_local_networks(),
+            epg_extra_urls=_epg_extra_urls(),
         )
 
 
@@ -1439,7 +1457,7 @@ class Handler(BaseHTTPRequestHandler):
         content = playlist(self.config, entries, groups, self.public_base(),
                            epg_path=epg_path if has_live else None,
                            group_names=saved.get("group_names"),
-                           api_epg_ids=self.config.enable_epg and self.config.epg_source != "xmltv",
+                           api_epg_ids=self.config.guide_ids,
                            live_format=live_format, catchup=saved.get("catchup", True),
                            token=self.request_token, failover=bool(saved.get("failover")))
         return content, incomplete
@@ -1479,7 +1497,7 @@ class Handler(BaseHTTPRequestHandler):
                 data = emu.categories(device, kind_of[action])
             elif action in kind_of:
                 data = emu.items(device, kind_of[action], arg("category_id") or None,
-                                 api_epg_ids=self.config.enable_epg and self.config.epg_source != "xmltv",
+                                 api_epg_ids=self.config.guide_ids,
                                  base=self.public_base())
             elif action == "get_series_info" and arg("series_id").isdigit():
                 data = (emu.passthrough("get_series_info", series_id=arg("series_id"))
@@ -1762,7 +1780,7 @@ class Handler(BaseHTTPRequestHandler):
                 entries = order_entries(entries, groups)
                 content = playlist(self.config, entries, groups, base, mode=mode, fmt=fmt,
                                    epg_path="/epg.xml" if "live" in kinds else None,
-                                   api_epg_ids=self.config.enable_epg and self.config.epg_source != "xmltv",
+                                   api_epg_ids=self.config.guide_ids,
                                    live_format="hls" if fmt == "m3u8" else "ts", token=self.request_token,
                                    direct_url=self.api.direct_url)
             except ValueError as exc:
@@ -1875,9 +1893,17 @@ def make_epg(config: Config, api: XtreamAPI) -> EpgCache:
     epg = EpgCache(url_factory, config.data_dir, max_age=config.epg_cache_hours * 3600,
                    user_agent=config.user_agent)
     epg.mode = config.epg_source
+    epg.api_max = config.epg_api_max_channels
+    # Guides externes (gratuits, publics) : essayés avant les appels API chaîne par chaîne.
+    epg.extras = [EpgCache((lambda u=url: u), str(Path(config.data_dir) / "epg-extra" / hashlib.sha256(url.encode()).hexdigest()[:10]),
+                           max_age=config.epg_cache_hours * 3600) for url in config.epg_extra_urls]
     if config.epg_source != "xmltv":
+        # Débit limité (2 appels par seconde) et journal résumé : des milliers d'appels d'un coup
+        # déclenchaient le « 429 trop de requêtes » du fournisseur, et le flux vidéo était refusé avec.
         epg.api_cache = KeyedCache(lambda sid: api.simple_epg(sid), config.data_dir, max_age=6 * 3600,
-                                   normalize=normalize_listings, subdir="epg", label="EPG de la chaîne")
+                                   normalize=normalize_listings, subdir="epg", label="EPG de la chaîne",
+                                   min_interval=1 / config.epg_api_per_second if config.epg_api_per_second else 0,
+                                   summarize=True)
     return epg
 
 
@@ -1972,6 +1998,8 @@ def make_server(config: Config, *, host: str = "0.0.0.0", port: int | None = Non
     streams = streams or make_streams(config, api)
     devices = devices if devices is not None else DeviceStore(config.data_dir)
     emulator = XtreamEmulator(api, store, config, streams, redact=lambda value: redact(value, config))
+    if getattr(epg, "api_cache", None) is not None:
+        epg.api_cache.defer = streams.start_delay  # priorité au flux vidéo qui démarre
     handler = type("ConfiguredHandler", (Handler,),
                    {"api": api, "config": config, "store": store, "epg": epg, "series": series,
                     "streams": streams, "hls": hls or HlsRegistry(), "devices": devices, "emulator": emulator,

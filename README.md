@@ -116,6 +116,11 @@ Le rapprochement utilise le nom normalisé (sans pays, qualité ni accents : « 
 - `/p/<nom>.xml` : guide de la playlist (léger) ; `/epg.xml` ou **`/xmltv.php`** : guide de toutes les chaînes, complété pour les chaînes des playlists (au plus `EPG_API_MAX_CHANNELS`) ;
 - chaînes sans identifiant EPG fournisseur : `tvg-id="xtream-<id>"`.
 
+**Ordre de remplissage du guide d'une playlist** : 1) guide XMLTV du fournisseur ; 2) **guides externes** (`EPG_EXTRA_URLS`) ; 3) API du fournisseur, chaîne par chaîne, pour ce qui manque encore.
+
+- **Guides externes** : `EPG_EXTRA_URLS` = jusqu'à 5 adresses de guides XMLTV publics (`.xml`, `.xml.gz` ou `.zip`), séparées par des virgules. Une chaîne y est trouvée par son identifiant EPG, sinon **par son nom** (« FR: TF1 FHD » = « TF1 »). Ses programmes sont repris sous l'identifiant de la playlist, et il n'y a plus d'appel au fournisseur pour elle. Mise à jour comme le guide principal (`EPG_CACHE_HOURS`). Le diagnostic indique pour chaque guide le nombre de chaînes et combien de chaînes de tes playlists il couvre. Exemples à tester, sans garantie qu'ils soient toujours en ligne : `https://epgshare01.online/epgshare01/epg_ripper_FR1.xml.gz` (France ; d'autres pays dans le même dossier) et les fichiers de [xmltvfr.fr](https://xmltvfr.fr/).
+- **Appels à l'API freinés** : 2 par seconde au maximum (`EPG_API_PER_SECOND`). Ils sont mis en attente pendant 20 s quand une lecture démarre (priorité à la vidéo, le fournisseur refusait sinon le flux pendant sa pause « 429 »). Au plus `EPG_API_MAX_CHANNELS` chaînes par playlist, dans l'ordre de la playlist. En cas d'échec, une seule ligne de journal par minute, et pas de nouvel essai pour une chaîne avant 5 min.
+
 ## Plusieurs abonnements et profils (famille)
 
 Ajouter `XTREAM_URL_2`, `XTREAM_USERNAME_2`, `XTREAM_PASSWORD_2` (et `XTREAM_NAME_2`), jusqu'à `_9`.
@@ -172,6 +177,8 @@ Sans profils : Les catalogues sont fusionnés (une catégorie de même nom forme
 | `LOGO_SOURCE` | iptv-org | Dossier `data` de la base iptv-org (`channels.csv`, `logos.csv`), pour un miroir |
 | `REMOTE_ACCESS` | `false` | Accepter les connexions hors du réseau local sur 7777 (code d'appareil obligatoire, voir « Accès distant ») |
 | `TRUSTED_PROXIES` | vide | Reverse proxys dont l'en-tête `X-Forwarded-For` est lu, ex. `172.18.0.0/16` |
+| `EPG_API_PER_SECOND` | `2` | Appels « guide par chaîne » envoyés au fournisseur par seconde au maximum (`0` = sans limite, déconseillé) |
+| `EPG_EXTRA_URLS` | vide | Guides XMLTV externes (`.xml`, `.xml.gz`, `.zip`, jusqu'à 5, séparés par des virgules), utilisés avant les appels API chaîne par chaîne |
 | `LOCAL_NETWORKS` | vide | Réseaux considérés comme le réseau local en plus de 10.x / 172.16-31.x / 192.168.x, ex. `100.64.0.0/10` pour Tailscale (tes appareils Tailscale n'ont alors besoin ni de `REMOTE_ACCESS` ni de code) |
 | `WEB_REMOTE` | `false` | Interface Web joignable hors du réseau local (exige `WEB_PASSWORD`) — déconseillé |
 | `PROVIDER_TIMEZONE` | auto | Fuseau du serveur Xtream pour le replay (ex. `Europe/Paris`) |

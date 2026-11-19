@@ -246,6 +246,7 @@ def run(api, epg, series, streams, store, config, devices=None) -> list[dict]:
         xmltv_result["status"] = "warn"
         xmltv_result["detail"] += " ; le guide est construit chaîne par chaîne via l'API (mode auto)"
     results.extend(r for r in (xmltv_result, api_result) if r)
+    results.extend(extra_guides_check(epg, pool))
 
     # 4. Flux -----------------------------------------------------------------------------
     busy = streams is not None and (streams.busy() if hasattr(streams, "busy") else streams.count()) > 0
@@ -347,3 +348,29 @@ def remote_check(config, devices) -> dict:
     if problems:
         return _result("remote", label, "warn", base + " À vérifier : " + " ; ".join(problems) + ".")
     return _result("remote", label, "ok", base + web)
+
+
+def extra_guides_check(epg, pool: list[dict]) -> list[dict]:
+    """Guides externes (EPG_EXTRA_URLS) : téléchargés ? combien de chaînes des playlists trouvées ?"""
+    from urllib.parse import urlsplit
+    from .builder import match_name
+    from .epg import EpgUnavailable, squash_name
+    results = []
+    for number, extra in enumerate(getattr(epg, "extras", None) or [], start=1):
+        host = urlsplit(extra._url_factory()).netloc
+        label = f"Guide externe {number} ({host})"
+        started = time.monotonic()
+        try:
+            extra.ensure()
+            counts, names = extra.index(), extra.names()
+        except EpgUnavailable as exc:
+            results.append(_result(f"epg-extra-{number}", label, "error", str(exc), int((time.monotonic() - started) * 1000)))
+            continue
+        ms = int((time.monotonic() - started) * 1000)
+        found = sum(1 for c in pool
+                    if counts.get((c.get("epg_id") or "").strip().lower(), 0) > 0
+                    or counts.get(names.get(squash_name(match_name(c["name"])), ""), 0) > 0)
+        detail = (f"{len(counts)} chaînes, {sum(counts.values())} programmes"
+                  + (f" ; {found}/{len(pool)} chaînes de tes playlists y sont trouvées" if pool else ""))
+        results.append(_result(f"epg-extra-{number}", label, "ok" if found or not pool else "warn", detail, ms))
+    return results

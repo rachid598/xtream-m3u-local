@@ -24,6 +24,7 @@ import tempfile
 import threading
 import time
 import xml.etree.ElementTree as ET
+import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
@@ -178,7 +179,18 @@ class EpgCache:
                 raise EpgUnavailable("Guide EPG du fournisseur inaccessible") from None
             with open(raw_tmp, "rb") as f:
                 magic = f.read(2)
-            if magic == b"\x1f\x8b":
+            if magic == b"PK":  # archive .zip (certains guides externes) : premier fichier .xml
+                fd2, final_tmp = tempfile.mkstemp(prefix=".xmltv-", suffix=".tmp", dir=self.directory)
+                try:
+                    with zipfile.ZipFile(raw_tmp) as archive, os.fdopen(fd2, "wb") as dst:
+                        member = next((n for n in archive.namelist() if n.lower().endswith(".xml")), None)
+                        if member is None:
+                            raise EpgUnavailable("Archive EPG sans fichier .xml")
+                        with archive.open(member) as src:
+                            shutil.copyfileobj(src, dst, 256 * 1024)
+                except (OSError, zipfile.BadZipFile) as exc:
+                    raise EpgUnavailable("Archive EPG illisible") from exc
+            elif magic == b"\x1f\x8b":
                 fd2, final_tmp = tempfile.mkstemp(prefix=".xmltv-", suffix=".tmp", dir=self.directory)
                 try:
                     with gzip.open(raw_tmp, "rb") as src, os.fdopen(fd2, "wb") as dst:
@@ -274,6 +286,32 @@ class EpgCache:
             pass
         return counts
 
+    def names(self) -> dict[str, str]:
+        """``{nom de chaîne normalisé: identifiant}`` du XMLTV en cache (rapprochement par nom, guides externes)."""
+        key = self._source_key()
+        if key is None:
+            return {}
+        cached = getattr(self, "_names", None)
+        if cached and cached[0] == key:
+            return cached[1]
+        from .builder import match_name
+        result: dict[str, str] = {}
+        try:
+            for _, elem in ET.iterparse(self.source, events=("end",)):
+                if elem.tag == "channel":
+                    cid = elem.get("id", "").strip().lower()
+                    for name in elem.findall("display-name"):
+                        core = squash_name(match_name(name.text or ""))
+                        if cid and core and core not in result:
+                            result[core] = cid
+                    elem.clear()
+                elif elem.tag == "programme":
+                    elem.clear()
+        except (ET.ParseError, OSError):
+            return {}
+        self._names = (key, result)
+        return result
+
     def status(self) -> dict:
         """État de la source XMLTV (sans URL ni identifiants)."""
         key = self._source_key()
@@ -295,6 +333,8 @@ class EpgCache:
     # ------------------------------------------------- guide d'une playlist
     mode = "auto"   # remplacé par EPG_SOURCE (voir make_epg)
     api_cache = None  # KeyedCache des programmes par chaîne (get_simple_data_table)
+    extras: list = []  # guides XMLTV externes (EPG_EXTRA_URLS), essayés avant l'API
+    api_max = 0        # chaînes au plus complétées par l'API pour une playlist (0 = sans limite)
 
     def playlist_guide(self, key: str, channels: list[dict], *, mode: str | None = None, api=None,
                        budget: float = 15, api_ids: set[str] | None = None,
@@ -317,7 +357,40 @@ class EpgCache:
                     raise
         index = self.index() if source else {}
         covered = {c["stream_id"] for c in channels if c.get("epg_id") and index.get(c["epg_id"].strip().lower(), 0) > 0}
-        targets = [] if mode == "xmltv" or api is None else [c for c in channels if c["stream_id"] not in covered]
+        # Guides externes : par identifiant XMLTV, puis par nom de chaîne (« FR: TF1 FHD » = « TF1 »).
+        external: list[tuple["EpgCache", dict[str, list[str]]]] = []
+        from_extra: set[str] = set()
+        if self.extras:
+            from .builder import match_name
+            remaining = [c for c in channels if c["stream_id"] not in covered]
+            for extra in self.extras:
+                if not remaining:
+                    break
+                try:
+                    extra.ensure(refresh=refresh)
+                except EpgUnavailable:
+                    continue
+                counts, by_name = extra.index(), extra.names()
+                mapping: dict[str, list[str]] = {}
+                left = []
+                for c in remaining:
+                    eid = (c.get("epg_id") or "").strip().lower()
+                    if not (eid and counts.get(eid, 0) > 0):
+                        eid = by_name.get(squash_name(match_name(c["name"])), "")
+                    if eid and counts.get(eid, 0) > 0:
+                        ours = xml_channel_id(c)
+                        if ours not in mapping.setdefault(eid, []):
+                            mapping[eid].append(ours)
+                        from_extra.add(c["stream_id"])
+                    else:
+                        left.append(c)
+                remaining = left
+                if mapping:
+                    external.append((extra, mapping))
+        targets = [] if mode == "xmltv" or api is None else [
+            c for c in channels if c["stream_id"] not in covered and c["stream_id"] not in from_extra]
+        if api_ids is None and self.api_max:
+            targets = targets[:self.api_max]  # ordre de la playlist : groupes perso et favoris d'abord
         if api_ids is not None:
             targets = [c for c in targets if c["stream_id"] in api_ids]
             if source is None and not targets:
@@ -356,15 +429,19 @@ class EpgCache:
             "mode": mode,
             "channels": len(channels),
             "xmltv": len(covered),
+            "external": len(from_extra),
             "api": len(from_api),
             "pending": pending,
             "missing": [{"stream_id": c["stream_id"], "name": c["name"], "epg_id": c.get("epg_id") or ""}
-                        for c in channels if c["stream_id"] not in covered and c["stream_id"] not in from_api],
+                        for c in channels if c["stream_id"] not in covered and c["stream_id"] not in from_api
+                        and c["stream_id"] not in from_extra],
         }
         digest = hashlib.sha256()
         digest.update(f"{mode}\n{self._source_key() if source else '-'}\n".encode())
         for item in sorted(wanted):
             digest.update(item.encode("utf-8", "replace") + b"\n")
+        for extra, mapping in external:
+            digest.update(f"x:{extra._source_key()}:{json.dumps(mapping, sort_keys=True)}\n".encode("utf-8", "replace"))
         for c in sorted(targets, key=lambda c: c["stream_id"]):
             if c["stream_id"] in from_api:
                 sid = source_of.get(c["stream_id"], c["stream_id"])
@@ -386,6 +463,8 @@ class EpgCache:
                         write_filtered_xmltv(source, dst, wanted, close=False)
                     else:
                         dst.write('<?xml version="1.0" encoding="UTF-8"?>\n<tv generator-info-name="Xtream M3U Local">\n')
+                    for extra, mapping in external:
+                        write_mapped_xmltv(extra.source, dst, mapping)
                     written: set[str] = set()
                     for c in targets:
                         items = listings.get(c["stream_id"])
@@ -410,6 +489,39 @@ class EpgCache:
                 (self.directory / name).unlink()
             except OSError:
                 pass
+
+
+def squash_name(core: str) -> str:
+    """« canal+ sport » = « canal plus sport » = « canalplussport » (rapprochement par nom)."""
+    return core.replace("+", "plus").replace(" ", "")
+
+
+def write_mapped_xmltv(source: Path, dst, mapping: dict[str, list[str]]) -> int:
+    """Ajoute les chaînes et programmes d'un guide externe, renommés vers nos identifiants.
+
+    ``mapping`` : ``{identifiant externe (minuscules): [identifiants de nos chaînes]}`` — une chaîne externe
+    peut servir plusieurs chaînes de la playlist (versions HD/FHD/4K). Écrit dans une balise ``<tv>`` ouverte.
+    """
+    kept = 0
+    depth = 0
+    root = None
+    for event, elem in ET.iterparse(source, events=("start", "end")):
+        if event == "start":
+            depth += 1
+            if depth == 1:
+                root = elem
+            continue
+        depth -= 1
+        if depth == 1 and root is not None:
+            attr = "id" if elem.tag == "channel" else "channel" if elem.tag == "programme" else None
+            targets = mapping.get(elem.get(attr, "").strip().lower(), []) if attr else []
+            for ours in targets:
+                elem.set(attr, ours)
+                elem.tail = "\n"
+                dst.write(ET.tostring(elem, encoding="unicode"))
+                kept += 1
+            root.clear()
+    return kept
 
 
 def write_filtered_xmltv(source: Path, dst, wanted: set[str], *, close: bool = True) -> int:

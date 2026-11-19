@@ -234,6 +234,15 @@ class StreamManager:
             victim.closed.wait(1.5)
         return session
 
+    def start_delay(self, window: float = 20) -> float:
+        """Secondes de calme encore souhaitées après le démarrage d'une lecture (priorité à la vidéo :
+        les appels de guide attendent pour ne pas faire refuser le flux par le fournisseur)."""
+        with self._lock:
+            starts = [s.started for s in self._sessions.values() if not s.virtual]
+        if not starts:
+            return 0.0
+        return max(0.0, max(starts) + window - time.time())
+
     def move(self, session: StreamSession, provider: str) -> bool:
         """Bascule vers une version d'un autre fournisseur : la place est prise chez lui, sans couper personne.
 
