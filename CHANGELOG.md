@@ -2,6 +2,14 @@
 
 Format inspiré de « Keep a Changelog ». Les versions suivent le versionnage sémantique.
 
+## [3.13.0] — 2026-11-19
+
+Journaux réels en 3.12.0 : même à 1-2 appels par seconde, le fournisseur bloque (429) au bout d'environ une minute et refuse alors aussi les chaînes.
+
+### Ajouté
+- **Mode prudent automatique** : après un 429 du fournisseur, le guide « chaîne par chaîne » est suspendu 1 h (aucun appel), le 429 est retenu même après un redémarrage, et les catalogues gardent leur copie en cache 10 min au lieu d'être rafraîchis. Diagnostic : « Mode prudent » jusqu'à l'heure de reprise, sans appel de test.
+- **Démarrage calme** : aucun appel « guide par chaîne » pendant les 2 premières minutes (`EPG_STARTUP_QUIET`).
+
 ## [3.12.0] — 2026-11-19
 
 Journaux réels : en ouvrant l'interface, des milliers d'appels « guide par chaîne » en quelques secondes → « 429 » du fournisseur (pause 60 s) et ~2 500 lignes d'avertissement ; cause probable du noir de 30 s au démarrage de TiviMate (guide et flux demandés en même temps).

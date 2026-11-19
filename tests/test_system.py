@@ -186,3 +186,16 @@ class FailoverDiagnosticTests(StackTestCase):
         self.assertEqual(sum(1 for k in results if k.startswith("failover-p")), 10)
         self.assertEqual(results["failover-more"]["status"], "skipped")
         self.assertIn("1 playlist", results["failover-more"]["detail"])
+
+
+class PrudentDiagnosticTests(StackTestCase):
+    def test_no_guide_test_call_in_prudent_mode(self):
+        import time as _time
+        self.stack.api.last_429 = _time.time()
+        before = len(FakeXtream.actions)
+        status, data = self.send(self.stack.web_base + "/api/diagnostic", "POST")
+        self.assertEqual(status, 200)
+        epg_api = next(r for r in data["results"] if r["id"] == "epg-api")
+        self.assertEqual(epg_api["status"], "warn")
+        self.assertIn("Mode prudent", epg_api["detail"])
+        self.assertNotIn("get_simple_data_table", FakeXtream.actions[before:])

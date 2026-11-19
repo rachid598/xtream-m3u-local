@@ -113,6 +113,10 @@ def _extra_providers() -> tuple:
 BUSY_CODES = (429, 458, 509)
 BUSY_PAUSE = 30     # secondes sans redemander le fournisseur après un refus (réessais rapides des lecteurs)
 
+CALM_AFTER_429 = 600      # catalogue en cache gardé (pas de rafraîchissement) 10 min après un 429
+EPG_PRUDENT_SECONDS = 3600  # guide « chaîne par chaîne » suspendu 1 h après un 429 (fournisseur sensible)
+EPG_STARTUP_QUIET = 120   # aucun appel « guide par chaîne » pendant les 2 premières minutes
+
 SLOW_WARMUP = 25    # secondes ignorées au démarrage d'une version (rafale de remplissage du tampon)
 SLOW_WINDOWS = 3    # fenêtres de 10 s lentes d'affilée avant de basculer
 
@@ -216,6 +220,7 @@ class Config:
     epg_url: str = ""
     epg_fetch_seconds: int = 15
     epg_api_max_channels: int = 1000
+    epg_startup_quiet: int = 120     # EPG_STARTUP_QUIET : secondes sans appel « guide par chaîne » au démarrage
     epg_api_per_second: int = 2      # EPG_API_PER_SECOND : appels « guide par chaîne » par seconde (0 = sans limite)
     max_connections: int = -1        # -1 = auto (valeur de l'abonnement), 0 = illimité
     stream_takeover: bool = True
@@ -287,6 +292,7 @@ class Config:
             epg_fetch_seconds=max(0, _env_int("EPG_FETCH_SECONDS", 15)),
             epg_api_max_channels=max(0, _env_int("EPG_API_MAX_CHANNELS", 1000)),
             epg_api_per_second=max(0, min(50, _env_int("EPG_API_PER_SECOND", 2))),
+            epg_startup_quiet=max(0, min(3600, _env_int("EPG_STARTUP_QUIET", 120))),
             max_connections=_max_connections(),
             stream_takeover=_env_bool("STREAM_TAKEOVER", True),
             failover_stall_seconds=float(min(60, max(2, _env_int("FAILOVER_STALL_SECONDS", 6)))),
@@ -405,11 +411,16 @@ class XtreamAPI:
         self._gate = threading.BoundedSemaphore(2)   # appels API simultanés vers le fournisseur
         self._catalog_gate = threading.Lock()         # gros catalogues : l'un après l'autre
         self._paused_until = 0.0
+        self.last_429 = 0.0  # heure (time.time) du dernier « 429 trop de requêtes » ; gardée sur disque
         self._refreshing: set[str] = set()
         self._refreshing_lock = threading.Lock()
         self._cache_dir = Path(config.data_dir) / "cache"
         # Identifiant stable du fournisseur (adresse + utilisateur, haché) : un cache disque par fournisseur.
         self.provider_key = provider_key(config.xtream_url, config.username)
+        try:
+            self.last_429 = float((self._cache_dir / f"last429-{self.provider_key}").read_text())
+        except (OSError, ValueError):
+            pass
 
     def paused_for(self) -> float:
         """Secondes restantes de pause après un « trop de requêtes » du fournisseur."""
@@ -474,6 +485,7 @@ class XtreamAPI:
                     pause = self.PAUSE_ON_429
                 pause = min(600, max(15, pause))
                 self._paused_until = max(self._paused_until, time.monotonic() + pause)
+                self.note_429()
                 LOG.warning("Le fournisseur limite les requêtes (HTTP 429) : pause de %d s", pause)
                 raise UpstreamError(f"Le fournisseur limite les requêtes (HTTP 429) : nouvel essai dans {pause} s") from None
             if status in (401, 403):
@@ -529,7 +541,18 @@ class XtreamAPI:
             self._load(kind)
         return st.items, st.categories
 
+    def note_429(self) -> None:
+        """Le fournisseur a limité les requêtes : retenu (aussi après un redémarrage) pour rester prudent."""
+        self.last_429 = time.time()
+        try:
+            self._cache_dir.mkdir(parents=True, exist_ok=True)
+            (self._cache_dir / f"last429-{self.provider_key}").write_text(str(self.last_429))
+        except OSError:
+            pass
+
     def _refresh_in_background(self, kind: str) -> None:
+        if self._kinds[kind].items is not None and time.time() - self.last_429 < CALM_AFTER_429:
+            return  # 429 récent : on garde le catalogue en cache plutôt que de solliciter le fournisseur
         with self._refreshing_lock:
             if kind in self._refreshing:
                 return
@@ -1904,7 +1927,26 @@ def make_epg(config: Config, api: XtreamAPI) -> EpgCache:
                                    normalize=normalize_listings, subdir="epg", label="EPG de la chaîne",
                                    min_interval=1 / config.epg_api_per_second if config.epg_api_per_second else 0,
                                    summarize=True)
+        started = time.time()
+        epg.api_cache.blocked = lambda: epg_api_blocked(api, started, config.epg_startup_quiet)
     return epg
+
+
+def last_429(api) -> float:
+    """Dernier 429 de l'abonnement (le plus récent de tous les abonnements)."""
+    apis = getattr(api, "apis", None)
+    return max((getattr(a, "last_429", 0.0) for a in apis), default=0.0) if apis else getattr(api, "last_429", 0.0)
+
+
+def epg_api_blocked(api, started: float, quiet: float = EPG_STARTUP_QUIET) -> str | None:
+    """Raison pour laquelle le guide « chaîne par chaîne » ne doit pas appeler le fournisseur, sinon ``None``."""
+    now = time.time()
+    if now - started < quiet:
+        return "démarrage du serveur"
+    recent = last_429(api)
+    if recent and now - recent < EPG_PRUDENT_SECONDS:
+        return "fournisseur sensible (429 récent) : mode prudent"
+    return None
 
 
 def provider_key(url: str, username: str) -> str:

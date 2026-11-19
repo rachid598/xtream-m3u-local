@@ -219,7 +219,18 @@ def run(api, epg, series, streams, store, config, devices=None) -> list[dict]:
             xmltv_result = _result("epg-xmltv", f"Guide {source}", "error",
                                    "Réponse qui n'est pas un guide XMLTV", p.ms)
     api_result = None
-    if config.enable_epg and config.epg_source != "xmltv" and epg_samples:
+    from .server import EPG_PRUDENT_SECONDS, last_429
+    recent = last_429(api)
+    prudent = config.enable_epg and config.epg_source != "xmltv" and recent and time.time() - recent < EPG_PRUDENT_SECONDS
+    if prudent:
+        # Pas d'appel de test : il prolongerait le blocage du fournisseur (et refuserait la vidéo avec).
+        at = time.strftime("%H:%M", time.localtime(recent))
+        until = time.strftime("%H:%M", time.localtime(recent + EPG_PRUDENT_SECONDS))
+        api_result = _result("epg-api", "Guide via l'API (get_simple_data_table)", "warn",
+                             f"Mode prudent : le fournisseur a limité les requêtes (429) à {at}. Guide chaîne par chaîne "
+                             f"suspendu jusqu'à {until} pour protéger la vidéo ; le guide vient du XMLTV et des guides "
+                             "externes (EPG_EXTRA_URLS). Fournisseur sensible : EPG_SOURCE=xmltv + guide externe conseillés.", 0)
+    elif config.enable_epg and config.epg_source != "xmltv" and epg_samples:
         from .epg import normalize_listings
         started = time.monotonic()
         covered, total, failures = [], 0, 0

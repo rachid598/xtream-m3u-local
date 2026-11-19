@@ -23,7 +23,8 @@ class Stack:
     """Instance complète de l'application sur des ports éphémères."""
 
     def __init__(self, provider_url: str, data_dir: str, **overrides):
-        self.config = replace(Config(provider_url, USERNAME, PASSWORD, data_dir=data_dir), **overrides)
+        # Pas de « démarrage calme » du guide dans les tests (le faux fournisseur ne limite pas).
+        self.config = replace(Config(provider_url, USERNAME, PASSWORD, data_dir=data_dir, epg_startup_quiet=0), **overrides)
         self.api = XtreamAPI(self.config)
         self.store = PlaylistStore(data_dir)
         self.epg = make_epg(self.config, self.api)

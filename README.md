@@ -120,6 +120,7 @@ Le rapprochement utilise le nom normalisé (sans pays, qualité ni accents : « 
 
 - **Guides externes** : `EPG_EXTRA_URLS` = jusqu'à 5 adresses de guides XMLTV publics (`.xml`, `.xml.gz` ou `.zip`), séparées par des virgules. Une chaîne y est trouvée par son identifiant EPG, sinon **par son nom** (« FR: TF1 FHD » = « TF1 »). Ses programmes sont repris sous l'identifiant de la playlist, et il n'y a plus d'appel au fournisseur pour elle. Mise à jour comme le guide principal (`EPG_CACHE_HOURS`). Le diagnostic indique pour chaque guide le nombre de chaînes et combien de chaînes de tes playlists il couvre. Exemples à tester, sans garantie qu'ils soient toujours en ligne : `https://epgshare01.online/epgshare01/epg_ripper_FR1.xml.gz` (France ; d'autres pays dans le même dossier) et les fichiers de [xmltvfr.fr](https://xmltvfr.fr/).
 - **Appels à l'API freinés** : 2 par seconde au maximum (`EPG_API_PER_SECOND`). Ils sont mis en attente pendant 20 s quand une lecture démarre (priorité à la vidéo, le fournisseur refusait sinon le flux pendant sa pause « 429 »). Au plus `EPG_API_MAX_CHANNELS` chaînes par playlist, dans l'ordre de la playlist. En cas d'échec, une seule ligne de journal par minute, et pas de nouvel essai pour une chaîne avant 5 min.
+- **Mode prudent automatique** (fournisseurs sensibles). Dès que le fournisseur répond « 429 trop de requêtes », quelle que soit la requête, le guide « chaîne par chaîne » est **suspendu 1 heure** : seuls le guide XMLTV et les guides externes restent utilisés, et la vidéo n'est plus refusée à cause du guide. Ce 429 est retenu même après un redémarrage. Les catalogues gardent leur copie en cache 10 minutes au lieu d'être rafraîchis. Le diagnostic l'indique (« Mode prudent ») sans envoyer lui-même d'appel de test. Aucun appel « guide par chaîne » non plus pendant les 2 premières minutes après le démarrage (`EPG_STARTUP_QUIET`, en secondes).
 
 ## Plusieurs abonnements et profils (famille)
 
@@ -177,6 +178,7 @@ Sans profils : Les catalogues sont fusionnés (une catégorie de même nom forme
 | `LOGO_SOURCE` | iptv-org | Dossier `data` de la base iptv-org (`channels.csv`, `logos.csv`), pour un miroir |
 | `REMOTE_ACCESS` | `false` | Accepter les connexions hors du réseau local sur 7777 (code d'appareil obligatoire, voir « Accès distant ») |
 | `TRUSTED_PROXIES` | vide | Reverse proxys dont l'en-tête `X-Forwarded-For` est lu, ex. `172.18.0.0/16` |
+| `EPG_STARTUP_QUIET` | `120` | Secondes sans appel « guide par chaîne » après le démarrage du conteneur |
 | `EPG_API_PER_SECOND` | `2` | Appels « guide par chaîne » envoyés au fournisseur par seconde au maximum (`0` = sans limite, déconseillé) |
 | `EPG_EXTRA_URLS` | vide | Guides XMLTV externes (`.xml`, `.xml.gz`, `.zip`, jusqu'à 5, séparés par des virgules), utilisés avant les appels API chaîne par chaîne |
 | `LOCAL_NETWORKS` | vide | Réseaux considérés comme le réseau local en plus de 10.x / 172.16-31.x / 192.168.x, ex. `100.64.0.0/10` pour Tailscale (tes appareils Tailscale n'ont alors besoin ni de `REMOTE_ACCESS` ni de code) |

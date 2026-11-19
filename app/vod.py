@@ -181,6 +181,10 @@ def episode_name(series_name: str, ep: dict) -> str:
     return name
 
 
+class Suspended(Exception):
+    """Appel volontairement non fait (mode prudent, démarrage) : rien n'est demandé au fournisseur."""
+
+
 class KeyedCache:
     """Cache de réponses API par identifiant (mémoire + disque), préchargement en arrière-plan
     et budget de temps. Utilisé pour les épisodes (``get_series_info``) et le guide par chaîne
@@ -199,6 +203,8 @@ class KeyedCache:
         self._next_slot = 0.0
         # Priorité à la vidéo : ``defer()`` renvoie le nombre de secondes à attendre (flux qui démarre).
         self.defer: Callable[[], float] | None = None
+        # ``blocked()`` : raison de ne pas appeler du tout le fournisseur (mode prudent), sinon ``None``.
+        self.blocked: Callable[[], str | None] | None = None
         # Journal résumé (une ligne par minute) au lieu d'une ligne par élément en échec.
         self._summarize = summarize
         self._quiet_failures = 0
@@ -271,12 +277,19 @@ class KeyedCache:
             if now - self._last_summary < 60:
                 return
             count, self._quiet_failures, self._last_summary = self._quiet_failures, 0, now
+        detail = str(exc) if isinstance(exc, Suspended) else type(exc).__name__
         LOG.warning("Données %s indisponibles pour %d élément(s) (%s) ; nouvel essai dans 5 min",
-                    self._label, count, type(exc).__name__)
+                    self._label, count, detail)
 
     def _task(self, sid: str) -> list[dict] | None:
         try:
+            reason = self.blocked() if self.blocked is not None else None
+            if reason:
+                raise Suspended(reason)
             self._wait_turn()
+            reason = self.blocked() if self.blocked is not None else None  # 429 survenu pendant l'attente
+            if reason:
+                raise Suspended(reason)
             episodes = self._normalize(self._fetch(sid))
             self._store(sid, episodes)
             with self._lock:

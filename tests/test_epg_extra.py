@@ -125,3 +125,44 @@ class ExternalGuideTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PrudentModeTests(unittest.TestCase):
+    """Fournisseur sensible : après un 429, plus d'appel « guide par chaîne » pendant 1 h (la vidéo d'abord)."""
+
+    def test_blocked_reasons(self):
+        from types import SimpleNamespace
+        from app.server import epg_api_blocked
+        now = time.time()
+        api = SimpleNamespace(last_429=0.0)
+        self.assertIn("démarrage", epg_api_blocked(api, now, 120))
+        self.assertIsNone(epg_api_blocked(api, now - 200, 120))
+        api.last_429 = now - 60
+        self.assertIn("prudent", epg_api_blocked(api, now - 200, 120))
+        api.last_429 = now - 4000
+        self.assertIsNone(epg_api_blocked(api, now - 200, 120))
+
+    def test_blocked_cache_never_calls_provider(self):
+        calls = []
+        with tempfile.TemporaryDirectory() as tmp:
+            cache = KeyedCache(lambda sid: calls.append(sid) or {}, tmp, subdir="epg", label="EPG de la chaîne",
+                               summarize=True)
+            cache.blocked = lambda: "fournisseur sensible (429 récent) : mode prudent"
+            with self.assertLogs("xtream-m3u-local.vod", level="WARNING") as logs:
+                results, missing = cache.episodes_for(["1", "2", "3"], budget=2)
+        self.assertEqual((calls, results, missing), ([], {}, ["1", "2", "3"]))
+        self.assertEqual(len(logs.records), 1)
+        self.assertIn("mode prudent", logs.output[0])
+
+    def test_429_remembered_and_catalog_kept(self):
+        from app.server import Config, XtreamAPI
+        with tempfile.TemporaryDirectory() as tmp:
+            api = XtreamAPI(Config("http://provider.invalid", "u", "p", data_dir=tmp))
+            api.note_429()
+            again = XtreamAPI(Config("http://provider.invalid", "u", "p", data_dir=tmp))
+            self.assertAlmostEqual(again.last_429, api.last_429, places=3)  # retenu après un redémarrage
+            again.kind_state("live").items = []
+            again._refresh_in_background("live")
+            self.assertEqual(again._refreshing, set())                       # pas de rafraîchissement 10 min
+
+
