@@ -59,9 +59,12 @@ def _encode_item(item: dict, index: int) -> dict:
 class ProviderSet:
     """Même interface que :class:`app.server.XtreamAPI`, sur plusieurs fournisseurs."""
 
-    def __init__(self, apis: list, names: list[str]):
+    def __init__(self, apis: list, names: list[str], indices: list[int] | None = None):
         self.apis = apis
         self.names = names
+        # Numéro de chaque abonnement (fixe : il est inscrit dans les identifiants des chaînes et les playlists).
+        self.indices = list(indices or range(1, len(apis) + 1))
+        self._by_index = dict(zip(self.indices, apis))
         self.config = apis[0].config
         self._lock = threading.Lock()
         self._merged: dict[str, tuple[tuple, SimpleNamespace]] = {}
@@ -69,9 +72,9 @@ class ProviderSet:
     # ------------------------------------------------------------- routage
     def _route(self, item_id: object):
         index, raw = decode(item_id)
-        if not 1 <= index <= len(self.apis):
+        if index not in self._by_index:
             raise UnknownProvider("Identifiant de fournisseur inconnu")
-        return self.apis[index - 1], raw, index
+        return self._by_index[index], raw, index
 
     def provider_of(self, item_id: object) -> str:
         return str(decode(item_id)[0])
@@ -142,11 +145,12 @@ class ProviderSet:
         return self.apis[0].account()
 
     def accounts(self) -> list[dict]:
-        return [{"index": i + 1, "name": self.names[i], "account": api.account()} for i, api in enumerate(self.apis)]
+        return [{"index": index, "name": name, "account": api.account()}
+                for index, name, api in zip(self.indices, self.names, self.apis)]
 
     def max_connections_hint(self, provider: str = "1") -> int:
         index = int(provider) if str(provider).isdigit() else 1
-        api = self.apis[index - 1] if 1 <= index <= len(self.apis) else self.apis[0]
+        api = self._by_index.get(index, self.apis[0])
         return api.max_connections_hint()
 
     def provider_timezone(self):
@@ -179,7 +183,7 @@ class ProviderSet:
             raw_categories: list = []
             raw_streams: list = []
             errors = []
-            for index, (st, name) in enumerate(zip(states, self.names), start=1):
+            for index, st, name in zip(self.indices, states, self.names):
                 if st.categories_error:
                     errors.append(f"{name} : {st.categories_error}")
                 if st.items is None:
@@ -224,3 +228,24 @@ class ProviderSet:
     categories_error = property(lambda self: self.kind_state("live").categories_error)
     updated_at = property(lambda self: self.kind_state("live").updated_at)
     last_error = property(lambda self: self.apis[0].last_error)
+
+
+class ApiHolder:
+    """Client Xtream remplaçable à chaud (abonnements ajoutés ou modifiés depuis l'interface).
+
+    Tous les composants gardent cette même référence ; seul le client réel (un abonnement ou un
+    :class:`ProviderSet`) change. Les attributs sont lus sur le client courant à chaque accès.
+    """
+
+    def __init__(self, api) -> None:
+        object.__setattr__(self, "_current", api)
+
+    @property
+    def current(self):
+        return self._current
+
+    def swap(self, api) -> None:
+        object.__setattr__(self, "_current", api)
+
+    def __getattr__(self, name: str):
+        return getattr(self._current, name)

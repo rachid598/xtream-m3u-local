@@ -181,7 +181,11 @@ def main() -> None:
     if args.profiles:
         config = replace(config, provider_name="Moi",
                          extra_providers=(("Sœur", provider_url, fake_xtream.USERNAME, fake_xtream.PASSWORD),))
-    api = make_api(config)
+    from app import provider_store
+    from app.providers import ApiHolder
+    providers = provider_store.ProviderStore(args.data)
+    provider_store.install(providers)
+    api = ApiHolder(make_api(config, providers))  # abonnements ajoutables depuis l'interface
     store = PlaylistStore(args.data)
     epg = make_epg(config, api)
     series = make_series(config, api)

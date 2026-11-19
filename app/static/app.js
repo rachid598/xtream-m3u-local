@@ -2004,6 +2004,78 @@
     loadStreams();
     loadAccount();
     loadHistory();
+    loadProviders();
+  }
+
+  // ---------------------------------------------------------- abonnements
+  let providersData = null;
+
+  async function loadProviders() {
+    try { providersData = await request('/api/providers'); } catch (error) { $('providers-hint').textContent = error.message; return; }
+    const list = $('providers-list');
+    list.replaceChildren(...providersData.providers.map((p) => {
+      const meta = p.source === 'configuration'
+        ? `${p.host} · configuration du conteneur`
+        : `${p.host} · ${p.username} · ajouté dans l'interface`;
+      const actions = p.source === 'configuration' ? null : h('span', { class: 'row-actions' },
+        h('button', { type: 'button', class: 'btn small', text: 'Modifier', onclick: () => editProvider(p) }),
+        h('button', { type: 'button', class: 'btn small danger', text: 'Supprimer', onclick: () => deleteProvider(p) }));
+      return h('li', null,
+        h('span', null, h('strong', { text: `${p.index}. ${p.name}` }), h('br'),
+          h('span', { class: p.error ? 'warn-text' : 'muted small', text: p.error || meta })),
+        actions);
+    }));
+    $('provider-form').hidden = !providersData.editable;
+    $('providers-hint').textContent = providersData.editable ? ''
+      : 'Ajout désactivé dans ce mode de démarrage : utilise les variables XTREAM_URL_2… puis redémarre le conteneur.';
+  }
+
+  /** Après un changement d'abonnement : profils, barre « Profil », catalogues et badge à jour sans recharger la page. */
+  async function afterProvidersChange() {
+    try {
+      const status = await request('/api/status');
+      state.status = status;
+      state.profiles = status.profiles || [];
+      if (!state.profiles.some((p) => p.id === state.profile)) state.profile = '1';
+      renderProfileBar();
+    } catch (_) { /* affichage seulement */ }
+    for (const kind of KINDS) state.cat[kind].raw = null;
+    renderProviderSelect($('opt-provider').value || state.profile);
+    await loadCatalog(false, 'live');
+    refresh();
+    renderPlaylists();
+    loadAccount();
+    loadProviders();
+  }
+
+  async function editProvider(p) {
+    const field = $('dialog-input2');
+    field.type = 'password';
+    let result;
+    try {
+      result = await ask({ title: `Modifier « ${p.name} »`, okLabel: 'Enregistrer',
+        text: 'Laisse le mot de passe vide pour le garder. Un nouveau mot de passe est testé auprès du fournisseur avant l\'enregistrement.',
+        input: { label: 'Nom (profil)', value: p.name }, input2: { label: 'Nouveau mot de passe (facultatif)', value: '' } });
+    } finally { field.type = 'text'; }
+    if (!result) return;
+    try {
+      await request(`/api/providers/${p.index}`, 'PUT', { name: result.value.trim(), password: result.value2 });
+      toast('Abonnement enregistré');
+      afterProvidersChange();
+    } catch (error) { toast(error.message, 'error'); }
+  }
+
+  async function deleteProvider(p) {
+    const used = state.playlists.filter((x) => x.provider === String(p.index)).map((x) => x.name);
+    const ok = await ask({ title: `Supprimer « ${p.name} » ?`, okLabel: 'Supprimer', danger: true,
+      text: used.length ? `Ses playlists (${used.join(', ')}) et leurs appareils restent enregistrés mais deviennent vides.`
+        : 'Ses identifiants sont effacés du serveur.' });
+    if (!ok) return;
+    try {
+      await request(`/api/providers/${p.index}`, 'DELETE');
+      toast('Abonnement supprimé');
+      afterProvidersChange();
+    } catch (error) { toast(error.message, 'error'); }
   }
 
   function providerChannelList(list, limit = 300, withCategories = false) {
@@ -2354,6 +2426,25 @@
   $('opt-failover').addEventListener('change', () => { renderOptionsPill(); refresh({ channels: false }); });
   $('opt-hq-logos').addEventListener('change', () => { renderOptionsPill(); refresh(); });
   $('opt-provider').addEventListener('change', () => { reapplyCatalogs(); refresh(); });
+  $('provider-form').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const button = $('provider-add');
+    button.disabled = true;
+    button.textContent = 'Test de la connexion…';
+    try {
+      const added = await request('/api/providers', 'POST', {
+        name: $('provider-name').value.trim(), url: $('provider-url').value.trim(),
+        username: $('provider-user').value.trim(), password: $('provider-pass').value });
+      for (const id of ['provider-name', 'provider-url', 'provider-user', 'provider-pass']) $(id).value = '';
+      toast(`Abonnement « ${added.name} » ajouté : choisis son profil en haut`);
+      await afterProvidersChange();
+    } catch (error) {
+      toast(error.message, 'error');
+    } finally {
+      button.disabled = false;
+      button.textContent = '+ Ajouter l\'abonnement';
+    }
+  });
   $('opt-failover-any').addEventListener('change', () => { renderOptionsPill(); refresh({ channels: false }); });
   $('opt-separators').addEventListener('change', () => { renderOptionsPill(); refresh(); });
   $('opt-fav-name').addEventListener('input', () => renderStats());

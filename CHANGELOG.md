@@ -2,6 +2,12 @@
 
 Format inspiré de « Keep a Changelog ». Les versions suivent le versionnage sémantique.
 
+## [3.11.0] — 2026-11-19
+
+### Ajouté
+- **Abonnements depuis l'interface** (Système → « Abonnements ») : ajout (connexion testée avant l'enregistrement), renommage, changement de mot de passe et suppression, **sans redémarrer le conteneur** ; le profil apparaît aussitôt dans la barre « Profil ». Identifiants dans `/data/providers.json` (0600), jamais renvoyés à l'interface, masqués partout ; numéro fixe par abonnement (2 à 9), la configuration du conteneur reste prioritaire.
+- **`LOCAL_NETWORKS`** : réseaux supplémentaires considérés comme le réseau local (ex. `100.64.0.0/10` pour gérer son serveur par Tailscale sans ouvrir l'accès distant).
+
 ## [3.10.0] — 2026-11-18
 
 Demande : gérer chez soi l'abonnement et la playlist de sa sœur, sans tout mélanger.

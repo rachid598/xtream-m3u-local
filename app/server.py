@@ -27,7 +27,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, quote, urlencode, urlsplit
 from urllib.request import Request, urlopen
 
-from . import __version__, access, logos
+from . import __version__, access, logos, provider_store
 from .httputil import accepts_gzip, encode_body, etag_matches, etag_of, gzip_stream
 from .builder import FAVORITES_GROUP, GROUP_PREFIX, add_favorites, display_logo, select_items
 from .devices import DeviceStore
@@ -124,6 +124,13 @@ def _trusted_proxies() -> tuple:
         raise ValueError("TRUSTED_PROXIES : adresses ou réseaux attendus, ex. 172.18.0.0/16,192.168.1.2") from None
 
 
+def _local_networks() -> tuple:
+    try:
+        return access.parse_networks(os.environ.get("LOCAL_NETWORKS", ""))
+    except ValueError:
+        raise ValueError("LOCAL_NETWORKS : réseaux attendus, ex. 100.64.0.0/10 (Tailscale)") from None
+
+
 def _web_remote() -> bool:
     enabled = _env_bool("WEB_REMOTE", False)
     if enabled and not os.environ.get("WEB_PASSWORD", ""):
@@ -214,6 +221,7 @@ class Config:
     remote_access: bool = False      # REMOTE_ACCESS : accepter les connexions hors du réseau local (code obligatoire)
     trusted_proxies: tuple = ()      # TRUSTED_PROXIES : reverse proxys dont on lit X-Forwarded-For
     web_remote: bool = False         # WEB_REMOTE : interface Web joignable hors du réseau local (mot de passe exigé)
+    local_networks: tuple = ()       # LOCAL_NETWORKS : réseaux en plus considérés locaux (ex. Tailscale 100.64.0.0/10)
 
     @property
     def credentials(self) -> list[tuple[str, str]]:
@@ -275,6 +283,7 @@ class Config:
             remote_access=_env_bool("REMOTE_ACCESS", False),
             trusted_proxies=_trusted_proxies(),
             web_remote=_web_remote(),
+            local_networks=_local_networks(),
         )
 
 
@@ -738,11 +747,12 @@ def redact(value: object, config: Config) -> object:
     if isinstance(value, list):
         return [redact(v, config) for v in value]
     if isinstance(value, str):
-        for user, password in config.credentials:
+        credentials = list(config.credentials) + provider_store.credentials()
+        for user, password in credentials:
             for pattern in (f"/{user}/{password}/", f"/{quote(user, safe='')}/{quote(password, safe='')}/"):
                 value = value.replace(pattern, "/***/***/")
         value = re.sub(r"(?i)\b(username|password)=[^&#\s]*", r"\1=***", value)
-        for _, password in config.credentials:
+        for _, password in credentials:
             if len(password) >= 4:
                 value = value.replace(password, "***")
         return value
@@ -1682,7 +1692,7 @@ class Handler(BaseHTTPRequestHandler):
         refresh = qs.get("refresh", [""])[0] == "1"
         self.request_device = None
         self.client_ip, self.remote = access.client_address(self.client_address[0], self.headers,
-                                                            self.config.trusted_proxies)
+                                                            self.config.trusted_proxies, self.config.local_networks)
         if path == "/health":
             return self.response(HTTPStatus.OK, b"OK\n", "text/plain; charset=utf-8", head_only=head_only)
         if self.remote:
@@ -1860,12 +1870,13 @@ def shutil_copy(src, dst, size: int = 256 * 1024) -> None:
 
 def make_epg(config: Config, api: XtreamAPI) -> EpgCache:
     """Guide XMLTV (``EPG_URL`` ou ``xmltv.php``) + programmes par chaîne via l'API (mode auto/api)."""
-    url_factory = (lambda: config.epg_url) if config.epg_url else api.epg_url
+    # Lambdas : le client peut être remplacé à chaud (abonnements ajoutés depuis l'interface).
+    url_factory = (lambda: config.epg_url) if config.epg_url else (lambda: api.epg_url())
     epg = EpgCache(url_factory, config.data_dir, max_age=config.epg_cache_hours * 3600,
                    user_agent=config.user_agent)
     epg.mode = config.epg_source
     if config.epg_source != "xmltv":
-        epg.api_cache = KeyedCache(api.simple_epg, config.data_dir, max_age=6 * 3600,
+        epg.api_cache = KeyedCache(lambda sid: api.simple_epg(sid), config.data_dir, max_age=6 * 3600,
                                    normalize=normalize_listings, subdir="epg", label="EPG de la chaîne")
     return epg
 
@@ -1896,21 +1907,46 @@ def migrate_catalog_cache(data_dir: str, apis: list) -> None:
             LOG.warning("Ancienne copie du catalogue %s non migrée", kind)
 
 
-def make_api(config: Config):
-    """Client Xtream : simple, ou façade multi-fournisseurs si XTREAM_URL_2… est défini."""
-    if not config.extra_providers:
-        api = XtreamAPI(config)
-        migrate_catalog_cache(config.data_dir, [api])
-        return api
+def make_api(config: Config, store=None, previous=None, *, migrate: bool = True):
+    """Client Xtream : simple, ou façade multi-fournisseurs (``XTREAM_URL_2``… et abonnements de l'interface).
+
+    Numéros : 1 = ``XTREAM_URL`` ; 2… = ``XTREAM_URL_2``… dans l'ordre ; puis les abonnements de l'interface
+    (``store``) à leur numéro enregistré (ignorés s'il est déjà pris par la configuration).
+    ``previous`` : client actuel, dont les abonnements inchangés sont réutilisés (catalogue gardé en mémoire).
+    """
     from .providers import ProviderSet
     base = replace(config, extra_providers=())
-    apis = [XtreamAPI(base)]
-    names = [config.provider_name or "Fournisseur 1"]
-    for name, url, user, password in config.extra_providers:
-        apis.append(XtreamAPI(replace(base, xtream_url=url, username=user, password=password, provider_name=name)))
-        names.append(name)
-    migrate_catalog_cache(config.data_dir, apis)
-    return ProviderSet(apis, names)
+    entries = [(1, config.provider_name or "Fournisseur 1", base)]
+    for offset, (name, url, user, password) in enumerate(config.extra_providers, start=2):
+        entries.append((offset, name, replace(base, xtream_url=url, username=user, password=password, provider_name=name)))
+    taken = {index for index, _, _ in entries}
+    try:
+        stored = store.list() if store is not None else []
+    except RuntimeError:
+        LOG.warning("providers.json illisible : abonnements de l'interface ignorés")
+        stored = []
+    for entry in stored:
+        if entry["index"] in taken:
+            LOG.warning("Abonnement « %s » de l'interface ignoré : n° %d déjà pris par la configuration",
+                        entry["name"], entry["index"])
+            continue
+        entries.append((entry["index"], entry["name"], replace(
+            base, xtream_url=entry["url"], username=entry["username"], password=entry["password"],
+            provider_name=entry["name"])))
+        taken.add(entry["index"])
+    old = getattr(previous, "current", previous)
+    reusable = {}
+    for api in (getattr(old, "apis", None) or ([old] if old is not None else [])):
+        reusable[(api.config.xtream_url, api.config.username, api.config.password)] = api
+    apis = []
+    for _, name, cfg in entries:
+        api = reusable.get((cfg.xtream_url, cfg.username, cfg.password)) or XtreamAPI(cfg)
+        apis.append(api)
+    if migrate:
+        migrate_catalog_cache(config.data_dir, apis)
+    if len(apis) == 1:
+        return apis[0]
+    return ProviderSet(apis, [name for _, name, _ in entries], [index for index, _, _ in entries])
 
 
 def make_streams(config: Config, api: XtreamAPI) -> StreamManager:
@@ -1921,7 +1957,7 @@ def make_streams(config: Config, api: XtreamAPI) -> StreamManager:
 
 
 def make_series(config: Config, api: XtreamAPI) -> SeriesCache:
-    return SeriesCache(api.series_info, config.data_dir, max_age=config.series_cache_hours * 3600)
+    return SeriesCache(lambda sid: api.series_info(sid), config.data_dir, max_age=config.series_cache_hours * 3600)
 
 
 def make_server(config: Config, *, host: str = "0.0.0.0", port: int | None = None,
@@ -1989,7 +2025,10 @@ def main() -> None:
         raise SystemExit(2) from None
     prepare_data_dir(config.data_dir)
     from .web import make_web_server
-    api = make_api(config)
+    providers = provider_store.ProviderStore(config.data_dir)
+    provider_store.install(providers)
+    from .providers import ApiHolder
+    api = ApiHolder(make_api(config, providers))  # remplaçable à chaud (abonnements de l'interface)
     store = PlaylistStore(config.data_dir)
     epg = make_epg(config, api)
     series = make_series(config, api)

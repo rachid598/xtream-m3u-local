@@ -467,6 +467,12 @@ dialog .field { margin-bottom: 16px; }
 /* ------------------------------------------------------------ devices */
 .device-form { display: grid; grid-template-columns: 1fr 1fr auto; gap: 12px; align-items: end; }
 .device-form select { width: 100%; }
+.provider-form { display: grid; grid-template-columns: 1fr 1.4fr 1fr 1fr auto; gap: 12px; align-items: end; margin-top: 12px; }
+.provider-form input { width: 100%; }
+#providers-list .num { text-align: right; }
+#providers-list .row-actions { display: inline-flex; gap: 6px; flex: none; }
+@media (max-width: 980px) { .provider-form { grid-template-columns: 1fr 1fr; } .provider-form > .btn { grid-column: 1 / -1; } }
+@media (max-width: 640px) { .provider-form { grid-template-columns: 1fr; } }
 .devices-list { display: flex; flex-direction: column; gap: 16px; }
 .device-card .card-head { margin-bottom: 8px; }
 .device-card h3 { font-size: 16px; }

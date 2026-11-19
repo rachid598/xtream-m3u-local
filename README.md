@@ -120,6 +120,8 @@ Le rapprochement utilise le nom normalisé (sans pays, qualité ni accents : « 
 
 Ajouter `XTREAM_URL_2`, `XTREAM_USERNAME_2`, `XTREAM_PASSWORD_2` (et `XTREAM_NAME_2`), jusqu'à `_9`.
 
+**Depuis l'interface** (Système → « Abonnements ») : « + Ajouter l'abonnement » (nom du profil, adresse, utilisateur, mot de passe). La connexion est testée avant l'enregistrement, et le nouveau profil apparaît tout de suite, sans redémarrer le conteneur. Tu peux renommer un abonnement, changer son mot de passe ou le supprimer. Les identifiants sont gardés dans `/data/providers.json` (droits 0600), ne sont jamais renvoyés à l'interface et sont masqués partout comme ceux de la configuration. Ils ne figurent pas dans le fichier « Sauvegarde » de l'interface : sauvegarde aussi `/data` si tu veux les conserver. Chaque abonnement garde un numéro fixe (2 à 9), car ce numéro est inscrit dans les identifiants de ses chaînes. Si `XTREAM_URL_2…` reprend plus tard un numéro déjà utilisé, la configuration est prioritaire et l'abonnement de l'interface est signalé comme ignoré.
+
 **Profils.** Dès qu'il y a deux abonnements, une barre « Profil » apparaît en haut de l'interface : un profil par abonnement, avec son nom (`XTREAM_NAME` pour le principal, `XTREAM_NAME_2`…), par exemple « Moi » et « Ma sœur ». Dans un profil :
 
 - les playlists créées n'utilisent **que son abonnement** : catalogue, catégories, recherche, versions de secours, limite de connexions — même une règle automatique ou une catégorie de même nom ne mélange jamais les deux ;
@@ -170,6 +172,7 @@ Sans profils : Les catalogues sont fusionnés (une catégorie de même nom forme
 | `LOGO_SOURCE` | iptv-org | Dossier `data` de la base iptv-org (`channels.csv`, `logos.csv`), pour un miroir |
 | `REMOTE_ACCESS` | `false` | Accepter les connexions hors du réseau local sur 7777 (code d'appareil obligatoire, voir « Accès distant ») |
 | `TRUSTED_PROXIES` | vide | Reverse proxys dont l'en-tête `X-Forwarded-For` est lu, ex. `172.18.0.0/16` |
+| `LOCAL_NETWORKS` | vide | Réseaux considérés comme le réseau local en plus de 10.x / 172.16-31.x / 192.168.x, ex. `100.64.0.0/10` pour Tailscale (tes appareils Tailscale n'ont alors besoin ni de `REMOTE_ACCESS` ni de code) |
 | `WEB_REMOTE` | `false` | Interface Web joignable hors du réseau local (exige `WEB_PASSWORD`) — déconseillé |
 | `PROVIDER_TIMEZONE` | auto | Fuseau du serveur Xtream pour le replay (ex. `Europe/Paris`) |
 | `ENABLE_EPG` | `true` | Guide des programmes |
@@ -203,7 +206,7 @@ Fermé par défaut : toute connexion qui ne vient pas du réseau local (10.x, 17
 - l'interface Web (7778) reste réservée au réseau local, sauf `WEB_REMOTE=true` (exige `WEB_PASSWORD`) — déconseillé ;
 - le diagnostic (section « Accès distant ») signale ce qui manque : appareils sans playlist, adresse publique sans https, proxy non déclaré.
 
-**Le plus simple et le plus sûr : Tailscale.** Application Tailscale sur Unraid et sur la TV / le téléphone de chaque personne invitée ; rien n'est publié sur Internet. Adresse à donner : `http://<adresse Tailscale du serveur>:7777`, avec `REMOTE_ACCESS=true`.
+**Le plus simple et le plus sûr : Tailscale.** Application Tailscale sur Unraid et sur la TV / le téléphone de chaque personne invitée ; rien n'est publié sur Internet. Adresse à donner : `http://<adresse Tailscale du serveur>:7777`, avec `REMOTE_ACCESS=true`. Si ton réseau Tailscale ne contient que tes propres appareils (gestion à distance de ton serveur), `LOCAL_NETWORKS=100.64.0.0/10` le fait considérer comme ton réseau local, interface Web comprise.
 
 **Avec un nom de domaine et Traefik** (ou Nginx Proxy Manager) : n'expose **que le port 7777**, en HTTPS, et seulement les chemins des lecteurs. Exemple d'étiquettes Docker pour Traefik :
 

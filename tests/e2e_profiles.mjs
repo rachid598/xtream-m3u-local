@@ -81,6 +81,20 @@ try {
   await waitFor(async () => !/Playlist sœur/.test(await page.innerText('#saved')), 'playlist de Sœur cachée dans Moi');
   assert(await page.inputValue('#opt-provider') === '1', 'nouvelle playlist sur l\'abonnement de Moi');
 
+  // Abonnement ajouté depuis l'interface (Système → Abonnements) : nouveau profil sans redémarrer
+  await page.click('#view-btn-system');
+  await waitFor(async () => (await page.locator('#providers-list li').count()) >= 2, 'liste des abonnements');
+  const host = (await api('/api/providers')).providers[0].host;   // faux fournisseur de la démo
+  await page.fill('#provider-name', 'Maman');
+  await page.fill('#provider-url', `http://localhost:${host.split(':')[1]}`);
+  await page.fill('#provider-user', 'user');
+  await page.fill('#provider-pass', 'pw');
+  await page.click('#provider-add');
+  await waitFor(async () => (await page.locator('#profile-buttons button').count()) === 3, 'profil « Maman » ajouté');
+  await waitFor(async () => /Maman/.test(await page.innerText('#providers-list')), 'abonnement listé');
+  if (shots) await page.screenshot({ path: join(shots, 'desktop-providers.png'), fullPage: false });
+  await page.click('#view-btn-playlists');
+
   // Téléphone : pas de défilement horizontal avec la barre de profils
   const phone = await browser.newPage({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2 });
   await phone.goto(`${base}/`);

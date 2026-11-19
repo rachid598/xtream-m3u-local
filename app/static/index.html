@@ -471,6 +471,35 @@
       <div class="card-head"><h2>Abonnement</h2><span class="hint" id="sys-version"></span></div>
       <dl class="facts" id="account-facts"><dt>État</dt><dd>Chargement…</dd></dl>
     </section>
+    <section class="card" id="providers-card">
+      <div class="card-head">
+        <div>
+          <h2>Abonnements</h2>
+          <p class="muted small">Un abonnement = un profil (barre « Profil » en haut) avec ses playlists et ses appareils. Celui de la configuration du conteneur reste modifiable seulement dans Unraid. Les autres s'ajoutent ici : la connexion est testée avant l'enregistrement, et le mot de passe n'est plus jamais affiché.</p>
+        </div>
+      </div>
+      <ul class="sum-list" id="providers-list"><li class="empty">Chargement…</li></ul>
+      <form class="provider-form" id="provider-form" autocomplete="off">
+        <div class="field">
+          <label for="provider-name">Nom (profil)</label>
+          <input id="provider-name" type="text" maxlength="40" placeholder="Ex. Ma sœur" required>
+        </div>
+        <div class="field">
+          <label for="provider-url">Adresse du serveur</label>
+          <input id="provider-url" type="text" maxlength="200" placeholder="http://serveur:8080" required>
+        </div>
+        <div class="field">
+          <label for="provider-user">Utilisateur</label>
+          <input id="provider-user" type="text" maxlength="200" autocomplete="off" required>
+        </div>
+        <div class="field">
+          <label for="provider-pass">Mot de passe</label>
+          <input id="provider-pass" type="password" maxlength="200" autocomplete="new-password" required>
+        </div>
+        <button type="submit" class="btn primary" id="provider-add">+ Ajouter l'abonnement</button>
+      </form>
+      <p class="hint" id="providers-hint"></p>
+    </section>
     <section class="card">
       <div class="card-head">
         <div>

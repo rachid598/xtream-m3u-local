@@ -44,24 +44,25 @@ LOCAL_NETWORKS = tuple(ipaddress.ip_network(n) for n in (
     "::1/128", "fc00::/7", "fe80::/10"))
 
 
-def is_local(value: str) -> bool:
+def is_local(value: str, extra: tuple = ()) -> bool:
+    """Réseau local (``extra`` : réseaux ajoutés par ``LOCAL_NETWORKS``, ex. Tailscale 100.64.0.0/10)."""
     ip = _ip(value)
     if ip is None:
         return False
     if getattr(ip, "ipv4_mapped", None):
         ip = ip.ipv4_mapped
-    return _in(ip, LOCAL_NETWORKS)
+    return _in(ip, LOCAL_NETWORKS) or _in(ip, extra)
 
 
 def _in(ip, networks) -> bool:
     return ip is not None and any(ip.version == n.version and ip in n for n in networks)
 
 
-def client_address(peer: str, headers, trusted: tuple) -> tuple[str, bool]:
-    """``(adresse réelle du client, distant ?)``."""
+def client_address(peer: str, headers, trusted: tuple, local: tuple = ()) -> tuple[str, bool]:
+    """``(adresse réelle du client, distant ?)`` ; ``local`` : réseaux supplémentaires considérés locaux."""
     forwarded = [h for h in FORWARD_HEADERS if headers.get(h)]
     if not forwarded:
-        return peer, not is_local(peer)
+        return peer, not is_local(peer, local)
     if not _in(_ip(peer), trusted):
         return peer, True  # en-têtes de proxy depuis un proxy non déclaré : distant par sécurité
     chain = []
@@ -77,7 +78,7 @@ def client_address(peer: str, headers, trusted: tuple) -> tuple[str, bool]:
         if _ip(candidate) is None:
             return peer, True
         if not _in(_ip(candidate), trusted):
-            return candidate, not is_local(candidate)
+            return candidate, not is_local(candidate, local)
     return peer, True
 
 

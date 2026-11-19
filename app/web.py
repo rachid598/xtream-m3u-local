@@ -11,7 +11,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
-from . import __version__, access, logos
+from . import __version__, access, logos, provider_store
 from .httputil import encode_body
 from .custom import InvalidPlaylist, PlaylistStore, validate_playlist
 from .epg import EpgCache
@@ -42,6 +42,7 @@ SLUG_API = re.compile(r"^/api/playlists/([a-z0-9][a-z0-9_-]{0,59})$")
 SERIES_API = re.compile(r"^/api/series/([0-9]{1,12})$")
 DEVICE_API = re.compile(r"^/api/devices/([A-Za-z0-9_-]{1,16})$")
 STREAM_STOP_API = re.compile(r"^/api/streams/([0-9]{1,9})/stop$")
+PROVIDER_API = re.compile(r"^/api/providers/([2-9])$")
 CSP = (
     "default-src 'none'; style-src 'self'; script-src 'self'; connect-src 'self'{players}; "
     "media-src 'self' blob:{players}; img-src 'self' data: http: https:; base-uri 'none'; form-action 'none'; "
@@ -118,7 +119,8 @@ class WebHandler(BaseHTTPRequestHandler):
         return user_ok and pass_ok
 
     def check_auth(self) -> bool:
-        ip, remote = access.client_address(self.client_address[0], self.headers, self.config.trusted_proxies)
+        ip, remote = access.client_address(self.client_address[0], self.headers, self.config.trusted_proxies,
+                                           self.config.local_networks)
         if remote:
             # L'interface de gestion reste sur le réseau local, sauf WEB_REMOTE=true (mot de passe obligatoire).
             if not self.config.web_remote:
@@ -193,6 +195,8 @@ class WebHandler(BaseHTTPRequestHandler):
             return self.json(200, history_payload(self.streams.history() if self.streams is not None else []))
         if path == "/api/devices":
             return self.devices_status()
+        if path == "/api/providers":
+            return self.json(200, self.providers_status())
         if path == "/api/backup":
             return self.backup()
         if path == "/api/epg":
@@ -206,6 +210,98 @@ class WebHandler(BaseHTTPRequestHandler):
                 return self.json(502, {"error": "Épisodes indisponibles (get_series_info)"})
             return self.json(200, {"series_id": series_match.group(1), "episodes": episodes})
         return self.json(404, {"error": "Route introuvable"})
+
+    # ---------------------------------------------------------- abonnements
+    def providers_editable(self) -> bool:
+        from .providers import ApiHolder
+        return isinstance(self.api, ApiHolder) and provider_store.current() is not None
+
+    def providers_status(self) -> dict:
+        """Abonnements : ceux de la configuration (lecture seule) puis ceux de l'interface (sans secret)."""
+        from urllib.parse import urlsplit as _split
+        config = self.config
+        rows = [{"index": 1, "name": config.provider_name or "Fournisseur 1",
+                 "host": _split(config.xtream_url).netloc, "source": "configuration"}]
+        for offset, (name, url, _, _) in enumerate(config.extra_providers, start=2):
+            rows.append({"index": offset, "name": name, "host": _split(url).netloc, "source": "configuration"})
+        active = set(getattr(self.api, "indices", None) or [1])
+        store = provider_store.current()
+        try:
+            stored = store.list() if store is not None else []
+        except RuntimeError:
+            stored = []
+        for entry in stored:
+            row = provider_store.public(entry)
+            if entry["index"] not in active or any(r["index"] == entry["index"] for r in rows):
+                row["error"] = "Numéro déjà pris par la configuration du conteneur : abonnement ignoré"
+            rows.append(row)
+        return {"editable": self.providers_editable(), "providers": rows}
+
+    def reload_providers(self) -> None:
+        """Applique tout de suite les abonnements enregistrés (sans redémarrer le conteneur)."""
+        from .server import make_api
+        self.api.swap(make_api(self.config, provider_store.current(), self.api, migrate=False))
+
+    def test_provider(self, url: str, username: str, password: str) -> str | None:
+        """Vérifie l'abonnement auprès du fournisseur ; retourne un message d'erreur ou ``None``."""
+        from dataclasses import replace
+        from .server import XtreamAPI
+        probe = XtreamAPI(replace(self.config, xtream_url=url, username=username, password=password, extra_providers=()))
+        account = probe.account()
+        if not account:
+            return "Connexion refusée : vérifie l'adresse et les identifiants (aucune réponse valide du fournisseur)"
+        if str(account.get("status") or "Active").lower() not in ("active", ""):
+            return f"Abonnement « {account.get('status')} » chez le fournisseur"
+        return None
+
+    def provider_write(self, method: str, index: int | None) -> None:
+        if method != "DELETE":
+            body = self.read_payload()
+            if body is None:
+                return
+        elif not self.same_origin():
+            return
+        if not self.providers_editable():
+            return self.json(409, {"error": "Abonnements non modifiables ici : redémarre le conteneur après avoir "
+                                            "changé la configuration"})
+        from .server import normalize_xtream_url
+        store = provider_store.current()
+        reserved = set(range(1, len(self.config.extra_providers) + 2))
+        try:
+            if method == "DELETE":
+                if not store.delete(index):
+                    return self.json(404, {"error": "Abonnement introuvable (ceux de la configuration ne se suppriment pas ici)"})
+                self.reload_providers()
+                return self.json(200, {"deleted": True})
+            current = next((p for p in store.list() if p["index"] == index), None) if index else None
+            if method == "PUT" and current is None:
+                return self.json(404, {"error": "Abonnement introuvable (ceux de la configuration se modifient dans le conteneur)"})
+            raw_url = str(body.get("url") or "").strip()
+            url = normalize_xtream_url(raw_url) if raw_url else (current or {}).get("url", "")
+            username = str(body.get("username") or "").strip() or (current or {}).get("username", "")
+            password = str(body.get("password") or "") or (current or {}).get("password", "")
+            if not url or not username or not password:
+                return self.json(400, {"error": "Adresse, utilisateur et mot de passe obligatoires"})
+            others = [(self.config.xtream_url, self.config.username)] + [(u, n) for _, u, n, _ in self.config.extra_providers]
+            others += [(p["url"], p["username"]) for p in store.list() if p["index"] != index]
+            if (url, username) in others:
+                return self.json(400, {"error": "Cet abonnement est déjà configuré"})
+            changed = current is None or (url, username, password) != (current["url"], current["username"], current["password"])
+            if changed:
+                error = self.test_provider(url, username, password)
+                if error:
+                    return self.json(400, {"error": error})
+            if method == "POST":
+                entry = store.add(name=body.get("name"), url=url, username=username, password=password, reserved=reserved)
+            else:
+                entry = store.update(index, name=body.get("name"), url=url, username=username,
+                                     password=password if changed else "")
+            self.reload_providers()
+            return self.json(201 if method == "POST" else 200, provider_store.public(entry))
+        except (provider_store.InvalidProvider, ValueError) as exc:
+            return self.json(400, {"error": str(exc)})
+        except RuntimeError:
+            return self.json(500, {"error": "Impossible d'enregistrer /data/providers.json"})
 
     # ------------------------------------------------------------ appareils
     def devices_status(self) -> None:
@@ -417,6 +513,8 @@ class WebHandler(BaseHTTPRequestHandler):
             return self.refresh_epg()
         if path == "/api/devices":
             return self.device_write("POST", None)
+        if path == "/api/providers":
+            return self.provider_write("POST", None)
         if path == "/api/restore":
             return self.restore()
         if path == "/api/diagnostic":
@@ -456,6 +554,9 @@ class WebHandler(BaseHTTPRequestHandler):
         device = DEVICE_API.fullmatch(urlsplit(self.path).path)
         if device:
             return self.device_write("PUT", device.group(1))
+        provider = PROVIDER_API.fullmatch(urlsplit(self.path).path)
+        if provider:
+            return self.provider_write("PUT", int(provider.group(1)))
         match = SLUG_API.fullmatch(urlsplit(self.path).path)
         if not match:
             return self.json(404, {"error": "Route introuvable"})
@@ -639,6 +740,9 @@ class WebHandler(BaseHTTPRequestHandler):
         device = DEVICE_API.fullmatch(urlsplit(self.path).path)
         if device:
             return self.device_write("DELETE", device.group(1))
+        provider = PROVIDER_API.fullmatch(urlsplit(self.path).path)
+        if provider:
+            return self.provider_write("DELETE", int(provider.group(1)))
         match = SLUG_API.fullmatch(urlsplit(self.path).path)
         if not match:
             return self.json(404, {"error": "Route introuvable"})
@@ -657,7 +761,8 @@ class WebHandler(BaseHTTPRequestHandler):
 def profiles(api, config) -> list[dict]:
     """Profils = abonnements configurés (``XTREAM_URL``, ``XTREAM_URL_2``…), chacun avec son nom."""
     names = getattr(api, "names", None) or [config.provider_name or "Mon abonnement"]
-    return [{"id": str(i), "name": name} for i, name in enumerate(names, start=1)]
+    indices = getattr(api, "indices", None) or list(range(1, len(names) + 1))
+    return [{"id": str(i), "name": name} for i, name in zip(indices, names)]
 
 
 def catalog_payload(channels: list[dict], categories: dict[str, str], api: XtreamAPI | None = None,
