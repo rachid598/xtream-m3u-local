@@ -202,7 +202,7 @@ class KeyedCache:
         # Journal résumé (une ligne par minute) au lieu d'une ligne par élément en échec.
         self._summarize = summarize
         self._quiet_failures = 0
-        self._last_summary = 0.0
+        self._last_summary = float("-inf")  # première erreur toujours journalisée
         self._normalize = normalize or normalize_episodes
         self._label = label
         self.directory = Path(data_dir) / "cache" / subdir
