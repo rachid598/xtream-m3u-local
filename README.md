@@ -122,6 +122,12 @@ Le rapprochement utilise le nom normalisé (sans pays, qualité ni accents : « 
 - **Appels à l'API freinés** : 2 par seconde au maximum (`EPG_API_PER_SECOND`). Ils sont mis en attente pendant 20 s quand une lecture démarre (priorité à la vidéo, le fournisseur refusait sinon le flux pendant sa pause « 429 »). Au plus `EPG_API_MAX_CHANNELS` chaînes par playlist, dans l'ordre de la playlist. En cas d'échec, une seule ligne de journal par minute, et pas de nouvel essai pour une chaîne avant 5 min.
 - **Mode prudent automatique** (fournisseurs sensibles). Dès que le fournisseur répond « 429 trop de requêtes », quelle que soit la requête, le guide « chaîne par chaîne » est **suspendu 1 heure** : seuls le guide XMLTV et les guides externes restent utilisés, et la vidéo n'est plus refusée à cause du guide. Ce 429 est retenu même après un redémarrage. Les catalogues gardent leur copie en cache 10 minutes au lieu d'être rafraîchis. Le diagnostic l'indique (« Mode prudent ») sans envoyer lui-même d'appel de test. Aucun appel « guide par chaîne » non plus pendant les 2 premières minutes après le démarrage (`EPG_STARTUP_QUIET`, en secondes).
 
+## Mise à jour de nuit (films, séries, épisodes)
+
+Les gros contenus sont rafraîchis **la nuit**, de 3 h à 6 h par défaut (`NIGHTLY_REFRESH`, heure locale du conteneur, à régler avec `TZ`, par ex. `TZ=Europe/Paris`). En journée, les catalogues films et séries ainsi que les épisodes déjà connus sont servis depuis leur copie en cache, même si elle a quelques heures. Il n'y a donc plus de rafale de requêtes pendant que quelqu'un regarde la télé ou à la recréation du conteneur. Seules les séries **jamais vues**, par exemple ajoutées à une playlist, sont demandées tout de suite.
+
+La nuit, une fois par jour : les catalogues films et séries sont rafraîchis s'ils ont plus de 20 h, puis les épisodes des séries des playlists sont remis à jour au fil de l'eau. Les épisodes sont protégés comme le guide : 2 demandes par seconde au maximum (`SERIES_PER_SECOND`), aucune pendant les 2 premières minutes, aucune pendant 1 h après un « 429 », et une ligne de journal par minute au lieu d'une par série. Le bouton « Actualiser le catalogue » reste immédiat à toute heure.
+
 ## Plusieurs abonnements et profils (famille)
 
 Ajouter `XTREAM_URL_2`, `XTREAM_USERNAME_2`, `XTREAM_PASSWORD_2` (et `XTREAM_NAME_2`), jusqu'à `_9`.
@@ -189,7 +195,9 @@ Sans profils : Les catalogues sont fusionnés (une catégorie de même nom forme
 | `EPG_URL` | vide | Guide XMLTV externe à la place de `xmltv.php` |
 | `EPG_CACHE_HOURS` / `EPG_FETCH_SECONDS` / `EPG_API_MAX_CHANNELS` | `12` / `15` / `1000` | Cache du XMLTV, temps max de complément API par requête, chaînes max complétées dans le guide complet |
 | `CACHE_SECONDS` | `1800` | Durée de validité des catalogues ; ensuite ils sont rafraîchis **en arrière-plan** (l'ancien reste servi). Une copie est gardée dans `/data/cache` pour les redémarrages. Après un HTTP 429 du fournisseur, aucun appel pendant la pause demandée (60 s par défaut) |
-| `SERIES_CACHE_HOURS` / `SERIES_FETCH_SECONDS` | `24` / `20` | Cache des épisodes, temps max de récupération par requête |
+| `SERIES_CACHE_HOURS` / `SERIES_FETCH_SECONDS` | `168` / `20` | Cache des épisodes (7 jours), temps qu'une playlist attend les épisodes manquants (la récupération continue en arrière-plan) |
+| `SERIES_PER_SECOND` | `2` | Demandes d'épisodes (`get_series_info`) envoyées au fournisseur par seconde au maximum |
+| `NIGHTLY_REFRESH` | `3-6` | Fenêtre des mises à jour lourdes, en heure locale du conteneur (`TZ`) : catalogues films/séries et épisodes remis à jour la nuit, copies en cache servies en journée (vide = à toute heure) |
 | `XTREAM_USER_AGENT` | `XtreamM3ULocal/3.x` | User-Agent envoyé au fournisseur |
 | `PUID` / `PGID` | `99` / `100` | Propriétaire des fichiers de `/data` (nobody/users sur Unraid) |
 | `TZ` | `Europe/Paris` | Fuseau des journaux |

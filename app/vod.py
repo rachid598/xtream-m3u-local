@@ -205,6 +205,8 @@ class KeyedCache:
         self.defer: Callable[[], float] | None = None
         # ``blocked()`` : raison de ne pas appeler du tout le fournisseur (mode prudent), sinon ``None``.
         self.blocked: Callable[[], str | None] | None = None
+        # ``refresh_stale()`` : faux = une copie périmée est servie telle quelle (mise à jour la nuit).
+        self.refresh_stale: Callable[[], bool] | None = None
         # Journal résumé (une ligne par minute) au lieu d'une ligne par élément en échec.
         self._summarize = summarize
         self._quiet_failures = 0
@@ -314,9 +316,13 @@ class KeyedCache:
                 self._pending[sid] = future
             return future
 
+    def _stale_ok(self) -> bool:
+        """Copie périmée servie sans la redemander (hors de la fenêtre de mise à jour de nuit)."""
+        return self.refresh_stale is not None and not self.refresh_stale()
+
     def episodes(self, sid: str, *, refresh: bool = False, timeout: float = 30) -> list[dict] | None:
         cached = self._load(sid)
-        if cached and not refresh and time.time() - cached[0] < self.max_age:
+        if cached and not refresh and (time.time() - cached[0] < self.max_age or self._stale_ok()):
             return cached[1]
         future = self._submit(sid)
         if future is not None:
@@ -341,6 +347,9 @@ class KeyedCache:
                 results[sid] = cached[1]
                 continue
             if cached:
+                if self._stale_ok():
+                    results[sid] = cached[1]  # mise à jour la nuit : copie existante servie sans appel
+                    continue
                 stale[sid] = cached[1]
             future = self._submit(sid)
             if future is not None:
@@ -397,6 +406,8 @@ class KeyedCache:
 class SeriesCache(KeyedCache):
     """Épisodes par série : ``DATA_DIR/cache/series/<series_id>.json``."""
 
-    def __init__(self, fetch: Callable[[str], object], data_dir: str, *, max_age: int = 24 * 3600, workers: int = 4):
+    def __init__(self, fetch: Callable[[str], object], data_dir: str, *, max_age: int = 24 * 3600, workers: int = 4,
+                 min_interval: float = 0.0, summarize: bool = False):
         super().__init__(fetch, data_dir, max_age=max_age, workers=workers,
-                         normalize=normalize_episodes, subdir="series", label="série")
+                         normalize=normalize_episodes, subdir="series", label="série",
+                         min_interval=min_interval, summarize=summarize)

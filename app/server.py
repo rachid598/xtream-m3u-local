@@ -128,6 +128,26 @@ def _trusted_proxies() -> tuple:
         raise ValueError("TRUSTED_PROXIES : adresses ou réseaux attendus, ex. 172.18.0.0/16,192.168.1.2") from None
 
 
+def _nightly_refresh() -> tuple | None:
+    """``NIGHTLY_REFRESH`` : « 3-6 », « 03:00-06:00 » ou « 23-5 » (heure locale du conteneur) ; vide/off = toujours."""
+    raw = os.environ.get("NIGHTLY_REFRESH", "3-6").strip().lower()
+    if raw in ("", "0", "off", "false", "non"):
+        return None
+    found = re.fullmatch(r"(\d{1,2})(?::00)?\s*-\s*(\d{1,2})(?::00)?", raw)
+    if not found or not all(0 <= int(h) <= 24 for h in found.groups()) or found.group(1) == found.group(2):
+        raise ValueError("NIGHTLY_REFRESH doit être une plage d'heures, ex. 3-6 ou 03:00-06:00 (vide = désactivé)")
+    return int(found.group(1)) % 24, int(found.group(2)) % 24
+
+
+def in_nightly_window(config, now: float | None = None) -> bool:
+    """Vrai pendant la fenêtre de mise à jour de nuit (ou toujours si elle est désactivée)."""
+    if not config.nightly_refresh:
+        return True
+    start, end = config.nightly_refresh
+    hour = time.localtime(now if now is not None else time.time()).tm_hour
+    return start <= hour < end if start < end else (hour >= start or hour < end)
+
+
 def _epg_extra_urls() -> tuple:
     urls = tuple(u for u in re.split(r"[\s,;]+", os.environ.get("EPG_EXTRA_URLS", "").strip()) if u)
     for url in urls:
@@ -215,7 +235,9 @@ class Config:
     web_password: str = ""
     user_agent: str = DEFAULT_USER_AGENT
     epg_cache_hours: int = 12
-    series_cache_hours: int = 24
+    series_cache_hours: int = 168    # épisodes gardés 7 jours (une série change peu)
+    series_per_second: int = 2       # SERIES_PER_SECOND : demandes d'épisodes par seconde au plus
+    nightly_refresh: tuple | None = (3, 6)  # NIGHTLY_REFRESH : heures (début, fin) des mises à jour lourdes
     epg_source: str = "auto"
     epg_url: str = ""
     epg_fetch_seconds: int = 15
@@ -286,7 +308,9 @@ class Config:
             web_password=os.environ.get("WEB_PASSWORD", ""),
             user_agent=os.environ.get("XTREAM_USER_AGENT", "").strip() or DEFAULT_USER_AGENT,
             epg_cache_hours=max(1, _env_int("EPG_CACHE_HOURS", 12)),
-            series_cache_hours=max(1, _env_int("SERIES_CACHE_HOURS", 24)),
+            series_cache_hours=max(1, _env_int("SERIES_CACHE_HOURS", 168)),
+            series_per_second=max(0, min(50, _env_int("SERIES_PER_SECOND", 2))),
+            nightly_refresh=_nightly_refresh(),
             epg_source=_epg_source(),
             epg_url=_epg_url(),
             epg_fetch_seconds=max(0, _env_int("EPG_FETCH_SECONDS", 15)),
@@ -551,8 +575,12 @@ class XtreamAPI:
             pass
 
     def _refresh_in_background(self, kind: str) -> None:
-        if self._kinds[kind].items is not None and time.time() - self.last_429 < CALM_AFTER_429:
+        st = self._kinds[kind]
+        if st.items is not None and time.time() - self.last_429 < CALM_AFTER_429:
             return  # 429 récent : on garde le catalogue en cache plutôt que de solliciter le fournisseur
+        if (kind != "live" and st.items is not None and not in_nightly_window(self.config)
+                and time.time() - float(st.updated_at or 0) < 2 * 86400):
+            return  # films et séries (gros catalogues) : mis à jour la nuit, la copie suffit en journée
         with self._refreshing_lock:
             if kind in self._refreshing:
                 return
@@ -2025,7 +2053,15 @@ def make_streams(config: Config, api: XtreamAPI) -> StreamManager:
 
 
 def make_series(config: Config, api: XtreamAPI) -> SeriesCache:
-    return SeriesCache(lambda sid: api.series_info(sid), config.data_dir, max_age=config.series_cache_hours * 3600)
+    series = SeriesCache(lambda sid: api.series_info(sid), config.data_dir, max_age=config.series_cache_hours * 3600,
+                         min_interval=1 / config.series_per_second if config.series_per_second else 0,
+                         summarize=True)
+    # Mêmes protections que le guide : démarrage calme, mode prudent après un 429 ; copies périmées
+    # servies telles quelles en journée et remises à jour la nuit (NIGHTLY_REFRESH).
+    started = time.time()
+    series.blocked = lambda: epg_api_blocked(api, started, config.epg_startup_quiet)
+    series.refresh_stale = lambda: in_nightly_window(config)
+    return series
 
 
 def make_server(config: Config, *, host: str = "0.0.0.0", port: int | None = None,
@@ -2119,6 +2155,9 @@ def main() -> None:
         LOG.info("Interface Web sans mot de passe (WEB_PASSWORD vide) : réservé à un réseau local de confiance")
     # `docker stop` envoie SIGTERM au PID 1 : arrêt propre et immédiat.
     signal.signal(signal.SIGTERM, _on_sigterm)
+    # Mises à jour lourdes (films, séries, épisodes) la nuit (NIGHTLY_REFRESH).
+    from . import nightly
+    nightly.start(api, series, store, config)
     # Préchargement du catalogue pour que la première ouverture soit rapide.
     threading.Thread(target=_warmup, args=(api,), daemon=True).start()
     try:

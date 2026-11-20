@@ -2,6 +2,17 @@
 
 Format inspiré de « Keep a Changelog ». Les versions suivent le versionnage sémantique.
 
+## [3.15.0] — 2026-11-20
+
+Retour réel : à chaque recréation du conteneur, rafale de 30 649 demandes d'épisodes (`get_series_info`), 30 713 lignes de journal et 4 « 429 », avant même de regarder la télé.
+
+### Ajouté
+- **Mise à jour de nuit** (`NIGHTLY_REFRESH`, 3 h–6 h par défaut) : catalogues films et séries et épisodes rafraîchis la nuit ; en journée, les copies en cache sont servies sans requête (seules les séries jamais vues sont demandées tout de suite). Le bouton « Actualiser le catalogue » reste immédiat.
+
+### Corrigé
+- **Épisodes des séries protégés comme le guide** : 2 demandes par seconde au maximum (`SERIES_PER_SECOND`), démarrage calme, mode prudent 1 h après un 429, journal résumé (une ligne par minute).
+- Cache des épisodes : 7 jours par défaut (`SERIES_CACHE_HOURS=168`).
+
 ## [3.14.0] — 2026-11-19
 
 ### Ajouté
