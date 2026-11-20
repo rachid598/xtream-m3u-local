@@ -154,6 +154,35 @@ class MultiProviderTests(StackTestCase):
         self.assertEqual(self.send(self.web_base + "/api/playlists", "POST",
                                    {"slug": "x", "name": "X", "provider": "12"})[0], 400)
 
+    def test_profile_is_a_separate_server(self):
+        """Un profil = un serveur à part ; le mélange « tous les abonnements » reste à activer soi-même."""
+        from app import settings
+        settings.install(settings.Settings(self.tmp.name))
+        self.addCleanup(settings.install, None)
+        self.assertFalse(json.loads(self.get(self.web_base + "/api/status")[1])["allow_mix"])
+        self.create_playlist()                                       # ancienne playlist sans profil
+        data = self.get(self.base + "/p/mix.m3u")[1].decode()
+        self.assertIn("/stream/42.ts", data)                         # mélange désactivé : profil 1 seul
+        self.assertNotIn(f"/stream/{2 * OFFSET + 42}.ts", data)
+        self.assertEqual(self.send(self.web_base + "/api/settings", "PUT", {"allow_mix": True})[1]["allow_mix"], True)
+        data = self.get(self.base + "/p/mix.m3u")[1].decode()
+        self.assertIn(f"/stream/{2 * OFFSET + 42}.ts", data)         # activé : les deux abonnements
+        # Lectures et historique : seulement ceux du profil demandé.
+        self.get(f"{self.base}/stream/{2 * OFFSET + 42}.ts")
+        self.get(f"{self.base}/stream/42.ts")
+        history = lambda q: [e["provider"] for e in json.loads(self.get(self.web_base + "/api/history" + q)[1])["entries"]]
+        self.assertEqual(sorted(history("")), ["1", "2"])
+        self.assertEqual(history("?profile=2"), ["2"])
+        self.send(self.web_base + "/api/history/clear?profile=2", "POST", {})
+        self.assertEqual(history(""), ["1"])
+        self.assertEqual(json.loads(self.get(self.web_base + "/api/streams?profile=2")[1])["streams"], [])
+        # Diagnostic du profil 2 : son abonnement et son catalogue seulement.
+        results = self.send(self.web_base + "/api/diagnostic?profile=2", "POST", {})[1]["results"]
+        accounts = [r for r in results if r["id"].startswith("account")]
+        self.assertEqual(len(accounts), 1)
+        live = next(r for r in results if r["id"] == "catalog-live")
+        self.assertTrue(live["detail"].startswith("6 chaînes"), live["detail"])
+
     def test_https_server_info_behind_proxy(self):
         self.create_playlist()
         device = self.send(self.web_base + "/api/devices", "POST", {"name": "TV", "playlist": "mix"})[1]

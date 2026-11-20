@@ -122,8 +122,11 @@
   const multiProfile = () => state.profiles.length > 1;
   const profileName = (id) => (state.profiles.find((p) => p.id === String(id)) || {}).name || `Abonnement ${id}`;
   const playlistProfile = (p) => (p && p.provider) || '';
-  // Playlist du profil sélectionné ; une playlist « tous les abonnements » est visible dans chaque profil.
-  const inProfile = (p) => !multiProfile() || !playlistProfile(p) || playlistProfile(p) === state.profile;
+  // Un profil = un serveur à part : seulement ses playlists. Une ancienne playlist sans abonnement appartient
+  // au profil 1, sauf si le mélange est autorisé (Système → Abonnements) : elle est alors visible partout.
+  const allowMix = () => Boolean(state.status && state.status.allow_mix);
+  const inProfile = (p) => !multiProfile() || (playlistProfile(p) || (allowMix() ? state.profile : '1')) === state.profile;
+  const profileQuery = () => (multiProfile() ? `?profile=${encodeURIComponent(state.profile)}` : '');
   const catalogProvider = () => (multiProfile() ? $('opt-provider').value : '');
 
   function renderProfileBar() {
@@ -139,7 +142,8 @@
     const select = $('opt-provider');
     $('opt-provider-row').hidden = !multiProfile();
     const options = multiProfile()
-      ? [...state.profiles.map((p) => [p.id, p.name]), ['', 'Tous les abonnements (mélange)']]
+      ? [[state.profile, profileName(state.profile)],
+        ...(allowMix() || (value === '' && allowMix()) ? [['', 'Tous les abonnements (mélange)']] : [])]
       : [[value || '', 'Abonnement principal']];
     select.replaceChildren(...options.map(([id, name]) => h('option', { value: id, text: name })));
     select.value = options.some(([id]) => id === (value || '')) ? (value || '') : options[0][0];
@@ -153,18 +157,10 @@
   async function switchProfile(id) {
     if (id === state.profile) return;
     if (!(await confirmLeave())) return;
-    state.profile = id;
+    // Profil = serveur à part : l'interface est entièrement rechargée sur ce profil seul.
     storage('xtream-m3u-profile', id);
-    renderProfileBar();
-    const sorted = [...state.playlists].sort((a, b) => collator.compare(a.name, b.name));
-    load(sorted.find((p) => playlistProfile(p) === id) || sorted.find(inProfile) || null);
-    renderPlaylists();
-    renderGuidePlaylists();
-    renderAccountPill();
-    if (state.view === 'devices') loadDevices();
-    if (state.view === 'guide') loadGuide();
-    if (state.view === 'catalog') renderProvider();
-    toast(`Profil « ${profileName(id)} »`);
+    $('dirty').hidden = true;   // changements déjà abandonnés : pas de seconde alerte du navigateur
+    location.reload();
   }
 
   async function request(path, method = 'GET', body) {
@@ -1613,7 +1609,7 @@
       // Libère tout de suite la connexion au fournisseur (sinon gardée 30 s) : la TV peut reprendre la main.
       const id = previewId;
       previewId = null;
-      request('/api/streams').then((data) => Promise.all(data.streams.filter((s) => s.kind === 'hls' && s.item_id === id)
+      request(`/api/streams${profileQuery()}`).then((data) => Promise.all(data.streams.filter((s) => s.kind === 'hls' && s.item_id === id)
         .map((s) => request(`/api/streams/${s.id}/stop?cooldown=0`, 'POST')))).then(() => loadStreams()).catch(() => {});
     }
     const video = $('preview-video');
@@ -1657,7 +1653,7 @@
   // ------------------------------------------------------------ historique
   async function loadHistory() {
     let data;
-    try { data = await request('/api/history'); } catch (_) { return; }
+    try { data = await request(`/api/history${profileQuery()}`); } catch (_) { return; }
     const fill = (id, rows, text, empty) => {
       const node = $(id);
       node.replaceChildren(...rows.map((r) => h('li', null, h('span', { text: r.label }), h('span', { class: 'num', text: text(r) }))));
@@ -1967,7 +1963,7 @@
   async function loadStreams() {
     clearTimeout(streamsTimer);
     let data;
-    try { data = await request('/api/streams'); } catch (_) { data = null; }
+    try { data = await request(`/api/streams${profileQuery()}`); } catch (_) { data = null; }
     if (data) renderStreams(data);
     const delay = state.view === 'system' ? 3000 : 15000;
     if (!document.hidden) streamsTimer = setTimeout(loadStreams, delay);
@@ -2012,6 +2008,8 @@
     let data;
     try { data = await request('/api/settings'); } catch (_) { return; }
     $('tailscale-local').checked = data.tailscale_local;
+    $('allow-mix').checked = data.allow_mix;
+    $('allow-mix').disabled = !data.editable;
     $('tailscale-local').disabled = !data.editable;
     $('remote-hint').textContent = `Cette page est ouverte depuis ${data.client_ip}${data.client_tailscale ? ' (Tailscale)' : ''}.`
       + (data.remote_access ? ' Accès distant avec code d\'appareil : activé (REMOTE_ACCESS).' : '');
@@ -2293,7 +2291,9 @@
   }
 
   function renderAccountFacts(status) {
-    const a = status && status.account;
+    // Plusieurs profils : seulement l'abonnement du profil affiché.
+    const own = multiProfile() && status && (status.providers || []).find((p) => String(p.index) === state.profile);
+    const a = own ? own.account : status && status.account;
     const facts = $('account-facts');
     const rows = [];
     if (!a) rows.push(['État', 'Informations indisponibles (le fournisseur ne répond pas)']);
@@ -2308,12 +2308,7 @@
       rows.push(['Fuseau du fournisseur', a.timezone || 'non communiqué (UTC)']);
       if (a.is_trial) rows.push(['Type', 'Essai']);
     }
-    for (const p of (status && status.providers) || []) {
-      const acc = p.account;
-      if (!acc) { rows.push([p.name, 'injoignable']); continue; }
-      const exp = acc.exp_date ? new Date(acc.exp_date * 1000).toLocaleDateString('fr-FR') : 'expiration inconnue';
-      rows.push([p.name, `${acc.status || '?'} · expire le ${exp} · ${acc.active_connections || 0}/${acc.max_connections || '?'} connexion(s)`]);
-    }
+    if (own) rows.unshift(['Profil', own.name]);
     facts.replaceChildren(...rows.flatMap(([k, v]) => [h('dt', { text: k }), h('dd', { text: v })]));
     if (status) $('sys-version').textContent = `Xtream M3U Local ${status.version}`;
   }
@@ -2327,7 +2322,7 @@
     btn.textContent = 'Diagnostic en cours…';
     $('diag-results').replaceChildren(h('li', { class: 'empty', text: 'Tests en cours (jusqu\'à une minute selon le fournisseur)…' }));
     try {
-      lastDiagnostic = await request('/api/diagnostic', 'POST');
+      lastDiagnostic = await request(`/api/diagnostic${profileQuery()}`, 'POST');
       const list = $('diag-results');
       list.replaceChildren(...lastDiagnostic.results.map((r) => h('li', { class: `diag-item ${r.status}` },
         h('span', { class: 'icon', text: DIAG_ICON[r.status] || '•' }),
@@ -2436,6 +2431,19 @@
   $('opt-failover').addEventListener('change', () => { renderOptionsPill(); refresh({ channels: false }); });
   $('opt-hq-logos').addEventListener('change', () => { renderOptionsPill(); refresh(); });
   $('opt-provider').addEventListener('change', () => { reapplyCatalogs(); refresh(); });
+  $('allow-mix').addEventListener('change', async (event) => {
+    const on = event.target.checked;
+    try {
+      await request('/api/settings', 'PUT', { allow_mix: on });
+      if (state.status) state.status.allow_mix = on;
+      renderProviderSelect($('opt-provider').value);
+      renderPlaylists();
+      toast(on ? 'Playlists « tous les abonnements » autorisées' : 'Profils complètement séparés');
+    } catch (error) {
+      event.target.checked = !on;
+      toast(error.message, 'error');
+    }
+  });
   $('tailscale-local').addEventListener('change', async (event) => {
     const on = event.target.checked;
     if (on && !(await ask({ title: 'Tailscale = mon réseau local ?', okLabel: 'Activer',
@@ -2633,7 +2641,7 @@
   $('preview').addEventListener('close', stopPreview);
   $('history-clear').addEventListener('click', async () => {
     if (!(await ask({ title: 'Effacer l\'historique des lectures ?', okLabel: 'Effacer', danger: true }))) return;
-    try { await request('/api/history/clear', 'POST'); loadHistory(); } catch (error) { toast(error.message, 'error'); }
+    try { await request(`/api/history/clear${profileQuery()}`, 'POST'); loadHistory(); } catch (error) { toast(error.message, 'error'); }
   });
   document.querySelector('.tabs').addEventListener('keydown', (event) => {
     const tabs = ['categories', 'channels', 'summary'];

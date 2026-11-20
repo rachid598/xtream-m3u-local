@@ -52,9 +52,13 @@ try {
   assert(mine > 0 && mine < total, `catégories du profil « Moi » : ${mine} sur ${total}`);
 
   // Profil « Sœur » : aucune playlist, son abonnement seulement
-  await page.locator('#profile-buttons button', { hasText: 'Sœur' }).click();
+  // Profil = serveur à part : la page est rechargée sur ce profil seul.
+  await Promise.all([page.waitForEvent('load'), page.locator('#profile-buttons button', { hasText: 'Sœur' }).click()]);
+  await waitFor(async () => (await page.getAttribute('#connection', 'class')) === 'pill ok', 'connexion catalogue (Sœur)');
   await waitFor(async () => /Aucune playlist dans le profil « Sœur »/.test(await page.innerText('#saved')), 'profil Sœur vide');
   assert(await page.inputValue('#opt-provider') === '2', 'nouvelle playlist sur l\'abonnement de Sœur');
+  const choices = await page.locator('#opt-provider option').allInnerTexts();
+  assert(choices.length === 1, `mélange désactivé par défaut : ${choices}`);
   const hers = Number((await countText()).match(/\/(\d+)/)[1]);
   assert(hers === mine, `même nombre de catégories (même faux fournisseur) : ${hers} / ${mine}`);
   await page.fill('#name', 'Playlist sœur');
@@ -77,7 +81,7 @@ try {
   await page.click('#view-btn-playlists');
 
   // Retour à « Moi » : la playlist de Sœur n'apparaît pas
-  await page.locator('#profile-buttons button', { hasText: 'Moi' }).click();
+  await Promise.all([page.waitForEvent('load'), page.locator('#profile-buttons button', { hasText: 'Moi' }).click()]);
   await waitFor(async () => !/Playlist sœur/.test(await page.innerText('#saved')), 'playlist de Sœur cachée dans Moi');
   assert(await page.inputValue('#opt-provider') === '1', 'nouvelle playlist sur l\'abonnement de Moi');
 
@@ -93,6 +97,15 @@ try {
   await waitFor(async () => (await page.locator('#profile-buttons button').count()) === 3, 'profil « Maman » ajouté');
   await waitFor(async () => /Maman/.test(await page.innerText('#providers-list')), 'abonnement listé');
   if (shots) await page.screenshot({ path: join(shots, 'desktop-providers.png'), fullPage: false });
+  // Mélange : à activer soi-même, il ajoute « Tous les abonnements »
+  assert(!(await page.isChecked('#allow-mix')), 'mélange désactivé par défaut');
+  await page.check('#allow-mix');
+  await waitFor(async () => (await api('/api/settings')).allow_mix === true, 'mélange autorisé');
+  await page.click('#view-btn-playlists');
+  await waitFor(async () => (await page.locator('#opt-provider option').count()) === 2, 'choix « Tous les abonnements »');
+  await page.click('#view-btn-system');
+  await page.uncheck('#allow-mix');
+  await waitFor(async () => (await api('/api/settings')).allow_mix === false, 'mélange désactivé');
   await page.click('#view-btn-playlists');
 
   // Téléphone : pas de défilement horizontal avec la barre de profils
@@ -104,7 +117,7 @@ try {
   if (shots) await phone.screenshot({ path: join(shots, 'mobile-profiles.png') });
 
   assert(!errors.length, `erreurs JavaScript : ${errors.join(' | ')}`);
-  console.log('OK : profils (barre, playlists, appareils, M3U, mobile)');
+  console.log('OK : profils séparés (rechargement, playlists, appareils, M3U, mélange optionnel, mobile)');
 } finally {
   await browser.close();
 }

@@ -305,9 +305,11 @@ def select_items(api, saved: dict, kind: str, *, refresh: bool = False) -> tuple
     Retourne ``(entrées [(élément, clé_de_groupe)], {clé_de_groupe: nom d'origine})``.
     """
     items, categories = api.catalog(refresh=refresh, kind=kind)
-    if saved.get("provider") and len(getattr(api, "apis", ())) > 1:
+    from . import settings
+    provider = str(saved.get("provider") or ("" if settings.mix_allowed() else "1"))
+    if provider and len(getattr(api, "apis", ())) > 1:
         # Profils : une playlist n'utilise que l'abonnement de son profil (jamais celui d'un autre membre).
-        provider = str(saved["provider"])
+        # Sans profil (« tous les abonnements ») : seulement si le mélange est autorisé dans Système.
         items = [item for item in items if api.provider_of(item["stream_id"]) == provider]
         categories = {cid: name for cid, name in categories.items()
                       if cid == "none" or api.provider_of(cid) == provider}

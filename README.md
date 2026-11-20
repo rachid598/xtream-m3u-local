@@ -134,12 +134,12 @@ Ajouter `XTREAM_URL_2`, `XTREAM_USERNAME_2`, `XTREAM_PASSWORD_2` (et `XTREAM_NAM
 
 **Depuis l'interface** (Système → « Abonnements ») : « + Ajouter l'abonnement » (nom du profil, adresse, utilisateur, mot de passe). La connexion est testée avant l'enregistrement, et le nouveau profil apparaît tout de suite, sans redémarrer le conteneur. Tu peux renommer un abonnement, changer son mot de passe ou le supprimer. Les identifiants sont gardés dans `/data/providers.json` (droits 0600), ne sont jamais renvoyés à l'interface et sont masqués partout comme ceux de la configuration. Ils ne figurent pas dans le fichier « Sauvegarde » de l'interface : sauvegarde aussi `/data` si tu veux les conserver. Chaque abonnement garde un numéro fixe (2 à 9), car ce numéro est inscrit dans les identifiants de ses chaînes. Si `XTREAM_URL_2…` reprend plus tard un numéro déjà utilisé, la configuration est prioritaire et l'abonnement de l'interface est signalé comme ignoré.
 
-**Profils.** Dès qu'il y a deux abonnements, une barre « Profil » apparaît en haut de l'interface : un profil par abonnement, avec son nom (`XTREAM_NAME` pour le principal, `XTREAM_NAME_2`…), par exemple « Moi » et « Ma sœur ». Dans un profil :
+**Profils.** Dès qu'il y a deux abonnements, une barre « Profil » apparaît en haut de l'interface : un profil par abonnement, avec son nom (`XTREAM_NAME` pour le principal, `XTREAM_NAME_2`…), par exemple « Moi » et « Ma sœur ». **Un profil = un serveur à part** : cliquer sur un profil recharge toute l'interface sur ce profil seul, comme si tu ouvrais un autre Xtream M3U Local. Dans un profil :
 
 - les playlists créées n'utilisent **que son abonnement** : catalogue, catégories, recherche, versions de secours, limite de connexions — même une règle automatique ou une catégorie de même nom ne mélange jamais les deux ;
-- la liste des playlists, le Guide TV, les appareils et le badge d'abonnement (expiration, connexions) sont ceux du profil ;
+- la liste des playlists, le Guide TV, les appareils, les lectures en cours, l'historique, le diagnostic, le compte (Système) et le badge d'abonnement sont ceux du profil — rien de l'autre membre ;
 - un appareil est lié à une playlist du profil ; en mode Xtream, il voit l'abonnement de son profil (expiration, connexions) ;
-- option « Abonnement utilisé par cette playlist » (partie Options) : le profil, ou « Tous les abonnements (mélange) » pour tes propres playlists qui combinent les deux (secours d'un abonnement à l'autre). Les playlists créées avant les profils restent en « mélange » tant que tu ne changes pas cette option.
+- **aucun mélange par défaut** : les playlists créées avant les profils appartiennent au profil principal. Pour combiner plusieurs abonnements dans une playlist (secours de l'un à l'autre), coche toi-même Système → Abonnements → « Autoriser les playlists qui mélangent plusieurs abonnements » : le choix « Tous les abonnements (mélange) » apparaît alors dans « Abonnement utilisé par cette playlist ».
 
 Limite : le guide XMLTV (`xmltv.php`) vient du fournisseur principal ; les chaînes des autres abonnements sont complétées par l'API, chaîne par chaîne.
 

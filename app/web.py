@@ -189,10 +189,15 @@ class WebHandler(BaseHTTPRequestHandler):
             except UpstreamError as exc:
                 return self.json(502, {"error": str(exc)})
             return self.json(200, catalog_payload(items, categories, self.api, kind))
+        profile = qs.get("profile", [""])[0]
+        profile = profile if profile.isdigit() else ""
         if path == "/api/streams":
-            return self.json(200, self.streams_status())
+            return self.json(200, self.streams_status(profile))
         if path == "/api/history":
-            return self.json(200, history_payload(self.streams.history() if self.streams is not None else []))
+            entries = self.streams.history() if self.streams is not None else []
+            if profile:  # profil : seulement les lectures de son abonnement (anciennes entrées : profil 1)
+                entries = [e for e in entries if str(e.get("provider") or "1") == profile]
+            return self.json(200, history_payload(entries))
         if path == "/api/devices":
             return self.devices_status()
         if path == "/api/providers":
@@ -410,15 +415,20 @@ class WebHandler(BaseHTTPRequestHandler):
             return
         from .diagnostic import run
         started = time.time()
-        results = run(self.api, self.epg, self.series, self.streams, self.store, self.config, self.devices)
+        profile = parse_qs(urlsplit(self.path).query).get("profile", [""])[0]
+        results = run(self.api, self.epg, self.series, self.streams, self.store, self.config, self.devices,
+                      profile=profile if profile.isdigit() else None)
         return self.json(200, {"started_at": int(started), "seconds": round(time.time() - started, 1),
                                "version": __version__, "results": results})
 
-    def streams_status(self) -> dict:
+    def streams_status(self, profile: str = "") -> dict:
         if self.streams is None:
             return {"limit": 0, "auto": False, "takeover": False, "streams": []}
-        return {"limit": self.streams.limit(), "auto": self.config.max_connections < 0,
-                "takeover": self.streams.takeover, "streams": self.streams.list()}
+        streams = self.streams.list()
+        if profile:
+            streams = [s for s in streams if str(s.get("provider")) == profile]
+        return {"limit": self.streams.limit(profile or "1"), "auto": self.config.max_connections < 0,
+                "takeover": self.streams.takeover, "streams": streams}
 
     def catalog_summary(self, *, refresh: bool) -> dict:
         """Nombre d'éléments et de catégories par type (léger : ne renvoie pas les listes)."""
@@ -482,6 +492,7 @@ class WebHandler(BaseHTTPRequestHandler):
             "epg_mode": self.config.epg_source,
             "logos": logos.current().status() if logos.current() else None,
             "profiles": profiles(self.api, self.config),
+            "allow_mix": settings.mix_allowed(),
         }
         # Le token des lecteurs n'est transmis que si l'interface est protégée par mot de passe.
         if self.config.access_token and self.config.web_password:
@@ -534,8 +545,9 @@ class WebHandler(BaseHTTPRequestHandler):
         if path == "/api/history/clear":
             if not self.same_origin():
                 return
+            profile = parse_qs(urlsplit(self.path).query).get("profile", [""])[0]
             if self.streams is not None:
-                self.streams.clear_history()
+                self.streams.clear_history(profile if profile.isdigit() else None)
             return self.json(200, {"cleared": True})
         stop = STREAM_STOP_API.fullmatch(path)
         if stop:

@@ -59,13 +59,34 @@ def _size(headers: dict) -> str:
     return f", {size / 1e6:.1f} Mo" if size >= 1e6 else f", {size / 1e3:.0f} Ko"
 
 
-def run(api, epg, series, streams, store, config, devices=None) -> list[dict]:
+class _ProfileStore:
+    """Playlists d'un seul profil (diagnostic d'un profil : rien des autres membres)."""
+
+    def __init__(self, store, profile: str) -> None:
+        self.store, self.profile = store, profile
+
+    def list(self) -> list[dict]:
+        return [p for p in self.store.list() if str(p.get("provider") or "1") == self.profile]
+
+    def __getattr__(self, name):
+        return getattr(self.store, name)
+
+
+def run(api, epg, series, streams, store, config, devices=None, profile: str | None = None) -> list[dict]:
     from .server import UpstreamError  # import local : évite une dépendance circulaire
     results: list[dict] = []
     ua = config.user_agent
 
     # 1. API de chaque fournisseur ---------------------------------------------------------
+    indices = list(getattr(api, "indices", None) or range(1, len(getattr(api, "apis", [api])) + 1))
     providers = list(zip(getattr(api, "apis", [api]), getattr(api, "names", [None])))
+    multi = len(providers) > 1
+    if profile and multi and int(profile) in indices:
+        # Profil = serveur à part : seulement son abonnement, ses playlists et son catalogue.
+        providers = [providers[indices.index(int(profile))]]
+        store = _ProfileStore(store, profile)
+    else:
+        profile = None
     reachable = 0
     for index, (provider_api, name) in enumerate(providers, start=1):
         label = "Connexion à l'API (player_api.php)" + (f" — {name}" if len(providers) > 1 else "")
@@ -98,6 +119,9 @@ def run(api, epg, series, streams, store, config, devices=None) -> list[dict]:
         try:
             items, categories = api.catalog(refresh=True, kind=kind)
             ms = int((time.monotonic() - started) * 1000)
+            if profile:
+                items = [i for i in items if api.provider_of(i["stream_id"]) == profile]
+                categories = {cid: n for cid, n in categories.items() if api.provider_of(cid) == profile}
             catalogs[kind] = items
             state = api.kind_state(kind)
             status = "ok" if items else "warn"

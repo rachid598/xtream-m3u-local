@@ -2,6 +2,13 @@
 
 Format inspiré de « Keep a Changelog ». Les versions suivent le versionnage sémantique.
 
+## [3.16.0] — 2026-11-20
+
+### Modifié
+- **Un profil = un serveur à part.** Cliquer sur un profil recharge toute l'interface sur ce profil seul : playlists, appareils, guide, catalogue, lectures en cours, historique, diagnostic et compte de l'abonnement. Rien d'un autre profil n'est affiché ni mélangé. Les TV n'ont besoin que de leur code d'appareil.
+- **Mélange désactivé par défaut** : « Tous les abonnements (mélange) » n'apparaît que si tu coches Système → Abonnements → « Autoriser les playlists qui mélangent plusieurs abonnements » (`/data/settings.json`). Sans cette case, une ancienne playlist sans abonnement utilise le profil principal seul.
+- API : `?profile=N` sur `/api/streams`, `/api/history`, `/api/history/clear` et `/api/diagnostic` ; l'historique retient l'abonnement de chaque lecture.
+
 ## [3.15.0] — 2026-11-20
 
 Retour réel : à chaque recréation du conteneur, rafale de 30 649 demandes d'épisodes (`get_series_info`), 30 713 lignes de journal et 4 « 429 », avant même de regarder la télé.

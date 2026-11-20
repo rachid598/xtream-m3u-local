@@ -13,7 +13,7 @@ from pathlib import Path
 from . import access
 
 TAILSCALE = access.parse_networks("100.64.0.0/10, fd7a:115c:a1e0::/48")
-DEFAULTS = {"tailscale_local": False}
+DEFAULTS = {"tailscale_local": False, "allow_mix": False}
 
 
 class Settings:
@@ -59,6 +59,13 @@ def install(settings: Settings | None) -> None:
 
 def current() -> Settings | None:
     return _SETTINGS
+
+
+def mix_allowed() -> bool:
+    """Playlists « tous les abonnements » autorisées ? (désactivé par défaut : un profil = un serveur)."""
+    if _SETTINGS is None:
+        return True  # sans réglages (tests, intégrations) : comportement d'avant les profils
+    return bool(_SETTINGS.get().get("allow_mix"))
 
 
 def local_networks(config) -> tuple:

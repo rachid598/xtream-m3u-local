@@ -132,11 +132,14 @@ class StreamManager:
         entry = {"started_at": int(session.started), "seconds": int(time.time() - session.started),
                  "kind": session.kind, "item_id": session.item_id, "label": session.channel or session.label,
                  "device": session.device, "client": session.client, "switches": session.switches,
-                 "bytes": session.bytes}
+                 "bytes": session.bytes, "provider": str(session.provider)}
         with self._history_lock:
             self._history.append(entry)
-            if self._history_path is None:
-                return
+            self._save_history()
+
+    def _save_history(self) -> None:
+        """Écrit l'historique sur disque (appelé avec ``_history_lock`` tenu)."""
+        if self._history_path is not None:
             try:
                 self._history_path.parent.mkdir(parents=True, exist_ok=True)
                 fd, tmp = tempfile.mkstemp(prefix=".history-", suffix=".tmp", dir=str(self._history_path.parent))
@@ -151,8 +154,15 @@ class StreamManager:
         with self._history_lock:
             return list(reversed(self._history))
 
-    def clear_history(self) -> None:
+    def clear_history(self, provider: str | None = None) -> None:
+        """Vide l'historique (ou seulement celui d'un profil ; anciennes entrées sans profil : profil 1)."""
         with self._history_lock:
+            if provider:
+                kept = [e for e in self._history if str(e.get("provider") or "1") != provider]
+                self._history.clear()
+                self._history.extend(kept)
+                self._save_history()
+                return
             self._history.clear()
             if self._history_path is not None:
                 try:
