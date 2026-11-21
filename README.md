@@ -13,6 +13,10 @@ fournisseur et le redistribue sur ton réseau local, **sans jamais exposer tes i
 | **7777** | Lecteurs IPTV | `http://IP_UNRAID:7777/p/salon.m3u` · `/p/salon.xml` · `player_api.php` · `/stream/<id>.ts` · `/hls/<id>.m3u8` |
 | **7778** | Interface Web de gestion | `http://IP_UNRAID:7778/` |
 
+<p align="center"><img src="docs/architecture.svg" alt="Architecture : tes abonnements IPTV (Xtream Codes) alimentent Xtream M3U Local sur Unraid (port 7777 pour les lecteurs, 7778 pour l'interface), qui sert une playlist par appareil à TiviMate, au téléphone et à VLC" width="560"></p>
+
+Les TV ne parlent qu'au serveur ; lui seul parle aux fournisseurs. Un profil = un abonnement, comme un serveur à part. Les gros catalogues se mettent à jour la nuit, doucement. Tout est gardé dans `/data`.
+
 Aucun abonnement n'est fourni : utilise uniquement des flux pour lesquels tu disposes des droits.
 
 ## Démarrage rapide

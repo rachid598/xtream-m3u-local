@@ -1,0 +1,64 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 640" width="640" height="640" role="img" aria-labelledby="t d">
+  <title id="t">Architecture de Xtream M3U Local</title>
+  <desc id="d">Tes abonnements IPTV (Xtream Codes) alimentent le serveur Xtream M3U Local sur Unraid (port 7777 pour les lecteurs, port 7778 pour l'interface), qui sert une playlist par appareil à TiviMate, au téléphone et à VLC.</desc>
+  <style>
+    .bg { fill: #ffffff; } .frame { fill: none; stroke: #dde2ec; }
+    .card { fill: #f2f4f8; } .hi { fill: #eaf1ff; stroke: #9dbcf2; } .port { fill: #ffffff; }
+    .title { fill: #141a26; font: 700 21px "Segoe UI", system-ui, -apple-system, Helvetica, Arial, sans-serif; }
+    .sub { fill: #5b6478; font: 400 14.5px "Segoe UI", system-ui, -apple-system, Helvetica, Arial, sans-serif; }
+    .subhi { fill: #141a26; font: 400 14.5px "Segoe UI", system-ui, -apple-system, Helvetica, Arial, sans-serif; }
+    .ptitle { fill: #2f6fdb; font: 600 13px ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace; }
+    .ptext { fill: #5b6478; font: 400 13px "Segoe UI", system-ui, -apple-system, Helvetica, Arial, sans-serif; }
+    .arrow { stroke: #8a93a6; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+    .alabel { fill: #8a93a6; font: 500 11.5px ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace; }
+    .icon { stroke: #5b6478; fill: none; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+    .iconhi { stroke: #2f6fdb; fill: none; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+    @media (prefers-color-scheme: dark) {
+      .bg { fill: #0d1117; } .frame { stroke: #30363d; }
+      .card { fill: #1c1d21; } .hi { fill: #0b1526; stroke: #2c4f86; } .port { fill: #1c1d21; }
+      .title, .subhi { fill: #f2f4f8; } .sub, .ptext { fill: #a3a9b6; }
+      .ptitle { fill: #5b9bff; } .arrow { stroke: #8a909c; } .alabel { fill: #8a909c; }
+      .icon { stroke: #a3a9b6; } .iconhi { stroke: #5b9bff; }
+    }
+  </style>
+  <rect class="bg" width="640" height="640" rx="24"/>
+  <rect class="frame" x="12" y="12" width="616" height="616" rx="22"/>
+
+  <!-- 1. Sources -->
+  <rect class="card" x="32" y="32" width="576" height="128" rx="16"/>
+  <g class="icon" transform="translate(303 46)">
+    <circle cx="17" cy="14" r="2.2"/><path d="M12 9a7 7 0 0 0 0 10M22 9a7 7 0 0 1 0 10M8 5a12.6 12.6 0 0 0 0 18M26 5a12.6 12.6 0 0 1 0 18M17 16.4 13 30h8l-4-13.6"/>
+  </g>
+  <text class="title" x="320" y="108" text-anchor="middle">Tes abonnements IPTV</text>
+  <text class="sub" x="320" y="134" text-anchor="middle">Xtream Codes · 1 à 9 abonnements (un par profil)</text>
+
+  <path class="arrow" d="M320 168v30M313 191l7 7 7-7"/>
+  <text class="alabel" x="334" y="188">catalogues, flux, guide</text>
+
+  <!-- 2. Serveur -->
+  <rect class="hi" x="32" y="206" width="576" height="234" rx="16"/>
+  <g class="iconhi" transform="translate(303 220)">
+    <rect x="3" y="2" width="28" height="12" rx="3"/><rect x="3" y="18" width="28" height="12" rx="3"/><path d="M9 8h.01M9 24h.01"/>
+  </g>
+  <text class="title" x="320" y="282" text-anchor="middle">Unraid — Xtream M3U Local</text>
+  <text class="subhi" x="320" y="308" text-anchor="middle">Tri, numérotation, logos HD, doublons, bascule automatique, guide TV</text>
+  <rect class="port" x="52" y="328" width="262" height="92" rx="12"/>
+  <text class="ptitle" x="68" y="354">:7777 · lecteurs</text>
+  <text class="ptext" x="68" y="378">Playlists M3U, serveur Xtream</text>
+  <text class="ptext" x="68" y="398">local, relais des flux, replay</text>
+  <rect class="port" x="326" y="328" width="262" height="92" rx="12"/>
+  <text class="ptitle" x="342" y="354">:7778 · interface</text>
+  <text class="ptext" x="342" y="378">Playlists, profils, appareils,</text>
+  <text class="ptext" x="342" y="398">abonnements, diagnostic</text>
+
+  <path class="arrow" d="M320 448v30M313 471l7 7 7-7"/>
+  <text class="alabel" x="334" y="468">une playlist par appareil</text>
+
+  <!-- 3. Écrans -->
+  <rect class="card" x="32" y="486" width="576" height="122" rx="16"/>
+  <g class="icon" transform="translate(303 498)">
+    <rect x="2" y="9" width="30" height="20" rx="3"/><path d="M11 3l6 6 6-6"/>
+  </g>
+  <text class="title" x="320" y="560" text-anchor="middle">Tes écrans — TiviMate, téléphone, VLC</text>
+  <text class="sub" x="320" y="586" text-anchor="middle">Un code d'appareil chacun, qui ne voit que sa playlist</text>
+</svg>
