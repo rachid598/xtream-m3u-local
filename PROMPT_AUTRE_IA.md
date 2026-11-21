@@ -1,6 +1,6 @@
 # Prompt à transmettre à l'IA suivante
 
-Tu reprends le projet existant **Xtream M3U Local** (version 3.18.0). **Commence par lire `PASSATION_IA.md`, puis `README.md` et le code (`app/`, `tests/`). Ne repars pas de zéro.**
+Tu reprends le projet existant **Xtream M3U Local** (version 3.18.1). **Commence par lire `PASSATION_IA.md`, puis `README.md` et le code (`app/`, `tests/`). Ne repars pas de zéro.**
 
 ## Contexte
 

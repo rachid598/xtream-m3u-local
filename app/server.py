@@ -40,6 +40,45 @@ from .xtream_emu import EMPTY_AUTH, XtreamEmulator
 from .vod import KeyedCache, SeriesCache, episode_name, mime_for, normalize_movie, normalize_series
 
 LOG = logging.getLogger("xtream-m3u-local")
+
+_REFUSED_LOCK = threading.Lock()
+_REFUSED_LAST: dict[str, float] = {}
+_LOGIN_LAST: dict[str, float] = {}
+
+
+def note_refused_login(ip: str, username: str) -> None:
+    """Identifiants d'appareil refusés (Xtream local) : une ligne par adresse et par minute."""
+    now = time.monotonic()
+    with _REFUSED_LOCK:
+        if now - _REFUSED_LAST.get(ip, -1e9) < 60:
+            return
+        _REFUSED_LAST[ip] = now
+    LOG.warning("Xtream local : identifiants refusés depuis %s (utilisateur « %s ») — appareil supprimé ou code "
+                "mal saisi : vérifie dans « Appareils » l'utilisateur et le mot de passe de cet appareil",
+                ip, (username or "")[:40] or "vide")
+
+
+def log_device_login(emu, device: dict, ip: str) -> None:
+    """Connexion d'un appareil (Xtream local) : sa playlist et ce qu'elle contient, une ligne par 10 min."""
+    now = time.monotonic()
+    with _REFUSED_LOCK:
+        if now - _LOGIN_LAST.get(device["id"], -1e9) < 600:
+            return
+        _LOGIN_LAST[device["id"]] = now
+    try:
+        saved = emu.saved_for(device)
+        counts = {kind: len(emu.entries(device, kind)[0]) for kind in KINDS}
+    except Exception as exc:  # le journal ne doit jamais casser la connexion
+        LOG.warning("Appareil « %s » connecté depuis %s : contenu illisible (%s)", device.get("name"), ip,
+                    type(exc).__name__)
+        return
+    message = ("Appareil « %s » connecté depuis %s : playlist « %s », profil %s — %d chaîne(s), %d film(s), "
+               "%d série(s)")
+    args = (device.get("name"), ip, saved.get("name") or "toutes", saved.get("provider") or "1",
+            counts["live"], counts["vod"], counts["series"])
+    (LOG.warning if not any(counts.values()) else LOG.info)(
+        message + (" : playlist vide pour cet appareil (catégories cochées ? bon profil ?)" if not any(counts.values()) else ""),
+        *args)
 DEFAULT_USER_AGENT = f"XtreamM3ULocal/{__version__}"
 STREAM_RE = re.compile(r"^/stream/([0-9]{1,12})\.ts$")
 HLS_LIVE_RE = re.compile(r"^/hls/([0-9]{1,12})\.m3u8$")
@@ -1532,7 +1571,11 @@ class Handler(BaseHTTPRequestHandler):
         arg = lambda name: qs.get(name, [""])[0]  # noqa: E731
         device = self.device_from(arg("username"), arg("password"))
         if device is None:
-            return self.send_json(EMPTY_AUTH, head_only=head_only)
+            # Journal (une ligne par adresse et par minute) : appareil supprimé ou identifiants mal saisis.
+            note_refused_login(self.client_ip or self.client_address[0], arg("username"))
+            # Connexion : réponse Xtream standard (auth 0). Listes : vraie erreur 401, pour que le lecteur
+            # affiche « identifiants refusés » au lieu d'une liste vide sans explication.
+            return self.send_json(EMPTY_AUTH, head_only=head_only, status=200 if not arg("action") else 401)
         self.request_token = device["password"]
         action = arg("action")
         emu = self.emulator
@@ -1544,6 +1587,7 @@ class Handler(BaseHTTPRequestHandler):
                 scheme = "https" if base.scheme == "https" else "http"
                 data = emu.account(device, base.hostname or "", str(base.port or (443 if scheme == "https" else 80)),
                                    scheme)
+                log_device_login(emu, device, self.client_ip or self.client_address[0])
             elif action.endswith("_categories") and action in kind_of:
                 data = emu.categories(device, kind_of[action])
             elif action in kind_of:
@@ -1574,6 +1618,7 @@ class Handler(BaseHTTPRequestHandler):
                          head_only: bool) -> None:
         device = self.device_from(username, password)
         if device is None:
+            note_refused_login(self.client_ip or self.client_address[0], username)
             return self._error(403, "Identifiants d'appareil invalides", head_only=head_only)
         self.request_token = device["password"]
         catalog_kind = {"live": "live", "movie": "vod", "series": "series"}[kind]

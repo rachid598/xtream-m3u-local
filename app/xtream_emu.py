@@ -8,6 +8,8 @@ fournisseur restent sur le serveur : toutes les URL de lecture pointent vers ce 
 """
 from __future__ import annotations
 
+import json
+
 import logging
 import time
 import zlib
@@ -68,7 +70,11 @@ class XtreamEmulator:
         from .server import order_entries  # import local : évite une dépendance circulaire
         saved = self.saved_for(device)
         state = self.api.kind_state(kind)
-        key = (device.get("id"), kind, saved.get("slug"), saved.get("updated_at"), state.updated_at)
+        # Clé = identité du catalogue chargé (pas seulement sa date) : un abonnement ajouté ou modifié dans
+        # l'interface peut charger une copie plus ancienne que celle du principal ; la date fusionnée ne
+        # change alors pas et une liste vide calculée trop tôt resterait servie à l'appareil.
+        key = (device.get("id"), kind, saved.get("slug"), saved.get("updated_at"), state.updated_at,
+               id(state.items), len(state.items or ()), json.dumps(saved, sort_keys=True, default=str))
         cached = self._cache.get(key)
         if cached is not None:
             return cached

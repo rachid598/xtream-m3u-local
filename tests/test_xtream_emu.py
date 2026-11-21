@@ -86,6 +86,24 @@ class EmulatorTests(StackTestCase):
         self.assertEqual((server["url"], server["port"]), ("127.0.0.1", str(self.stack.proxy.server_address[1])))
         self.assertNotIn('"pw"', json.dumps(data))
 
+    def test_refused_and_logged(self):
+        """Appareil supprimé ou code faux : 401 sur les listes (le lecteur l'affiche), et une ligne au journal."""
+        from app import server
+        server._REFUSED_LAST.clear()
+        server._LOGIN_LAST.clear()
+        with self.assertLogs("xtream-m3u-local", level="INFO") as logs:
+            self.api()                                            # connexion : playlist et contenu au journal
+            query = urlencode({"username": self.u, "password": "faux", "action": "get_live_streams"})
+            self.assertEqual(self.get(self.stack.proxy_base + "/player_api.php?" + query)[0], 401)
+            self.send(self.stack.web_base + f"/api/devices/{self.device['id']}", "DELETE")
+            status, body, _ = self.get(self.stack.proxy_base + "/player_api.php?" + urlencode(
+                {"username": self.u, "password": self.p, "action": "get_live_categories"}))
+            self.assertEqual((status, json.loads(body)["user_info"]["auth"]), (401, 0))
+        text = "\n".join(logs.output)
+        self.assertIn("Appareil « TV salon » connecté depuis 127.0.0.1 : playlist « Salon », profil 1 — 2 chaîne(s)", text)
+        self.assertEqual(text.count("identifiants refusés"), 1)    # une ligne par minute et par adresse
+        self.assertNotIn(self.p, text)
+
     def test_categories_and_streams(self):
         self.assertEqual(self.api(action="get_live_categories"),
                          [{"category_id": "1", "category_name": "Infos", "parent_id": 0}])
@@ -187,3 +205,32 @@ class EmulatorTests(StackTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class EmulatorCacheTests(unittest.TestCase):
+    """Liste d'un appareil recalculée quand un abonnement charge son catalogue, même à date fusionnée égale."""
+
+    def test_new_catalog_with_older_date_is_seen(self):
+        from types import SimpleNamespace
+        from app.xtream_emu import XtreamEmulator
+
+        state = SimpleNamespace(items=[], updated_at=1000.0, categories={})
+
+        class Api:
+            def kind_state(self, kind):
+                return state
+
+            def catalog(self, refresh=False, kind="live"):
+                return state.items, state.categories
+
+        class Store:
+            def get(self, slug):
+                return {"slug": "zineb", "name": "Zineb", "category_ids": ["1"], "updated_at": 5}
+
+        emu = XtreamEmulator(Api(), Store(), None)
+        device = {"id": "d1", "username": "tv", "playlist": "zineb"}
+        self.assertEqual(emu.entries(device, "live")[0], [])          # catalogue pas encore chargé
+        state.items = [{"stream_id": "7", "name": "Chaîne", "category_id": "1", "category_ids": ["1"],
+                        "logo": "", "epg_id": "", "num": "", "archive": 0}]
+        state.categories = {"1": "Infos"}                              # même date fusionnée (copie plus ancienne)
+        self.assertEqual([i["stream_id"] for i, _ in emu.entries(device, "live")[0]], ["7"])

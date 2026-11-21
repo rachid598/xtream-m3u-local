@@ -2,6 +2,17 @@
 
 Format inspiré de « Keep a Changelog ». Les versions suivent le versionnage sémantique.
 
+## [3.18.1] — 2026-11-21
+
+Retour réel : nouveau profil, playlist et appareil créés, TiviMate dit « OK » mais aucune chaîne, aucun film, aucune série ; même après suppression de l'appareil, la TV semble toujours connectée.
+
+### Corrigé
+- **Liste vide figée pour un appareil** : le serveur Xtream local gardait en mémoire le contenu calculé pour chaque appareil, avec une clé basée sur la date du catalogue fusionné. Un abonnement ajouté ou modifié dans l'interface qui charge une copie plus ancienne que celle du principal ne changeait pas cette date : une liste vide calculée avant son chargement restait servie à la TV. La clé suit maintenant le catalogue réellement chargé et toute la playlist.
+- **Identifiants refusés visibles** : appareil supprimé ou code faux → erreur HTTP 401 sur les listes (le lecteur affiche une erreur au lieu d'une liste vide « OK »), la connexion garde la réponse Xtream standard (`auth: 0`).
+
+### Ajouté
+- Journal : « Appareil « X » connecté depuis IP : playlist « … », profil N — chaînes, films, séries » (une ligne par appareil toutes les 10 min, en avertissement si la playlist est vide) et « identifiants refusés depuis IP » (une ligne par adresse et par minute, sans mot de passe).
+
 ## [3.18.0] — 2026-11-21
 
 ### Ajouté
