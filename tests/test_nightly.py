@@ -66,15 +66,60 @@ class StaleCopyTests(unittest.TestCase):
 
 
 class NightPassTests(StackTestCase):
+    overrides = {"nightly_refresh": None}   # fenêtre toujours ouverte pour le test
+
     def test_run_once(self):
         self.create({"slug": "salon", "name": "Salon", "category_ids": ["1"], "series_category_ids": ["1", "7"]})
-        done = nightly.run_once(self.stack.api, self.stack.series, self.stack.store, self.stack.config)
-        self.assertIn("vod", done["catalogs"])   # catalogue séries déjà chargé à l'enregistrement : récent, ignoré
-        self.assertGreaterEqual(done["series"], 1)
-        self.assertIn("900", nightly.playlists_series_ids(self.stack.api, self.stack.store))
-        self.stack.api.last_429 = time.time()                                       # 429 récent : reportée
-        self.assertEqual(nightly.run_once(self.stack.api, self.stack.series, self.stack.store, self.stack.config),
+        ids = nightly.playlists_series_ids(self.stack.api, self.stack.store)
+        self.assertIn("900", ids)
+        series = self.stack.series
+        for sid in ids:                                  # préchargement de l'enregistrement terminé
+            series.episodes(sid, timeout=10)
+        old = time.time() - series.max_age - 60
+        for sid in ids:                                  # rien de déjà ouvert sauf 900 (copie périmée)
+            series._memory.pop(sid, None)
+            series._path(sid).unlink(missing_ok=True)
+        series._memory["900"] = (old, [])
+        with mock.patch.object(nightly, "NIGHT_INTERVAL", 0):
+            done = nightly.run_once(self.stack.api, series, self.stack.store, self.stack.config)
+        self.assertIn("vod", done["catalogs"])
+        self.assertEqual(done["series"], 1)              # seulement la série déjà ouverte, pas tout le catalogue
+        self.assertGreater(series.fetched_at("900"), old)
+        self.stack.api.last_429 = time.time()            # 429 récent : reportée
+        self.assertEqual(nightly.run_once(self.stack.api, series, self.stack.store, self.stack.config),
                          {"catalogs": [], "series": 0})
+
+
+class RefreshSeriesTests(unittest.TestCase):
+    def cache(self, tmp, fetch):
+        cache = KeyedCache(fetch, tmp, max_age=60, subdir="series")
+        for i in range(5):
+            cache._memory[str(i)] = (time.time() - 3600 - i, [])      # 4 = la plus ancienne
+        return cache
+
+    def test_one_by_one_oldest_first_with_pause(self):
+        calls, pauses = [], []
+        with tempfile.TemporaryDirectory() as tmp:
+            cache = self.cache(tmp, lambda sid: calls.append(sid) or {"episodes": {}})
+            config = Config("http://x.invalid", "u", "p", nightly_refresh=None)
+            api = type("A", (), {"last_429": 0.0})()
+            done = nightly.refresh_series(api, cache, [str(i) for i in range(5)] + ["jamais"], config,
+                                          interval=5, limit=3, sleep=pauses.append)
+        self.assertEqual((done, calls, pauses), (3, ["4", "3", "2"], [5, 5]))
+
+    def test_stops_at_first_refusal(self):
+        calls = []
+
+        def fetch(sid):
+            calls.append(sid)
+            raise RuntimeError("429")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            cache = self.cache(tmp, fetch)
+            config = Config("http://x.invalid", "u", "p", nightly_refresh=None)
+            api = type("A", (), {"last_429": 0.0})()
+            done = nightly.refresh_series(api, cache, [str(i) for i in range(5)], config, interval=0)
+        self.assertEqual((done, calls), (0, ["4"]))
 
 
 if __name__ == "__main__":

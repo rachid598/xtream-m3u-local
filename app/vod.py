@@ -378,6 +378,10 @@ class KeyedCache:
                 count += 1
         return count
 
+    def refresh_now(self, sid: str) -> bool:
+        """Remet à jour un élément dans le thread appelant (passe de nuit, un à la fois). Vrai si réussi."""
+        return self._task(sid) is not None
+
     def known(self, sid: str) -> list[dict] | None:
         """Résultat en cache encore valable (liste éventuellement vide), sinon ``None``."""
         cached = self._load(sid)

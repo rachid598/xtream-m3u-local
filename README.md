@@ -126,6 +126,8 @@ Le rapprochement utilise le nom normalisé (sans pays, qualité ni accents : « 
 
 Les gros contenus sont rafraîchis **la nuit**, de 3 h à 6 h par défaut (`NIGHTLY_REFRESH`, heure locale du conteneur, à régler avec `TZ`, par ex. `TZ=Europe/Paris`). En journée, les catalogues films et séries ainsi que les épisodes déjà connus sont servis depuis leur copie en cache, même si elle a quelques heures. Il n'y a donc plus de rafale de requêtes pendant que quelqu'un regarde la télé ou à la recréation du conteneur. Seules les séries **jamais vues**, par exemple ajoutées à une playlist, sont demandées tout de suite.
 
+La nuit, les épisodes sont remis à jour **un par un, une demande toutes les 5 s**, seulement pour les séries déjà ouvertes (copie en cache périmée), les plus anciennes d'abord, 600 au plus par nuit. Les séries jamais ouvertes ne sont pas demandées en masse. Au premier refus du fournisseur (429) ou à la fin de la fenêtre, la passe s'arrête et reprend la nuit suivante.
+
 La nuit, une fois par jour : les catalogues films et séries sont rafraîchis s'ils ont plus de 20 h, puis les épisodes des séries des playlists sont remis à jour au fil de l'eau. Les épisodes sont protégés comme le guide : 2 demandes par seconde au maximum (`SERIES_PER_SECOND`), aucune pendant les 2 premières minutes, aucune pendant 1 h après un « 429 », et une ligne de journal par minute au lieu d'une par série. Le bouton « Actualiser le catalogue » reste immédiat à toute heure.
 
 ## Plusieurs abonnements et profils (famille)

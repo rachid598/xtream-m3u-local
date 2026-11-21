@@ -2,6 +2,13 @@
 
 Format inspiré de « Keep a Changelog ». Les versions suivent le versionnage sémantique.
 
+## [3.16.1] — 2026-11-21
+
+Retour réel (tower-big, compte à 1 connexion) : la passe de nuit a planifié 30 587 séries d'un coup ; 429 au bout de 8 s à 2 demandes/s, toutes rejetées, 30 séries mises à jour.
+
+### Corrigé
+- **Passe de nuit des séries très douce** : seulement les séries déjà ouvertes (copie en cache périmée), les plus anciennes d'abord, **une demande toutes les 5 s**, une à la fois, 600 au plus par nuit. Les séries jamais ouvertes ne sont plus demandées en masse (elles le sont à leur ouverture). Arrêt au premier refus (429) ou à la fin de la fenêtre, reprise la nuit suivante ; journal en deux lignes (plan puis bilan).
+
 ## [3.16.0] — 2026-11-20
 
 ### Modifié

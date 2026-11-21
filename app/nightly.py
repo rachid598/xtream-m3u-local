@@ -4,8 +4,11 @@ En journée, les gros contenus (catalogues films et séries, épisodes des séri
 copie en cache : aucune rafale de requêtes quand quelqu'un regarde la télé. La nuit, une fois par jour :
 
 1. catalogues films et séries rafraîchis s'ils ont plus de 20 h ;
-2. épisodes des séries utilisées par les playlists remis à jour (copies périmées), au rythme limité du
-   cache des séries (``SERIES_PER_SECOND``) et jamais en mode prudent (429 récent).
+2. épisodes remis à jour, **un par un, très lentement** (une demande toutes les ``NIGHT_INTERVAL`` s), et
+   seulement pour les séries déjà ouvertes (copie en cache périmée), les plus anciennes d'abord, au plus
+   ``NIGHT_MAX`` par nuit. Les séries jamais ouvertes ne sont pas demandées en masse : elles le sont à leur
+   ouverture. Au premier refus (429…) ou à la fin de la fenêtre, la passe s'arrête et reprend la nuit
+   suivante. Retour réel : 30 587 séries planifiées d'un coup, 429 au bout de 8 s (compte à 1 connexion).
 """
 from __future__ import annotations
 
@@ -16,6 +19,8 @@ import time
 LOG = logging.getLogger("xtream-m3u-local.nightly")
 CHECK_EVERY = 600       # vérification toutes les 10 minutes
 CATALOG_MAX_AGE = 20 * 3600
+NIGHT_INTERVAL = 5.0    # une demande d'épisodes toutes les 5 s la nuit (fournisseurs très sensibles)
+NIGHT_MAX = 600         # séries remises à jour au plus par nuit (≈ 50 min)
 
 
 def playlists_series_ids(api, store) -> list[str]:
@@ -54,10 +59,47 @@ def run_once(api, series, store, config) -> dict:
             done["catalogs"].append(kind)
         except UpstreamError as exc:
             LOG.warning("Mise à jour de nuit du catalogue %s impossible : %s", kind, exc)
+    LOG.info("Mise à jour de nuit : catalogues %s", ", ".join(done["catalogs"]) or "déjà récents")
     if series is not None:
-        done["series"] = series.prefetch(playlists_series_ids(api, store))
-    LOG.info("Mise à jour de nuit : catalogues %s ; %d série(s) à remettre à jour (au fil de l'eau)",
-             ", ".join(done["catalogs"]) or "déjà récents", done["series"])
+        done["series"] = refresh_series(api, series, playlists_series_ids(api, store), config)
+    return done
+
+
+def refresh_series(api, series, ids: list[str], config, *, interval: float | None = None,
+                   limit: int | None = None, sleep=time.sleep) -> int:
+    """Épisodes des séries déjà en cache et périmées, un par un ; arrêt au premier refus. Retourne le nombre fait."""
+    from .server import in_nightly_window, last_429
+    interval = NIGHT_INTERVAL if interval is None else interval
+    limit = NIGHT_MAX if limit is None else limit
+    now = time.time()
+    stale, never = [], 0
+    for sid in ids:
+        at = series.fetched_at(sid)
+        if at is None:
+            never += 1
+        elif now - at >= series.max_age:
+            stale.append((at, sid))
+    stale.sort()                                        # les plus anciennes d'abord
+    todo = [sid for _, sid in stale[:limit]]
+    LOG.info("Mise à jour de nuit des séries : %d copie(s) périmée(s), %d traitée(s) cette nuit, une toutes les "
+             "%g s ; %d série(s) jamais ouvertes demandées seulement à leur ouverture",
+             len(stale), len(todo), interval, never)
+    done, stop = 0, ""
+    for index, sid in enumerate(todo):
+        if not in_nightly_window(config):
+            stop = "fin de la fenêtre de nuit"
+            break
+        if last_429(api) and time.time() - last_429(api) < 3600:
+            stop = "le fournisseur limite les requêtes (429)"
+            break
+        if not series.refresh_now(sid):
+            stop = "refus du fournisseur"
+            break
+        done += 1
+        if index + 1 < len(todo):
+            sleep(interval)
+    LOG.info("Mise à jour de nuit des séries : %d/%d faite(s)%s", done, len(todo),
+             f" ; arrêt : {stop}, reprise la nuit suivante" if stop else "")
     return done
 
 
