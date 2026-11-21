@@ -2,6 +2,14 @@
 
 Format inspiré de « Keep a Changelog ». Les versions suivent le versionnage sémantique.
 
+## [3.18.2] — 2026-11-21
+
+Retour réel : appareil du profil 2 connecté (3 810 chaînes envoyées), mais TiviMate affiche « Une erreur s'est produite lors du traitement de la liste de lecture ».
+
+### Corrigé
+- **Identifiants courts pour les lecteurs Xtream** : les chaînes, films, séries, épisodes et catégories des abonnements 2 à 9 étaient envoyés avec des numéros comme `200000106975`, au-delà de 2 147 483 647 (entier 32 bits), que TiviMate et beaucoup d'applis Android ne savent pas lire. Le serveur Xtream local leur donne maintenant `1 000 000 000 + (k − 2) × 100 000 000 + id` (ex. `1000106975`) et accepte au retour les deux formes (lecture, replay, fiches, guide). Playlists M3U, interface et identifiants enregistrés : inchangés.
+- Compte affiché à l'appareil : bon abonnement même si un abonnement a été supprimé dans l'interface (numéros non consécutifs).
+
 ## [3.18.1] — 2026-11-21
 
 Retour réel : nouveau profil, playlist et appareil créés, TiviMate dit « OK » mais aucune chaîne, aucun film, aucune série ; même après suppression de l'appareil, la TV semble toujours connectée.
