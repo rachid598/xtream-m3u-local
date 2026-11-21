@@ -107,6 +107,45 @@ class RefreshSeriesTests(unittest.TestCase):
                                           interval=5, limit=3, sleep=pauses.append)
         self.assertEqual((done, calls, pauses), (3, ["4", "3", "2"], [5, 5]))
 
+    def test_new_series_first_then_remembered(self):
+        calls = []
+        with tempfile.TemporaryDirectory() as tmp:
+            from pathlib import Path
+            known = Path(tmp) / "series_known.json"
+            cache = KeyedCache(lambda sid: calls.append(sid) or {"episodes": {}}, tmp, max_age=60, subdir="series")
+            config = Config("http://x.invalid", "u", "p", nightly_refresh=None)
+            api = type("A", (), {"last_429": 0.0})()
+            run = lambda ids, **kw: nightly.refresh_series(api, cache, ids, config, interval=0,  # noqa: E731
+                                                           known_path=known, **kw)
+            self.assertEqual(run(["a", "b"]), 0)                     # première nuit : liste enregistrée seulement
+            self.assertEqual(calls, [])
+            cache._memory["b"] = (time.time() - 3600, [])            # « b » ouverte depuis, copie périmée
+            self.assertEqual(run(["a", "b", "c", "d"], limit=2), 2)  # nouvelles d'abord : c, d
+            self.assertEqual(calls, ["c", "d"])
+            calls.clear()
+            self.assertEqual(run(["a", "b", "c", "d", "e"]), 2)      # e (nouvelle) puis b (périmée)
+            self.assertEqual(calls, ["e", "b"])
+
+    def test_unfetched_new_series_stay_new(self):
+        state = {"fail": True}
+
+        def fetch(sid):
+            if state["fail"]:
+                raise RuntimeError("429")
+            return {"episodes": {}}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            from pathlib import Path
+            known = Path(tmp) / "series_known.json"
+            cache = KeyedCache(fetch, tmp, max_age=60, subdir="series")
+            config = Config("http://x.invalid", "u", "p", nightly_refresh=None)
+            api = type("A", (), {"last_429": 0.0})()
+            nightly.refresh_series(api, cache, ["a"], config, interval=0, known_path=known)
+            self.assertEqual(nightly.refresh_series(api, cache, ["a", "n"], config, interval=0, known_path=known), 0)
+            state["fail"] = False
+            cache._failed.clear()
+            self.assertEqual(nightly.refresh_series(api, cache, ["a", "n"], config, interval=0, known_path=known), 1)
+
     def test_stops_at_first_refusal(self):
         calls = []
 

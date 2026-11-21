@@ -9,12 +9,21 @@ copie en cache : aucune rafale de requêtes quand quelqu'un regarde la télé. L
    ``NIGHT_MAX`` par nuit. Les séries jamais ouvertes ne sont pas demandées en masse : elles le sont à leur
    ouverture. Au premier refus (429…) ou à la fin de la fenêtre, la passe s'arrête et reprend la nuit
    suivante. Retour réel : 30 587 séries planifiées d'un coup, 429 au bout de 8 s (compte à 1 connexion).
+3. **nouvelles séries** (arrivées dans les playlists depuis la nuit précédente) : leurs épisodes sont
+   téléchargés en premier, dans la même file lente. La liste des séries connues est gardée dans
+   ``DATA_DIR/cache/series_known.json`` ; la première nuit l'enregistre seulement (rien n'est « nouveau »).
+   Une nouvelle série non traitée (arrêt, refus) reste « nouvelle » pour la nuit suivante.
+
+Les films n'ont rien de tel : leur liste complète arrive en une demande (catalogue rafraîchi la nuit).
 """
 from __future__ import annotations
 
+import json
 import logging
+import os
 import threading
 import time
+from pathlib import Path
 
 LOG = logging.getLogger("xtream-m3u-local.nightly")
 CHECK_EVERY = 600       # vérification toutes les 10 minutes
@@ -61,13 +70,36 @@ def run_once(api, series, store, config) -> dict:
             LOG.warning("Mise à jour de nuit du catalogue %s impossible : %s", kind, exc)
     LOG.info("Mise à jour de nuit : catalogues %s", ", ".join(done["catalogs"]) or "déjà récents")
     if series is not None:
-        done["series"] = refresh_series(api, series, playlists_series_ids(api, store), config)
+        done["series"] = refresh_series(api, series, playlists_series_ids(api, store), config,
+                                        known_path=Path(config.data_dir) / "cache" / "series_known.json")
     return done
 
 
+def _read_known(path: Path | None) -> set[str] | None:
+    if path is None:
+        return None
+    try:
+        return set(json.loads(path.read_text(encoding="utf-8")))
+    except (OSError, ValueError, TypeError):
+        return None
+
+
+def _write_known(path: Path, ids: set[str]) -> None:
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(sorted(ids)), encoding="utf-8")
+        os.replace(tmp, path)
+    except OSError:
+        LOG.warning("Liste des séries connues non enregistrée (%s)", path)
+
+
 def refresh_series(api, series, ids: list[str], config, *, interval: float | None = None,
-                   limit: int | None = None, sleep=time.sleep) -> int:
-    """Épisodes des séries déjà en cache et périmées, un par un ; arrêt au premier refus. Retourne le nombre fait."""
+                   limit: int | None = None, sleep=time.sleep, known_path: Path | None = None) -> int:
+    """Épisodes des nouvelles séries puis des séries en cache périmées, un par un ; arrêt au premier refus.
+
+    Retourne le nombre de séries mises à jour.
+    """
     from .server import in_nightly_window, last_429
     interval = NIGHT_INTERVAL if interval is None else interval
     limit = NIGHT_MAX if limit is None else limit
@@ -80,11 +112,17 @@ def refresh_series(api, series, ids: list[str], config, *, interval: float | Non
         elif now - at >= series.max_age:
             stale.append((at, sid))
     stale.sort()                                        # les plus anciennes d'abord
-    todo = [sid for _, sid in stale[:limit]]
-    LOG.info("Mise à jour de nuit des séries : %d copie(s) périmée(s), %d traitée(s) cette nuit, une toutes les "
-             "%g s ; %d série(s) jamais ouvertes demandées seulement à leur ouverture",
-             len(stale), len(todo), interval, never)
+    known = _read_known(known_path)
+    first_night = known_path is not None and known is None
+    new = [] if known is None else [sid for sid in ids if sid not in known and series.fetched_at(sid) is None]
+    todo = (new + [sid for _, sid in stale])[:limit]
+    never -= len(new)
+    LOG.info("Mise à jour de nuit des séries : %d nouvelle(s), %d copie(s) périmée(s), %d traitée(s) cette nuit, "
+             "une toutes les %g s ; %d série(s) jamais ouvertes demandées seulement à leur ouverture%s",
+             len(new), len(stale), len(todo), interval, never,
+             " (première nuit : liste des séries enregistrée, les suivantes y seront comparées)" if first_night else "")
     done, stop = 0, ""
+    fetched: set[str] = set()
     for index, sid in enumerate(todo):
         if not in_nightly_window(config):
             stop = "fin de la fenêtre de nuit"
@@ -95,9 +133,13 @@ def refresh_series(api, series, ids: list[str], config, *, interval: float | Non
         if not series.refresh_now(sid):
             stop = "refus du fournisseur"
             break
+        fetched.add(sid)
         done += 1
         if index + 1 < len(todo):
             sleep(interval)
+    if known_path is not None:
+        # Les nouvelles séries non traitées restent « nouvelles » pour la nuit suivante.
+        _write_known(known_path, (set(ids) - set(new)) | (set(new) & fetched))
     LOG.info("Mise à jour de nuit des séries : %d/%d faite(s)%s", done, len(todo),
              f" ; arrêt : {stop}, reprise la nuit suivante" if stop else "")
     return done

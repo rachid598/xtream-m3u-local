@@ -2,6 +2,11 @@
 
 Format inspiré de « Keep a Changelog ». Les versions suivent le versionnage sémantique.
 
+## [3.17.0] — 2026-11-21
+
+### Ajouté
+- **Nouvelles séries téléchargées la nuit** : les séries arrivées dans les playlists depuis la nuit précédente ont leurs épisodes demandés en premier, dans la file lente de la passe de nuit (une demande toutes les 5 s, arrêt au premier refus). Liste des séries connues : `/data/cache/series_known.json` ; la première nuit l'enregistre seulement. Une nouvelle série non traitée reste « nouvelle » la nuit suivante.
+
 ## [3.16.1] — 2026-11-21
 
 Retour réel (tower-big, compte à 1 connexion) : la passe de nuit a planifié 30 587 séries d'un coup ; 429 au bout de 8 s à 2 demandes/s, toutes rejetées, 30 séries mises à jour.
