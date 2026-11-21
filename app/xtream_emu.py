@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 
 from .builder import CUSTOM_PREFIX, GROUP_PREFIX, display_logo, select_items
 from .custom import UNCATEGORIZED
+from .providers import from_public, to_public
 
 LOG = logging.getLogger("xtream-m3u-local.xtream")
 EMPTY_AUTH = {"user_info": {"auth": 0, "status": "Disabled", "message": "Identifiants invalides"}}
@@ -123,10 +124,41 @@ class XtreamEmulator:
         seen: dict[str, dict] = {}
         for _, group in entries:
             if group not in seen:
-                seen[group] = {"category_id": public_category_id(group, kind),
+                seen[group] = {"category_id": self.public(public_category_id(group, kind)),
                                "category_name": names.get(group) or groups.get(group) or "Sans catégorie",
                                "parent_id": 0}
         return list(seen.values())
+
+    # ------------------------------------------------ identifiants courts
+    def _multi(self) -> bool:
+        return len(getattr(self.api, "apis", ()) or ()) > 1
+
+    def public(self, item_id: object) -> str:
+        """Identifiant donné au lecteur (court, entier 32 bits) ; inchangé avec un seul abonnement."""
+        return to_public(item_id) if self._multi() else str(item_id)
+
+    def internal(self, item_id: object) -> str:
+        """Identifiant reçu d'un lecteur → identifiant interne (accepte aussi l'identifiant interne)."""
+        return from_public(item_id) if self._multi() else str(item_id)
+
+    def public_series_info(self, data: object) -> object:
+        """Fiche série relayée : identifiants d'épisodes courts."""
+        if not self._multi() or not isinstance(data, dict):
+            return data
+        episodes = data.get("episodes")
+        groups = episodes.values() if isinstance(episodes, dict) else episodes if isinstance(episodes, list) else []
+        for group in groups:
+            for ep in group if isinstance(group, list) else [group]:
+                if isinstance(ep, dict) and ep.get("id") is not None:
+                    ep["id"] = self.public(ep["id"])
+        return data
+
+    def public_vod_info(self, data: object) -> object:
+        if self._multi() and isinstance(data, dict) and isinstance(data.get("movie_data"), dict):
+            movie = data["movie_data"]
+            if movie.get("stream_id") is not None:
+                movie["stream_id"] = as_int(self.public(movie["stream_id"]))
+        return data
 
     def raw(self, kind: str, item_id: str) -> dict:
         raw = self.api.kind_state(kind).raw_by_id.get(item_id)
@@ -137,13 +169,14 @@ class XtreamEmulator:
         entries, _, _ = self.entries(device, kind)
         result = []
         for position, (item, group) in enumerate(entries, start=1):
-            cid = public_category_id(group, kind)
+            cid = self.public(public_category_id(group, kind))
+            sid = as_int(self.public(item["stream_id"]))
             if category_id not in (None, "", "*") and cid != category_id:
                 continue
             num = int(item["num"]) if item.get("custom_num") else position
             if kind == "live":
                 result.append({
-                    "num": num, "name": item["name"], "stream_type": "live", "stream_id": as_int(item["stream_id"]),
+                    "num": num, "name": item["name"], "stream_type": "live", "stream_id": sid,
                     "stream_icon": display_logo(item, base),
                     "epg_channel_id": item.get("epg_id") or (f"xtream-{item['stream_id']}" if api_epg_ids else ""),
                     "added": str(self.raw("live", item["stream_id"]).get("added") or "0"), "is_adult": 0,
@@ -155,19 +188,20 @@ class XtreamEmulator:
             entry = self.raw(kind, item["stream_id"])
             entry.update({"num": num, "name": item["name"], "category_id": cid, "category_ids": [as_int(cid)]})
             if kind == "vod":
-                entry.update({"stream_type": "movie", "stream_id": as_int(item["stream_id"]),
+                entry.update({"stream_type": "movie", "stream_id": sid,
                               "stream_icon": item.get("logo") or entry.get("stream_icon", ""),
                               "container_extension": item.get("ext", "mp4"), "direct_source": "", "custom_sid": ""})
             else:
-                entry.update({"series_id": as_int(item["stream_id"]), "cover": item.get("logo") or entry.get("cover", "")})
+                entry.update({"series_id": sid, "cover": item.get("logo") or entry.get("cover", "")})
             result.append(entry)
         return result
 
     def account(self, device: dict, host: str, port: str, scheme: str = "http") -> dict:
         # Profils : l'appareil voit l'abonnement de sa playlist (expiration, connexions), pas celui d'un autre.
         profile = str(self.saved_for(device).get("provider") or "1")
-        apis = getattr(self.api, "apis", None)
-        source = apis[int(profile) - 1] if apis and int(profile) <= len(apis) else self.api
+        # Numéro fixe de l'abonnement (1 à 9), même s'il y a des trous (abonnement supprimé dans l'interface).
+        by_index = dict(zip(getattr(self.api, "indices", None) or [], getattr(self.api, "apis", None) or []))
+        source = by_index.get(int(profile), self.api) if profile.isdigit() else self.api
         provider = source.account() or {}
         tz = self.api.provider_timezone()
         now = datetime.now(tz if tz is not None else timezone.utc)

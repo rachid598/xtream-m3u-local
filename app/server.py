@@ -1595,17 +1595,20 @@ class Handler(BaseHTTPRequestHandler):
                                  api_epg_ids=self.config.guide_ids,
                                  base=self.public_base())
             elif action == "get_series_info" and arg("series_id").isdigit():
-                data = (emu.passthrough("get_series_info", series_id=arg("series_id"))
-                        if emu.allows(device, "series", arg("series_id")) else {})
+                sid = emu.internal(arg("series_id"))
+                data = (emu.public_series_info(emu.passthrough("get_series_info", series_id=sid))
+                        if emu.allows(device, "series", sid) else {})
             elif action == "get_vod_info" and arg("vod_id").isdigit():
-                data = (emu.passthrough("get_vod_info", vod_id=arg("vod_id"))
-                        if emu.allows(device, "vod", arg("vod_id")) else {})
+                sid = emu.internal(arg("vod_id"))
+                data = (emu.public_vod_info(emu.passthrough("get_vod_info", vod_id=sid))
+                        if emu.allows(device, "vod", sid) else {})
             elif action in ("get_short_epg", "get_simple_data_table") and arg("stream_id").isdigit():
-                params = {"stream_id": arg("stream_id")}
+                sid = emu.internal(arg("stream_id"))
+                params = {"stream_id": sid}
                 if arg("limit").isdigit():
                     params["limit"] = arg("limit")
                 data = (emu.passthrough(action, **params)
-                        if emu.allows(device, "live", arg("stream_id")) else {"epg_listings": []})
+                        if emu.allows(device, "live", sid) else {"epg_listings": []})
             else:
                 data = []
         except UpstreamError as exc:
@@ -1621,6 +1624,7 @@ class Handler(BaseHTTPRequestHandler):
             note_refused_login(self.client_ip or self.client_address[0], username)
             return self._error(403, "Identifiants d'appareil invalides", head_only=head_only)
         self.request_token = device["password"]
+        item_id = self.emulator.internal(item_id)   # identifiant court des lecteurs Xtream
         catalog_kind = {"live": "live", "movie": "vod", "series": "series"}[kind]
         allowed = (self.device_allows("episode", item_id) if kind == "series"
                    else self.emulator.allows(device, catalog_kind, item_id) if device.get("playlist") else True)
@@ -1647,6 +1651,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._error(403, "Identifiants d'appareil invalides", head_only=head_only)
         if not START_RE.fullmatch(start) or not minutes.isdigit() or not 1 <= int(minutes) <= 24 * 60:
             return self._error(400, "Période de replay invalide", head_only=head_only)
+        stream_id = self.emulator.internal(stream_id)
         if not self.emulator.allows(device, "live", stream_id):
             return self._error(404, "Chaîne absente de la playlist de cet appareil", head_only=head_only)
         return self.relay(self.api.timeshift_raw_url(stream_id, int(minutes), start), head_only=head_only,

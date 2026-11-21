@@ -149,7 +149,7 @@ class MultiProviderTests(StackTestCase):
         device = self.send(self.web_base + "/api/devices", "POST", {"name": "Sœur TV", "playlist": "soeur"})[1]
         q = {"username": device["username"], "password": device["password"]}
         live = json.loads(self.get(self.base + "/player_api.php?" + urlencode({**q, "action": "get_live_streams"}))[1])
-        self.assertTrue(live and all(c["stream_id"] >= 2 * OFFSET for c in live))
+        self.assertTrue(live and all(10 ** 9 <= c["stream_id"] < 2 ** 31 for c in live))   # identifiants courts de B
         self.assertEqual(self.get(self.base + "/stream/42.ts?" + urlencode({"token": device["password"]}))[0], 404)
         self.assertEqual(self.send(self.web_base + "/api/playlists", "POST",
                                    {"slug": "x", "name": "X", "provider": "12"})[0], 400)
@@ -195,18 +195,39 @@ class MultiProviderTests(StackTestCase):
         self.assertEqual((info["server_protocol"], info["port"], info["https_port"]), ("http", "7777", ""))
 
     def test_xtream_emulation_numeric_ids(self):
+        """Lecteurs Xtream : identifiants courts (entiers 32 bits) ; les deux formes sont acceptées au retour."""
+        from app.providers import PUBLIC_BASE, from_public, to_public
         self.create_playlist()
         device = self.send(self.web_base + "/api/devices", "POST", {"name": "TV", "playlist": "mix"})[1]
         q = {"username": device["username"], "password": device["password"]}
-        live = json.loads(self.get(self.base + "/player_api.php?" + urlencode({**q, "action": "get_live_streams"}))[1])
-        self.assertIn(2 * OFFSET + 42, [c["stream_id"] for c in live])
-        info = json.loads(self.get(self.base + "/player_api.php?" + urlencode(
-            {**q, "action": "get_series_info", "series_id": str(2 * OFFSET + 900)}))[1])
+        api = lambda **kw: json.loads(self.get(self.base + "/player_api.php?" + urlencode({**q, **kw}))[1])  # noqa: E731
+        live = api(action="get_live_streams")
+        ids = [c["stream_id"] for c in live]
+        self.assertIn(PUBLIC_BASE + 42, ids)
+        self.assertTrue(all(isinstance(i, int) and i < 2 ** 31 for i in ids), ids)
+        cats = [c["category_id"] for c in api(action="get_live_categories")]
+        self.assertTrue(all(int(c) < 2 ** 31 for c in cats), cats)
+        self.assertIn(str(PUBLIC_BASE + 1), cats)
+        self.assertTrue(api(action="get_live_streams", category_id=str(PUBLIC_BASE + 1)))
+        series = api(action="get_series")
+        self.assertIn(PUBLIC_BASE + 900, [s["series_id"] for s in series])
+        info = api(action="get_series_info", series_id=str(PUBLIC_BASE + 900))
         first = info["episodes"]["1"][0]
-        self.assertEqual(first["id"], str(2 * OFFSET + 9001))
+        self.assertEqual(first["id"], str(PUBLIC_BASE + 9001))
         status = self.get(f"{self.base}/series/{device['username']}/{device['password']}/{first['id']}.mp4")
         self.assertEqual(status[0], 502)  # fichier absent chez le faux fournisseur, mais bien routé vers B
         self.assertIn(f"/series/{USERNAME}/{PASSWORD}/9001.mp4", FakeB.paths)
+        # Lecture d'une chaîne de B par son identifiant court (et par l'ancien, toujours accepté).
+        before = len(FakeB.paths)
+        stream = self.get(f"{self.base}/live/{device['username']}/{device['password']}/{PUBLIC_BASE + 42}.ts")
+        self.assertEqual(stream[1], b"TS DATA 12345678")
+        self.assertIn(f"/live/{USERNAME}/{PASSWORD}/42.ts", FakeB.paths[before:])
+        old = self.get(f"{self.base}/live/{device['username']}/{device['password']}/{2 * OFFSET + 42}.ts")
+        self.assertEqual(old[1], b"TS DATA 12345678")
+        # Conversion : aller-retour, abonnement principal inchangé, identifiants trop grands laissés tels quels.
+        self.assertEqual(from_public(to_public(str(9 * OFFSET + 99_999_999))), str(9 * OFFSET + 99_999_999))
+        self.assertEqual((to_public("42"), from_public("42")), ("42", "42"))
+        self.assertEqual(to_public(str(2 * OFFSET + 10 ** 8)), str(2 * OFFSET + 10 ** 8))
 
     def test_one_provider_down(self):
         FakeB.down = True

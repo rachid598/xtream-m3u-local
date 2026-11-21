@@ -32,6 +32,34 @@ def encode(index: int, raw: object) -> str:
     return f"p{index}.{raw}"
 
 
+# Identifiants « courts » pour les lecteurs Xtream (TiviMate, applis Android) : beaucoup lisent les
+# identifiants comme des entiers 32 bits (max 2 147 483 647) ; ``k × 10¹¹ + id`` déborde et la liste est
+# refusée (« erreur lors du traitement de la liste de lecture »). Abonnement k (2 à 9) :
+# 1 000 000 000 + (k − 2) × 100 000 000 + id, pour id < 100 000 000 (sinon identifiant interne inchangé).
+PUBLIC_BASE = 10 ** 9
+PUBLIC_STEP = 10 ** 8
+
+
+def to_public(value: object) -> str:
+    """Identifiant interne → identifiant court donné aux lecteurs Xtream."""
+    text = str(value)
+    index, raw = decode(text)
+    if index >= 2 and raw.isdigit() and int(raw) < PUBLIC_STEP:
+        return str(PUBLIC_BASE + (index - 2) * PUBLIC_STEP + int(raw))
+    return text
+
+
+def from_public(value: object) -> str:
+    """Identifiant court reçu d'un lecteur Xtream → identifiant interne (les identifiants internes passent tels quels)."""
+    text = str(value)
+    if text.isdigit():
+        number = int(text)
+        if PUBLIC_BASE <= number < PUBLIC_BASE + 8 * PUBLIC_STEP:
+            offset = number - PUBLIC_BASE
+            return encode(2 + offset // PUBLIC_STEP, offset % PUBLIC_STEP)
+    return text
+
+
 def decode(value: object) -> tuple[int, str]:
     text = str(value).strip()
     if text.isdigit():
