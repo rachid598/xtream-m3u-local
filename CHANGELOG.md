@@ -2,6 +2,14 @@
 
 Format inspiré de « Keep a Changelog ». Les versions suivent le versionnage sémantique.
 
+## [3.18.0] — 2026-11-21
+
+### Ajouté
+- **Playlist « mélange » : un bloc repliable par fournisseur** dans la liste des catégories, séparation nette (nom de l'abonnement, nombre de catégories cochées). L'abonnement du profil est en premier et déplié, les autres repliés ; les blocs ouverts sont retenus par le navigateur ; une recherche ouvre les blocs qui ont des résultats.
+
+### Modifié
+- « Cocher aussi les catégories liées » ne propose plus de catégorie d'un autre abonnement.
+
 ## [3.17.0] — 2026-11-21
 
 ### Ajouté

@@ -284,6 +284,22 @@ label { display: block; font-size: 12.5px; font-weight: 600; color: var(--text-s
 
 /* --------------------------------------------------------------- categories */
 .category-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 8px; margin-top: 10px; }
+/* Playlist « mélange » : un bloc repliable par fournisseur, séparation franche. */
+.provider-group { grid-column: 1 / -1; border: 2px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--bg-elev); }
+.provider-group + .provider-group { margin-top: 6px; }
+.provider-group > summary {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap;
+  padding: 10px 14px; cursor: pointer; font-weight: 700; font-size: 15px; background: var(--bg-soft);
+  border-radius: var(--radius-sm); list-style: none;
+}
+.provider-group > summary::-webkit-details-marker { display: none; }
+.provider-group > summary::before { content: '▸'; margin-right: 4px; transition: transform .15s; }
+.provider-group[open] > summary::before { transform: rotate(90deg); }
+.provider-group[open] > summary { border-bottom: 1px solid var(--border); border-radius: var(--radius-sm) var(--radius-sm) 0 0; }
+.provider-group .pg-name { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.provider-group .pg-count { font-weight: 500; font-size: 13px; color: var(--text-soft); }
+.provider-group .pg-count.on { color: var(--accent); }
+.provider-group > .category-grid { margin: 0; padding: 10px; }
 .cat {
   display: flex; align-items: center; gap: 10px; padding: 10px 12px; margin: 0;
   border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg-soft);

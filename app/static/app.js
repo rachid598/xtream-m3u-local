@@ -28,6 +28,7 @@
     sel: { live: emptySelection(), vod: emptySelection(), series: emptySelection() },
     playlists: [],
     profiles: [],            // abonnements configurés [{id, name}] (profils : moi, ma sœur…)
+    openGroups: new Set(),   // blocs « fournisseur » dépliés dans la liste des catégories (playlist mélange)
     profile: '1',            // profil sélectionné
     accounts: [],            // comptes des abonnements (onglet Système, badge)
     editing: null,           // slug de la playlist ouverte (null = nouvelle)
@@ -837,6 +838,18 @@
     return on;
   }
 
+  /** Catégories regroupées par abonnement (profil du profil affiché d'abord), seulement s'il y en a plusieurs. */
+  function providerGroups(visible) {
+    const ids = [...new Set(state.categories.map((c) => c.profile || '1'))];
+    if (ids.length < 2) return [];
+    ids.sort((a, b) => (a === state.profile ? -1 : b === state.profile ? 1 : Number(a) - Number(b)));
+    return ids.map((id) => ({
+      id, name: profileName(id),
+      all: state.categories.filter((c) => (c.profile || '1') === id),
+      cats: visible.filter((c) => (c.profile || '1') === id),
+    })).filter((g) => g.cats.length);
+  }
+
   function renderCategories() {
     const grid = $('categories');
     grid.replaceChildren();
@@ -861,13 +874,15 @@
     });
     // Catégories qui ne diffèrent que par la qualité (« FRANCE FHD | OTT » / « FRANCE HD | OTT »…) :
     // même règle que les doublons de chaînes, pour proposer de les cocher ensemble en un clic.
+    // Jamais d'un abonnement à l'autre : chaque fournisseur reste séparé.
     const clusters = new Map();
     for (const cat of state.categories) {
-      const base = baseName(cat.name) || cat.name;
+      const base = `${cat.profile || '1'}|${baseName(cat.name) || cat.name}`;
       if (!clusters.has(base)) clusters.set(base, []);
       clusters.get(base).push(cat);
     }
     const fragment = document.createDocumentFragment();
+    const items = new Map();
     for (const cat of visible) {
       const ruled = !state.selected.has(cat.category_id) && ruleSet(state.kind).has(cat.category_id);
       const on = catOn(state.kind, cat.category_id);
@@ -884,12 +899,11 @@
         refresh({ channels: false });
       });
       if (ruled) { metaText = `${metaText} · ajoutée par une règle`; partial = true; }
-      const siblings = (clusters.get(baseName(cat.name) || cat.name) || []).filter((c) => c.category_id !== cat.category_id);
+      const siblings = (clusters.get(`${cat.profile || '1'}|${baseName(cat.name) || cat.name}`) || []).filter((c) => c.category_id !== cat.category_id);
       const uncheckedSiblings = siblings.filter((c) => !state.selected.has(c.category_id));
-      fragment.append(h('label', { class: `cat${on ? ' on' : ''}${ruled ? ' ruled' : ''}` },
+      items.set(cat.category_id, h('label', { class: `cat${on ? ' on' : ''}${ruled ? ' ruled' : ''}` },
         box,
         h('span', { class: 'grow' }, h('span', { class: 'name', text: cat.name }),
-          cat.provider ? h('span', { class: 'meta', text: `Fournisseur : ${cat.provider}` }) : null,
           parent ? h('span', { class: 'meta', text: `Sous-groupe de ${parent}` }) : null,
           h('span', { class: `meta${partial ? ' partial' : ''}`, text: metaText }),
           uncheckedSiblings.length ? h('button', { type: 'button', class: 'link-btn qlink',
@@ -906,6 +920,26 @@
           onclick: (event) => { event.preventDefault(); showCategoryChannels(cat.category_id); },
         }) : null,
       ));
+    }
+    const groups = providerGroups(visible);
+    if (groups.length < 2) fragment.append(...items.values());
+    else {
+      // Plusieurs abonnements (playlist « mélange ») : un bloc repliable par fournisseur, séparation nette.
+      for (const group of groups) {
+        const checked = group.all.filter((c) => catOn(state.kind, c.category_id)).length;
+        const details = h('details', { class: 'provider-group', open: query || state.openGroups.has(group.id) },
+          h('summary', {},
+            h('span', { class: 'pg-name', text: group.name }),
+            h('span', { class: `pg-count${checked ? ' on' : ''}`,
+              text: `${checked} cochée${checked > 1 ? 's' : ''} sur ${plural(group.all.length, 'catégorie', 'catégories')}` })),
+          h('div', { class: 'category-grid' }, ...group.cats.map((c) => items.get(c.category_id))));
+        details.addEventListener('toggle', () => {
+          if (query) return;   // ouverture automatique de la recherche : pas mémorisée
+          if (details.open) state.openGroups.add(group.id); else state.openGroups.delete(group.id);
+          storage('xtream-m3u-open-providers', JSON.stringify([...state.openGroups]));
+        });
+        fragment.append(details);
+      }
     }
     grid.append(fragment);
     if (!visible.length) grid.append(h('p', { class: 'empty', text: 'Aucune catégorie ne correspond au filtre.' }));
@@ -2398,6 +2432,10 @@
       state.profiles = state.status.profiles || [];
       const remembered = storage('xtream-m3u-profile');
       state.profile = state.profiles.some((p) => p.id === remembered) ? remembered : '1';
+      // Blocs dépliés mémorisés ; par défaut, seul l'abonnement du profil est déplié.
+      let open = null;
+      try { open = JSON.parse(storage('xtream-m3u-open-providers') || 'null'); } catch (_) { open = null; }
+      state.openGroups = new Set(Array.isArray(open) ? open.map(String) : [state.profile]);
       renderProfileBar();
       if (state.status.token_required && !state.status.access_token) {
         $('token-card').hidden = false;

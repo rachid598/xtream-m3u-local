@@ -103,6 +103,22 @@ try {
   await waitFor(async () => (await api('/api/settings')).allow_mix === true, 'mélange autorisé');
   await page.click('#view-btn-playlists');
   await waitFor(async () => (await page.locator('#opt-provider option').count()) === 2, 'choix « Tous les abonnements »');
+  // Playlist « mélange » : un bloc repliable par fournisseur, celui du profil déplié, les autres repliés.
+  await showSection('options');
+  await page.selectOption('#opt-provider', '');
+  await showSection('content');
+  await waitFor(async () => (await page.locator('#categories details.provider-group').count()) >= 2, 'blocs par fournisseur');
+  const groups = page.locator('#categories details.provider-group');
+  assert(/Moi/.test(await groups.nth(0).locator('summary').innerText()), 'premier bloc : abonnement du profil');
+  assert(await groups.nth(0).evaluate((d) => d.open) && !(await groups.nth(1).evaluate((d) => d.open)), 'Moi déplié, autres repliés');
+  await groups.nth(0).locator('summary').click();
+  await groups.nth(1).locator('summary').click();
+  await waitFor(async () => !(await groups.nth(0).evaluate((d) => d.open)) && await groups.nth(1).evaluate((d) => d.open), 'replier / déplier');
+  if (shots) await page.screenshot({ path: join(shots, 'desktop-provider-groups.png') });
+  await showSection('options');
+  await page.selectOption('#opt-provider', '1');
+  await waitFor(async () => (await page.locator('#categories details.provider-group').count()) === 0, 'un seul abonnement : pas de blocs');
+  await showSection('content');
   await page.click('#view-btn-system');
   await page.uncheck('#allow-mix');
   await waitFor(async () => (await api('/api/settings')).allow_mix === false, 'mélange désactivé');
