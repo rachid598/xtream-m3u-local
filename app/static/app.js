@@ -458,9 +458,11 @@
       const custom = groupAssignment().get(c.stream_id);
       if (c._core === undefined) c._core = matchName(c.name);
       const key = `${custom ? CG + custom : group}\u0000${c._core || baseName(c.name)}`;
-      const q = qualityOf(c.name);
+      // Versions 4K selon l'option (même règle que builder.version_rank) : en dernier secours par défaut.
+      const raw = qualityOf(c.name);
+      const q = raw === 4 && $('opt-uhd').value !== 'normal' ? 0.5 : raw;
       if (!best.has(key)) best.set(key, []);
-      best.get(key).push({ q, id: c.stream_id, i: kept.length });
+      best.get(key).push({ q, uhd: raw === 4, id: c.stream_id, i: kept.length });
       kept.push(c.stream_id);
     }
     // Même règle que le serveur (builder.dedupe) : meilleure qualité gardée, les autres = versions de secours.
@@ -468,7 +470,9 @@
     state.altMap = new Map();   // id gardé → [ids des versions de secours, meilleure d'abord]
     state.altOf = new Map();    // id masqué → { kept, rank }
     for (const versions of best.values()) {
-      const ranked = versions.sort((a, b) => b.q - a.q || a.i - b.i).map((v) => v.id);
+      let sorted = versions.sort((a, b) => b.q - a.q || a.i - b.i);
+      if ($('opt-uhd').value === 'never' && sorted.some((v) => !v.uhd)) sorted = sorted.filter((v) => !v.uhd);
+      const ranked = sorted.map((v) => v.id);
       keep.add(ranked[0]);
       if (ranked.length > 1) {
         state.altMap.set(ranked[0], ranked.slice(1, 9));
@@ -518,6 +522,7 @@
     data.dedupe = $('opt-dedupe').checked;
     data.failover = $('opt-failover').checked;
     data.failover_any_category = $('opt-failover-any').checked;
+    data.uhd = $('opt-uhd').value;
     data.hq_logos = $('opt-hq-logos').checked;
     data.provider = multiProfile() ? state.profile : '';
     data.mix = multiProfile() && $('opt-provider').value === 'mix';
@@ -835,6 +840,7 @@
     if ($('opt-failover').checked && $('opt-dedupe').checked && $('opt-live-format').value !== 'hls') parts.push('Bascule auto');
     $('opt-failover-hint').classList.toggle('warn-text', $('opt-failover').checked && (!$('opt-dedupe').checked || $('opt-live-format').value === 'hls'));
     $('opt-failover-any').disabled = !$('opt-failover').checked;
+    $('opt-uhd').disabled = !$('opt-dedupe').checked;
     if (!$('opt-failover').checked) $('opt-failover-any').checked = false;
     if (parts.includes('Bascule auto') && $('opt-failover-any').checked) parts[parts.length - 1] += ' (toutes catégories)';
     $('options-pill-text').textContent = parts.join(' · ');
@@ -1801,6 +1807,7 @@
     $('opt-dedupe').checked = Boolean(p && p.dedupe);
     $('opt-failover').checked = Boolean(p && p.failover);
     $('opt-failover-any').checked = Boolean(p && p.failover_any_category);
+    $('opt-uhd').value = (p && p.uhd) || 'backup';
     $('opt-hq-logos').checked = !p || p.hq_logos !== false;
     $('opt-separators').checked = Boolean(p && p.hide_separators);
     $('opt-fav-name').value = (p && p.favorites_name) || '★ Favoris';
@@ -2760,6 +2767,7 @@
     }
   });
   $('opt-failover-any').addEventListener('change', () => { renderOptionsPill(); refresh({ channels: false }); });
+  $('opt-uhd').addEventListener('change', () => { state.hiddenCache = null; renderOptionsPill(); refresh(); });
   $('opt-separators').addEventListener('change', () => { renderOptionsPill(); refresh(); });
   $('opt-fav-name').addEventListener('input', () => renderStats());
   $('rule-value').addEventListener('input', debounce(previewRule, 150));

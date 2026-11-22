@@ -2,6 +2,16 @@
 
 Format inspiré de « Keep a Changelog ». Les versions suivent le versionnage sémantique.
 
+## [3.24.0] — 2026-11-22
+
+Retour réel : avec « Masquer les doublons » et la bascule automatique, « M6 4K » (une petite vidéo du logo en boucle, avec musique) était choisie à la place de M6 ; la bascule ne voit aucune coupure et ne change pas de version.
+
+### Modifié
+- **Versions 4K / UHD en dernier secours par défaut** (option de playlist « Versions 4K / UHD ») : la FHD, puis la HD… passent avant la 4K, qui ne sert que si tout le reste est indisponible. Au choix : « comme les autres » (meilleure qualité d'abord, comportement d'avant) ou « jamais » (4K écartée, sauf chaîne qui n'existe qu'en 4K). Même règle pour les secours pris hors des catégories cochées et pour l'aperçu de l'interface.
+
+### Corrigé
+- « Secours hors catégories cochées » reprenait aussi les chaînes **exclues** de la playlist : une chaîne exclue ne sert plus jamais de version de secours.
+
 ## [3.23.0] — 2026-11-22
 
 Retour réel : appli testée hors de la maison par le tunnel Cloudflare ; les groupes s'affichent mais les chaînes non, journaux pleins de « BrokenPipeError » sur `player_api.php`.

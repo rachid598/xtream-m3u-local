@@ -333,7 +333,7 @@ class FailoverAnyCategoryTests(unittest.TestCase):
         categories = {"1": "A", "9": "B", **{str(20 + n): f"C{n}" for n in range(8)}}
         api = StubAPI(catalog, categories)
         saved = validate_playlist({"slug": "s", "name": "S", "category_ids": ["1", "9"], "dedupe": True,
-                                   "failover": True, "failover_any_category": True,
+                                   "failover": True, "failover_any_category": True, "uhd": "normal",
                                    "custom_groups": [{"id": "g1", "name": "G", "match": "exact", "patterns": ["TF1"]}]})
         entries, _ = select_items(api, saved, "live")
         self.assertEqual([item["stream_id"] for item, _ in entries], ["10"])  # 4K gardé (meilleure qualité)

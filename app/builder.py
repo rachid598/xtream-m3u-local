@@ -180,22 +180,41 @@ def rule_matches(category_name: str, rule: dict) -> bool:
 
 
 MAX_ALTERNATES = 8
+UHD_MODES = ("backup", "normal", "never")
+UHD_QUALITY = 4.0
 
 
-def dedupe(entries: list[tuple[dict, str]]) -> list[tuple[dict, str]]:
+def version_rank(name: str, uhd: str = "backup") -> float:
+    """Rang d'une version pour choisir la chaîne gardée et l'ordre des secours.
+
+    ``uhd`` (option de playlist « Versions 4K / UHD ») : ``backup`` (défaut) = une version 4K passe
+    après toutes les autres (beaucoup de « 4K » de fournisseurs sont des chaînes d'événement ou une
+    vidéo de logo en boucle) ; ``normal`` = meilleure qualité d'abord ; ``never`` = 4K jamais utilisée
+    comme version d'une autre chaîne.
+    """
+    q = quality(name)
+    return 0.5 if q == UHD_QUALITY and uhd != "normal" else q
+
+
+def dedupe(entries: list[tuple[dict, str]], uhd: str = "backup") -> list[tuple[dict, str]]:
     """Dans chaque groupe, garde la meilleure qualité d'une même chaîne (SD/HD/FHD/4K…).
 
     La version gardée reçoit ``alternates`` : les autres versions, de la meilleure à la moins bonne,
-    utilisées par la bascule automatique (option ``failover``).
+    utilisées par la bascule automatique (option ``failover``). Les versions 4K suivent ``uhd``
+    (voir :func:`version_rank`).
     """
     versions: dict[tuple[str, str], list[tuple[float, int]]] = {}
     for index, (item, group) in enumerate(entries):
         # Même nom comparable que les groupes perso : « VIP: TF1 ᴴᴰ », « FR: TF1 », « AF: TF1 » → « tf1 ».
         key = (group, match_name(item["name"]) or base_name(item["name"]))
-        versions.setdefault(key, []).append((quality(item["name"]), index))
+        versions.setdefault(key, []).append((version_rank(item["name"], uhd), index))
     keep: dict[int, list[int]] = {}
     for found in versions.values():
         ranked = [index for _, index in sorted(found, key=lambda v: (-v[0], v[1]))]
+        if uhd == "never":
+            # 4K écartée dès qu'une autre version existe (une chaîne qui n'existe qu'en 4K reste).
+            others = [i for i in ranked if quality(entries[i][0]["name"]) != UHD_QUALITY]
+            ranked = others or ranked
         keep[ranked[0]] = ranked[1:]
     result = []
     for index, (item, group) in enumerate(entries):
@@ -240,7 +259,8 @@ def _core_index(items: list[dict]) -> dict[str, list[tuple[float, str]]]:
     return index
 
 
-def extend_alternates_from_catalog(entries: list[tuple[dict, str]], items: list[dict]) -> list[tuple[dict, str]]:
+def extend_alternates_from_catalog(entries: list[tuple[dict, str]], items: list[dict], uhd: str = "backup",
+                                   excluded: set | frozenset = frozenset()) -> list[tuple[dict, str]]:
     """Complète les versions de secours avec tout le catalogue, même les catégories non cochées.
 
     Option de playlist ``failover_any_category`` : les chaînes trouvées restent invisibles (aucune
@@ -253,7 +273,12 @@ def extend_alternates_from_catalog(entries: list[tuple[dict, str]], items: list[
         existing = list(item.get("alternates") or [])
         core = match_name(item["name"]) or base_name(item["name"])
         seen = {item["stream_id"], *existing}
-        extra = [sid for _, sid in index.get(core, []) if sid not in seen]
+        # Chaînes exclues de la playlist : jamais reprises comme secours. Versions 4K : selon ``uhd``.
+        candidates = [(q, sid) for q, sid in index.get(core, []) if sid not in seen and sid not in excluded
+                      and not (uhd == "never" and q == UHD_QUALITY)]
+        if uhd == "backup":
+            candidates.sort(key=lambda v: -(0.5 if v[0] == UHD_QUALITY else v[0]))
+        extra = [sid for _, sid in candidates]
         if extra:
             item = {**item, "alternates": (existing + extra)[:MAX_ALTERNATES]}
         result.append((item, group))
@@ -339,9 +364,11 @@ def select_items(api, saved: dict, kind: str, *, refresh: bool = False) -> tuple
     if kind == "live":
         entries = apply_custom_groups(entries, saved)
     if kind == "live" and saved.get("dedupe"):
-        entries = dedupe(entries)
+        uhd = saved.get("uhd") if saved.get("uhd") in UHD_MODES else "backup"
+        entries = dedupe(entries, uhd)
         if saved.get("failover") and saved.get("failover_any_category"):
-            entries = extend_alternates_from_catalog(entries, items)
+            entries = extend_alternates_from_catalog(entries, items, uhd,
+                                                     set(saved.get(SELECTION_FIELDS["live"][2]) or ()))
     if kind == "live" and saved.get("hq_logos", True):
         entries = apply_hq_logos(entries, categories)
     names = saved.get("item_names") or {}

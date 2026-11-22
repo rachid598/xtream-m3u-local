@@ -231,6 +231,9 @@ try {
   await showSection('options');
   await page.check('#opt-failover');
   await waitFor(async () => /Bascule auto/.test(await page.innerText('#options-pill-text')), 'option bascule automatique');
+  // Versions 4K : en dernier secours par défaut ; ici « comme les autres » (TF1 4K gardée, TF1 HD en secours).
+  assert(await page.inputValue('#opt-uhd') === 'backup', '4K en dernier secours par défaut');
+  await page.selectOption('#opt-uhd', 'normal');
   await showSection('organize');
   await page.locator('#cg-presets button', { hasText: '+ Bouquet Canal+' }).click();
   await waitFor(async () => (await page.locator('#cg-list .cg-card').first().locator('input').inputValue()) === 'Bouquet Canal+', 'bouquet Canal+ en premier');

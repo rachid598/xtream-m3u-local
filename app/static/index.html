@@ -307,6 +307,15 @@
           </div>
           <div class="option-row">
             <label class="check-row"><input type="checkbox" id="opt-dedupe"> <span>Masquer les doublons SD / HD / FHD / 4K d'une même chaîne (garder la meilleure qualité dans chaque groupe)</span></label>
+            <div class="option-row sub-option">
+              <label for="opt-uhd">Versions 4K / UHD</label>
+              <select id="opt-uhd">
+                <option value="backup">En dernier secours (conseillé) : la FHD passe avant la 4K</option>
+                <option value="normal">Comme les autres : la meilleure qualité d'abord</option>
+                <option value="never">Jamais, sauf chaîne qui n'existe qu'en 4K</option>
+              </select>
+              <p class="hint">Beaucoup de « 4K » de fournisseurs sont des chaînes d'événement ou une vidéo de logo en boucle (ex. « M6 4K ») : la bascule automatique ne peut pas les repérer, elle ne voit pas de coupure.</p>
+            </div>
           </div>
           <div class="option-row">
             <label class="check-row"><input type="checkbox" id="opt-failover"> <span>Bascule automatique : si la version lue coupe, se fige ou rame, passer toute seule à la version suivante de la même chaîne (4K → FHD → HD → SD)</span></label>

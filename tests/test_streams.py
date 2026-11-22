@@ -175,9 +175,12 @@ class FailoverTests(StackTestCase):
         entries = [({"stream_id": "1", "name": "VIP: TF1 ᴴᴰ"}, "g"), ({"stream_id": "2", "name": "FR: TF1 4K"}, "g"),
                    ({"stream_id": "3", "name": "AF: TF1"}, "g"), ({"stream_id": "4", "name": "TF1 FHD"}, "g"),
                    ({"stream_id": "5", "name": "M6"}, "g")]
-        kept = dedupe(entries)
+        kept = dedupe(entries, "normal")                     # meilleure qualité d'abord (4K comprise)
         self.assertEqual([(e[0]["stream_id"], e[0].get("alternates")) for e in kept],
                          [("2", ["4", "1", "3"]), ("5", None)])
+        kept = dedupe(entries)                                # défaut : 4K en dernier secours
+        self.assertEqual([(e[0]["stream_id"], e[0].get("alternates")) for e in kept],
+                         [("4", ["1", "3", "2"]), ("5", None)])
 
     def test_playlist_urls_carry_alternates_only_with_failover(self):
         from app.server import playlist

@@ -284,6 +284,11 @@ def validate_playlist(payload: object, *, slug: str | None = None) -> dict:
     # Playlist « mélange » : son abonnement + les abonnements cochés « peut être mélangé aux autres ».
     result["mix"] = bool(payload.get("mix", False))
     result["failover_any_category"] = bool(payload.get("failover_any_category", False))
+    # Versions 4K / UHD : en dernier secours (défaut), comme les autres, ou jamais (voir builder.version_rank).
+    uhd = payload.get("uhd", "backup") or "backup"
+    if uhd not in ("backup", "normal", "never"):
+        raise InvalidPlaylist("Versions 4K : backup, normal ou never")
+    result["uhd"] = uhd
     result["rules"] = _rules(payload.get("rules"))
     result["item_names"] = _item_names(payload.get("item_names"))
     result["item_numbers"] = _item_numbers(payload.get("item_numbers"))
