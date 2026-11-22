@@ -254,6 +254,8 @@ Fermé par défaut : toute connexion qui ne vient pas du réseau local (10.x, 17
 2. Cloudflare s'ouvre : connecte-toi, choisis ton domaine et clique sur « Authorize » ;
 3. la page continue toute seule : le tunnel est créé, l'adresse ajoutée dans tes DNS Cloudflare, puis le tunnel démarre (« Connecté ») et redémarre seul avec le conteneur.
 
+Dans **Appareils**, choisis pour chaque appareil **Liens : réseau local** (à la maison) ou **Externe** (hors de la maison) : un appareil externe affiche directement ses adresses avec ton adresse publique (`https://tv.mondomaine.fr/…` pour la playlist, le guide, le serveur Xtream et le tuner), prêtes à copier. Sans tunnel, l'adresse publique est `PUBLIC_BASE_URL`.
+
 Seul le port des lecteurs (7777) est publié, en https, avec un **code d'appareil obligatoire** (pas besoin de `REMOTE_ACCESS`, ni d'ouvrir un port sur ta box) ; l'interface de gestion reste à la maison. Dans TiviMate hors de chez toi : serveur `https://tv.mondomaine.fr`, identifiant et mot de passe de l'appareil. Le compte et les clés du tunnel sont gardés dans `/data/cloudflared` (droits 0700), jamais affichés. « Supprimer le tunnel » le supprime aussi chez Cloudflare ; l'enregistrement DNS reste à effacer dans Cloudflare. **Attention :** les conditions du service gratuit de Cloudflare interdisent de faire passer surtout de la vidéo ; un usage intensif peut être coupé ou faire suspendre le compte. Pour un usage régulier, préfère Tailscale.
 
 **Avec un nom de domaine et Traefik** (ou Nginx Proxy Manager) : n'expose **que le port 7777**, en HTTPS, et seulement les chemins des lecteurs. Exemple d'étiquettes Docker pour Traefik :

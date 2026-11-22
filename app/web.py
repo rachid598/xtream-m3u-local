@@ -400,7 +400,7 @@ class WebHandler(BaseHTTPRequestHandler):
             if method == "POST":
                 return self.json(201, self.devices.create(body.get("name"), body.get("playlist", ""),
                                                           body.get("username"), body.get("priority", "normal"),
-                                                          body.get("ip", "")))
+                                                          body.get("ip", ""), body.get("links", "lan")))
             return self.json(200, self.devices.update(device_id, body))
         except KeyError:
             return self.json(404, {"error": "Appareil introuvable"})
@@ -527,6 +527,8 @@ class WebHandler(BaseHTTPRequestHandler):
             "version": __version__,
             "playlist_port": self.config.port,
             "public_base_url": self.config.public_base_url,
+            # Adresse publique pour les appareils « externes » : tunnel Cloudflare, sinon PUBLIC_BASE_URL.
+            "external_base": f"https://{tunnel.hostname()}" if tunnel.hostname() else self.config.public_base_url,
             "epg_enabled": self.config.enable_epg,
             "token_required": bool(self.config.access_token) or bool(self.devices and self.devices.require_token),
             "web_auth": bool(self.config.web_password),

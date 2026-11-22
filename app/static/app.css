@@ -487,7 +487,8 @@ dialog .field { margin-bottom: 16px; }
 .check-row input { width: 18px; height: 18px; accent-color: var(--accent); margin-top: 2px; flex: none; }
 
 /* ------------------------------------------------------------ devices */
-.device-form { display: grid; grid-template-columns: 1fr 1fr auto; gap: 12px; align-items: end; }
+.device-form { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; align-items: end; }
+.device-form > .btn { grid-column: 1; }
 .device-form select { width: 100%; }
 .provider-form { display: grid; grid-template-columns: 1fr 1.4fr 1fr 1fr auto; gap: 12px; align-items: end; margin-top: 12px; }
 .provider-form input { width: 100%; }
@@ -613,7 +614,7 @@ dialog.preview-dialog { width: min(920px, calc(100vw - 24px)); padding: 14px; }
 #item-dialog input[type=url], #item-dialog input[type=number] { width: 100%; font: inherit; font-size: 14px; color: var(--text); background: var(--bg); border: 1px solid var(--border-strong); border-radius: var(--radius-sm); padding: 10px 12px; min-height: 40px; }
 
 /* ------------------------------------------------------------ appareils */
-.device-settings { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.device-settings { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
 .device-settings .field { margin: 0; }
 .device-settings select, .device-settings input { width: 100%; }
 

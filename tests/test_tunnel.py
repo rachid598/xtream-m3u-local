@@ -99,3 +99,23 @@ class TunnelTests(StackTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DeviceLinksTests(StackTestCase):
+    """Appareil « externe » : l'interface affiche ses liens avec l'adresse publique."""
+
+    def test_links_mode_and_external_base(self):
+        status, device = self.send(self.stack.web_base + "/api/devices", "POST",
+                                   {"name": "TV maman", "links": "external"})
+        self.assertEqual((status, device["links"]), (201, "external"))
+        self.assertEqual(self.send(self.stack.web_base + "/api/devices", "POST", {"name": "X", "links": "ailleurs"})[0], 400)
+        status, device = self.send(self.stack.web_base + f"/api/devices/{device['id']}", "PUT", {"links": "lan"})
+        self.assertEqual(device["links"], "lan")
+        self.assertEqual(json.loads(self.get(self.stack.web_base + "/api/status")[1])["external_base"], "")
+        current = tunnel.Tunnel(self.tmp.name, 7777, binary=FAKE)
+        current._save_state({"tunnel_id": "6ff42ae2-765d-4adf-8112-31c55c1551ef", "hostname": "tv.mondomaine.fr",
+                             "enabled": True})
+        tunnel.install(current)
+        self.addCleanup(tunnel.install, None)
+        self.assertEqual(json.loads(self.get(self.stack.web_base + "/api/status")[1])["external_base"],
+                         "https://tv.mondomaine.fr")

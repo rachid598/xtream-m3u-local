@@ -166,6 +166,15 @@ class DeviceStore:
         return priority
 
     @staticmethod
+    def _check_links(value: object) -> str:
+        """Adresses affichées pour l'appareil : réseau local (« lan ») ou adresse publique (« external »)."""
+        if value in (None, ""):
+            return "lan"
+        if value not in ("lan", "external"):
+            raise InvalidDevice("Liens : lan ou external")
+        return value
+
+    @staticmethod
     def _check_ip(ip: object) -> str:
         if ip in (None, ""):
             return ""
@@ -175,7 +184,7 @@ class DeviceStore:
             raise InvalidDevice("Adresse IP de l'appareil invalide (ex. 192.168.0.42)") from None
 
     def create(self, name: object, playlist: object = "", username: object = None,
-               priority: object = "normal", ip: object = "") -> dict:
+               priority: object = "normal", ip: object = "", links: object = "lan") -> dict:
         with self._lock:
             data = self._load()
             devices = data["devices"]
@@ -193,7 +202,7 @@ class DeviceStore:
             device = {"id": secrets.token_hex(4), "name": clean_name, "username": candidate,
                       "password": new_password(), "playlist": self._check_playlist(playlist),
                       "priority": self._check_priority(priority), "ip": self._check_ip(ip),
-                      "created_at": int(time.time())}
+                      "links": self._check_links(links), "created_at": int(time.time())}
             self._write({"require_token": data["require_token"], "devices": devices + [device]})
             return dict(device)
 
@@ -212,6 +221,8 @@ class DeviceStore:
                 device["priority"] = self._check_priority(payload["priority"])
             if "ip" in payload:
                 device["ip"] = self._check_ip(payload["ip"])
+            if "links" in payload:
+                device["links"] = self._check_links(payload["links"])
             if payload.get("regenerate"):
                 device["password"] = new_password()
             self._write({"require_token": data["require_token"], "devices": devices})
@@ -268,6 +279,7 @@ class DeviceStore:
                             "playlist": self._check_playlist(raw.get("playlist")),
                             "priority": self._check_priority(raw.get("priority")),
                             "ip": self._check_ip(raw.get("ip")),
+                            "links": self._check_links(raw.get("links")) if raw.get("links") in ("lan", "external") else "lan",
                             "created_at": created})
         if dry_run:
             return

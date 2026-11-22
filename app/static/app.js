@@ -1957,9 +1957,20 @@
     if (!select.value && select.options.length) select.value = select.options[0].value;
   }
 
+  /** Adresse du port des lecteurs vue depuis la maison (nom ou IP de cette page). */
+  function lanBase() {
+    const s = state.status;
+    const port = (s && s.playlist_port) || 7777;
+    const host = location.hostname.includes(':') && !location.hostname.startsWith('[') ? `[${location.hostname}]` : location.hostname;
+    return `http://${host}:${port}`;
+  }
+
+  /** Adresse publique (tunnel Cloudflare ou PUBLIC_BASE_URL), vide si aucune. */
+  const externalBase = () => ((state.status && state.status.external_base) || '').replace(/\/$/, '');
+
   function deviceCard(d) {
-    const base = baseUrl();
-    const server = base.replace(/\/$/, '');
+    const external = d.links === 'external';
+    const server = external ? (externalBase() || lanBase()) : lanBase();
     const qs = new URLSearchParams({ username: d.username, password: d.password });
     const m3u = d.playlist ? `${server}/p/${d.playlist}.m3u?token=${encodeURIComponent(d.password)}`
       : `${server}/get.php?${qs}&type=m3u_plus&output=ts`;
@@ -1991,7 +2002,9 @@
       h('div', { class: 'device-settings' },
         h('div', { class: 'field' }, h('label', { text: 'Playlist de cet appareil' }), select),
         h('div', { class: 'field' }, h('label', { text: 'Priorité (limite de connexions)' }), prioritySelect(d)),
-        h('div', { class: 'field' }, h('label', { text: 'Adresse IP de la TV (facultatif)' }), ipInput(d))),
+        h('div', { class: 'field' }, h('label', { text: 'Adresse IP de la TV (facultatif)' }), ipInput(d)),
+        h('div', { class: 'field' }, h('label', { text: 'Liens' }), linksSelect(d))),
+      external && !externalBase() ? h('p', { class: 'hint warn-text', text: 'Aucune adresse publique : active le tunnel Cloudflare (Système → Accès à distance) ou définis PUBLIC_BASE_URL. Liens du réseau local affichés en attendant.' }) : null,
       h('div', { class: 'device-grid' },
         h('div', { class: 'device-mode' },
           h('h4', { text: '📺 Mode « Playlist M3U » (VLC, TiviMate, Android TV…)' }),
@@ -2005,6 +2018,17 @@
           credRow('Tuner', `${server}/hdhr/${d.username}/${d.password}`, { secret: true }),
           credRow('Guide (XMLTV)', `${server}/hdhr/${d.username}/${d.password}/guide.xml`, { secret: true }),
           h('p', { class: 'hint', text: `Jellyfin / Emby : ajoute un tuner HDHomeRun avec cette adresse. Plex : si seule « IP:port » est acceptée, mets ${server.replace(/^https?:\/\//, '')} et indique ci-dessus l'adresse IP du serveur Plex.` }))));
+  }
+
+  function linksSelect(d) {
+    const select = h('select', { 'aria-label': `Liens de ${d.name}` },
+      h('option', { value: 'lan', text: 'Réseau local : à la maison', selected: d.links !== 'external' }),
+      h('option', { value: 'external', text: 'Externe : hors de la maison', selected: d.links === 'external' }));
+    select.addEventListener('change', async () => {
+      try { await request(`/api/devices/${d.id}`, 'PUT', { links: select.value }); toast('Liens de l\'appareil modifiés'); loadDevices(); }
+      catch (error) { toast(error.message, 'error'); loadDevices(); }
+    });
+    return select;
   }
 
   function prioritySelect(d) {
@@ -2763,7 +2787,8 @@
     const name = $('device-name').value.trim();
     if (!name) { $('device-name').focus(); return; }
     try {
-      const device = await request('/api/devices', 'POST', { name, playlist: $('device-playlist').value, priority: $('device-priority').value });
+      const device = await request('/api/devices', 'POST', { name, playlist: $('device-playlist').value, priority: $('device-priority').value,
+        links: $('device-links').value });
       $('device-name').value = '';
       toast(`Appareil « ${device.name} » ajouté`);
       loadDevices();

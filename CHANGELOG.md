@@ -2,6 +2,11 @@
 
 Format inspiré de « Keep a Changelog ». Les versions suivent le versionnage sémantique.
 
+## [3.22.0] — 2026-11-22
+
+### Ajouté
+- **Liens par appareil : réseau local ou externe** (Appareils, à la création et dans la fiche). Un appareil « externe » affiche ses adresses (playlist, guide, serveur Xtream, tuner HDHomeRun) avec l'adresse publique : tunnel Cloudflare (`https://…`), sinon `PUBLIC_BASE_URL` ; avertissement si aucune adresse publique n'est configurée. Champ d'appareil `links` (`lan` par défaut) ; `/api/status` donne `external_base`.
+
 ## [3.21.0] — 2026-11-22
 
 ### Modifié
