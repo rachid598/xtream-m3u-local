@@ -241,6 +241,7 @@ Fermé par défaut : toute connexion qui ne vient pas du réseau local (10.x, 17
 - **un code d'appareil est toujours exigé** (onglet Appareils : un appareil par personne, lié à sa playlist ; supprimer l'appareil coupe l'accès) — lien M3U `https://…/p/<playlist>.m3u?token=<code>` ou connexion Xtream (serveur, utilisateur, mot de passe de l'appareil) ;
 - un appareil ne lit **que sa playlist** : autres playlists, chaînes, films, épisodes, replay et HLS hors de sa playlist → 404 (cette règle s'applique aussi sur le réseau local dès qu'un code d'appareil est utilisé) ; `/playlist.m3u` et `/xmltv.php` lui donnent sa playlist et son guide, jamais tout le catalogue ;
 - `mode=direct` (identifiants du fournisseur dans les liens) est refusé ;
+- **aucun indice sans bons identifiants** : page d'accueil, `/health`, adresse inconnue, code faux ou absent → toujours la même réponse « Introuvable » (404), sans version ni adresse ni nom de paramètre. Seule une adresse complète avec un bon code d'appareil fonctionne. Chez toi, la page d'accueil et les messages d'erreur restent explicites ;
 - 10 codes faux en 10 minutes depuis une adresse → adresse bloquée 15 minutes ;
 - l'interface Web (7778) reste réservée au réseau local, sauf `WEB_REMOTE=true` (exige `WEB_PASSWORD`) — déconseillé ;
 - le diagnostic (section « Accès distant ») signale ce qui manque : appareils sans playlist, adresse publique sans https, proxy non déclaré.

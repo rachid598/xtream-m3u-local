@@ -59,7 +59,7 @@ class HdhrTests(StackTestCase):
         from app.access import parse_networks
         remote = self.make_stack(remote_access=True, trusted_proxies=parse_networks("127.0.0.1/32"))
         outside = {"X-Forwarded-For": "203.0.113.7"}
-        self.assertEqual(self.get(remote.proxy_base + "/discover.json", outside)[0], 403)
+        self.assertEqual(self.get(remote.proxy_base + "/discover.json", outside)[0], 404)
         path = f"/hdhr/{self.device['username']}/{self.device['password']}/discover.json"
         self.assertEqual(self.get(remote.proxy_base + path, outside)[0], 200)
 

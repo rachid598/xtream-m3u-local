@@ -2,6 +2,11 @@
 
 Format inspiré de « Keep a Changelog ». Les versions suivent le versionnage sémantique.
 
+## [3.20.1] — 2026-11-22
+
+### Sécurité
+- **Aucun indice hors de la maison** : sans identifiants valides, toute requête venant de l'extérieur (tunnel Cloudflare, reverse proxy, accès distant) reçoit la même réponse « Introuvable » (404) : page d'accueil (version, adresses des playlists), `/health`, adresse inconnue, code faux ou absent, `player_api.php`, tuner HDHomeRun. Seule une adresse complète avec un bon code d'appareil fonctionne. Sur le réseau local, rien ne change.
+
 ## [3.20.0] — 2026-11-22
 
 ### Ajouté

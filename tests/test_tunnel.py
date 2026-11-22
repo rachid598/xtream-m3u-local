@@ -78,7 +78,7 @@ class TunnelTests(StackTestCase):
         via = {"Host": "tv.mondomaine.fr", "CF-Connecting-IP": "203.0.113.9", "X-Forwarded-For": "203.0.113.9",
                "X-Forwarded-Proto": "https"}
         base = self.stack.proxy_base
-        self.assertEqual(self.get(base + "/p/salon.m3u", via)[0], 403)                  # sans code : refusé
+        self.assertEqual(self.get(base + "/p/salon.m3u", via)[0], 404)                  # sans code : aucun indice
         status, body, _ = self.get(base + "/p/salon.m3u?token=" + self.device["password"], via)
         self.assertEqual(status, 200)
         self.assertIn("https://tv.mondomaine.fr/stream/42.ts", body.decode())

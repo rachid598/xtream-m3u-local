@@ -1176,6 +1176,10 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(body)
 
     def _error(self, status: int, message: str, *, head_only: bool) -> None:
+        if getattr(self, "remote", False) and getattr(self, "request_device", None) is None and status < 500:
+            # Hors de la maison, sans identifiants valides : aucune explication (version, adresses, paramètres
+            # attendus). Seule une adresse complète avec un bon code d'appareil fonctionne.
+            status, message = 404, "Introuvable"
         self.response(status, (message + "\n").encode(), "text/plain; charset=utf-8", head_only=head_only)
 
     def send_file(self, path: Path, content_type: str, *, head_only: bool, filename: str) -> None:
@@ -1620,6 +1624,8 @@ class Handler(BaseHTTPRequestHandler):
         if device is None:
             # Journal (une ligne par adresse et par minute) : appareil supprimé ou identifiants mal saisis.
             note_refused_login(self.client_ip or self.client_address[0], arg("username"))
+            if self.remote:
+                return self._error(404, "Introuvable", head_only=head_only)   # hors de la maison : aucun indice
             # Connexion : réponse Xtream standard (auth 0). Listes : vraie erreur 401, pour que le lecteur
             # affiche « identifiants refusés » au lieu d'une liste vide sans explication.
             return self.send_json(EMPTY_AUTH, head_only=head_only, status=200 if not arg("action") else 401)
@@ -1907,7 +1913,7 @@ class Handler(BaseHTTPRequestHandler):
         self.request_device = None
         self.client_ip, self.remote = access.client_address(self.client_address[0], self.headers,
                                                             self.config.proxies(), settings.local_networks(self.config))
-        if path == "/health":
+        if path == "/health" and not self.remote:
             return self.response(HTTPStatus.OK, b"OK\n", "text/plain; charset=utf-8", head_only=head_only)
         if self.remote:
             if not self.config.remote_access and not tunnel.active():
@@ -1920,6 +1926,8 @@ class Handler(BaseHTTPRequestHandler):
         hdhr_match = hdhr.HDHR_RE.fullmatch(path)
         if hdhr_match or path in hdhr.ROOT_FILES:
             return self.handle_hdhr(hdhr_match, path, qs, head_only=head_only)
+        if path == "/" and self.remote:
+            return self._error(404, "Introuvable", head_only=head_only)
         if path == "/":
             text = (
                 f"Xtream M3U Local {__version__}\n"

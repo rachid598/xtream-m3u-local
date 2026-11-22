@@ -75,17 +75,17 @@ class RemoteAccessTests(StackTestCase):
 
     def test_remote_refused_by_default_local_unchanged(self):
         status, body, _ = self.get(self.stack.proxy_base + "/p/salon.m3u", REMOTE)
-        self.assertEqual(status, 403)
-        self.assertIn("Accès distant désactivé", body.decode())
+        self.assertEqual((status, body), (404, b"Introuvable\n"))   # hors de la maison : aucun indice
         self.assertEqual(self.get(self.stack.proxy_base + "/p/salon.m3u", LAN)[0], 200)
         self.assertEqual(self.get(self.stack.proxy_base + "/p/salon.m3u")[0], 200)
-        self.assertEqual(self.get(self.stack.proxy_base + "/health", REMOTE)[0], 200)
+        self.assertEqual(self.get(self.stack.proxy_base + "/health", REMOTE)[0], 404)
+        self.assertEqual(self.get(self.stack.proxy_base + "/health")[0], 200)
 
     def test_remote_requires_device_code_and_respects_its_playlist(self):
         stack = self.remote_stack()
         token = "?" + urlencode({"token": self.device["password"]})
         base = stack.proxy_base
-        self.assertEqual(self.get(base + "/p/salon.m3u", REMOTE)[0], 403)           # pas de code
+        self.assertEqual(self.get(base + "/p/salon.m3u", REMOTE)[0], 404)           # pas de code : aucun indice
         status, body, _ = self.get(base + "/p/salon.m3u" + token, REMOTE)
         self.assertEqual(status, 200)
         self.assertIn("France Info HD", body.decode())
@@ -120,7 +120,7 @@ class RemoteAccessTests(StackTestCase):
     def test_brute_force_blocked(self):
         stack = self.remote_stack()
         for _ in range(10):
-            self.assertEqual(self.get(stack.proxy_base + "/p/salon.m3u?token=mauvais", REMOTE)[0], 403)
+            self.assertEqual(self.get(stack.proxy_base + "/p/salon.m3u?token=mauvais", REMOTE)[0], 404)
         status, body, headers = self.get(stack.proxy_base + "/p/salon.m3u?" + urlencode({"token": self.device["password"]}), REMOTE)
         self.assertEqual(status, 429)
         self.assertIn("Retry-After", headers)
@@ -183,7 +183,7 @@ class TailscaleSettingTests(StackTestCase):
     def test_toggle(self):
         tailscale = {"X-Forwarded-For": "100.68.27.125"}
         self.assertEqual(self.get(self.stack.web_base + "/api/status", tailscale)[0], 403)
-        self.assertEqual(self.get(self.stack.proxy_base + "/p/salon.m3u", tailscale)[0], 403)
+        self.assertEqual(self.get(self.stack.proxy_base + "/p/salon.m3u", tailscale)[0], 404)
         status, data = self.send(self.stack.web_base + "/api/settings", "PUT", {"tailscale_local": True, "inconnu": 1})
         self.assertEqual((status, data["tailscale_local"], "inconnu" in data), (200, True, False))
         self.assertEqual(self.get(self.stack.web_base + "/api/status", tailscale)[0], 200)
@@ -193,6 +193,30 @@ class TailscaleSettingTests(StackTestCase):
         self.assertEqual(self.get(self.stack.web_base + "/api/status", REMOTE)[0], 403)  # Internet : inchangé
         self.send(self.stack.web_base + "/api/settings", "PUT", {"tailscale_local": False})
         self.assertEqual(self.get(self.stack.web_base + "/api/status", tailscale)[0], 403)
+
+
+class NoHintsOutsideTests(StackTestCase):
+    """Hors de la maison, sans bons identifiants : rien ne révèle le serveur (version, adresses, paramètres)."""
+    overrides = {"trusted_proxies": PROXY, "remote_access": True}
+
+    def test_generic_answers(self):
+        self.create({"slug": "salon", "name": "Salon", "category_ids": ["1"]})
+        device = self.send(self.stack.web_base + "/api/devices", "POST", {"name": "TV", "playlist": "salon"})[1]
+        base = self.stack.proxy_base
+        for path in ("/", "/health", "/playlist.m3u", "/p/salon.m3u", "/p/salon.m3u?token=faux", "/stream/42.ts",
+                     "/player_api.php?username=x&password=y", "/live/x/y/42.ts", "/discover.json",
+                     "/hdhr/x/y/discover.json", "/xmltv.php", "/inconnu"):
+            status, body, _ = self.get(base + path, REMOTE)
+            self.assertEqual((status, body), (404, b"Introuvable\n"), path)
+        for word in (b"Xtream", b"token", b"3."):
+            self.assertNotIn(word, self.get(base + "/", REMOTE)[1])
+        # Adresse complète avec le bon code : fonctionne.
+        ok = self.get(f"{base}/p/salon.m3u?token={device['password']}", REMOTE)
+        self.assertEqual(ok[0], 200)
+        q = urlencode({"username": device["username"], "password": device["password"]})
+        self.assertEqual(json.loads(self.get(f"{base}/player_api.php?{q}", REMOTE)[1])["user_info"]["auth"], 1)
+        # Chez soi : la page d'accueil et les messages restent explicites.
+        self.assertIn(b"Xtream M3U Local", self.get(base + "/")[1])
 
 
 class DnsRebindingTests(StackTestCase):
