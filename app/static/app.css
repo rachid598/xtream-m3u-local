@@ -633,3 +633,13 @@ dialog.preview-dialog { width: min(920px, calc(100vw - 24px)); padding: 14px; }
 .check-row.sub-option { margin-left: 28px; margin-top: 4px; font-size: 13px; }
 .cg-body .warn-text { margin: 0; }
 .qlink { display: block; margin-top: 2px; }
+
+/* Tunnel Cloudflare (Système → Accès à distance) */
+.tunnel-box { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 10px; }
+.tunnel-box h3 { margin: 0; font-size: 15px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.tunnel-box p { margin: 0; }
+.tunnel-form { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; }
+.tunnel-form .field { flex: 1 1 260px; min-width: 0; }
+.tunnel-login, .tunnel-ready { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
+.tunnel-ready a { overflow-wrap: anywhere; }
+.tunnel-warn { color: var(--warn); }

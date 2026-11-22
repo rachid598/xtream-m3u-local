@@ -27,7 +27,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, quote, urlencode, urlsplit
 from urllib.request import Request, urlopen
 
-from . import __version__, access, hdhr, logos, provider_store, settings
+from . import __version__, access, hdhr, logos, provider_store, settings, tunnel
 from .httputil import accepts_gzip, encode_body, etag_matches, etag_of, gzip_stream
 from .builder import FAVORITES_GROUP, GROUP_PREFIX, add_favorites, display_logo, select_items
 from .devices import DeviceStore
@@ -165,6 +165,8 @@ def _provider_user_agents() -> tuple:
             result.append((index, value))
     return tuple(result)
 
+
+LOOPBACK = access.parse_networks("127.0.0.1/32, ::1/128")   # cloudflared tourne dans le conteneur
 
 # Le fournisseur refuse une connexion de plus (abonnement déjà utilisé ailleurs) : 429, 458, 509.
 BUSY_CODES = (429, 458, 509)
@@ -319,10 +321,17 @@ class Config:
     local_networks: tuple = ()       # LOCAL_NETWORKS : réseaux en plus considérés locaux (ex. Tailscale 100.64.0.0/10)
     allowed_hosts: tuple = ()        # ALLOWED_HOSTS : noms de domaine acceptés en plus des noms locaux et des IP
 
+    def proxies(self) -> tuple:
+        """Reverse proxys dont on lit l'adresse réelle : ``TRUSTED_PROXIES`` + cloudflared (local) si le tunnel
+        Cloudflare de l'interface est activé."""
+        from . import tunnel
+        return self.trusted_proxies + (LOOPBACK if tunnel.active() else ())
+
     def host_ok(self, host_header: str, peer: str) -> bool:
         """Protection DNS rebinding : nom d'hôte de la requête acceptable (voir :func:`access.host_allowed`)."""
         public = access.host_name(urlsplit(self.public_base_url).netloc) if self.public_base_url else ""
-        via_proxy = bool(self.trusted_proxies) and access._in(access._ip(peer), self.trusted_proxies)
+        proxies = self.proxies()
+        via_proxy = bool(proxies) and access._in(access._ip(peer), proxies)
         return access.host_allowed(host_header, self.allowed_hosts + ((public,) if public else ()), via_proxy=via_proxy)
 
     @property
@@ -1254,6 +1263,12 @@ class Handler(BaseHTTPRequestHandler):
         host = self.headers.get("Host", "")
         if not host or not HOST_RE.fullmatch(host):
             raise ValueError("En-tête Host invalide : définir PUBLIC_BASE_URL")
+        # Derrière un reverse proxy HTTPS déclaré (ou le tunnel Cloudflare) : liens en https.
+        proxies = self.config.proxies()
+        if proxies and access._in(access._ip(self.client_address[0]), proxies):
+            if self.headers.get("X-Forwarded-Proto", "").strip().lower() == "https" or (
+                    tunnel.hostname() and access.host_name(host) == tunnel.hostname()):
+                return "https://" + host.split(":")[0] if host.count(":") == 1 else "https://" + host
         return "http://" + host
 
     def current_device(self) -> dict | None:
@@ -1891,11 +1906,11 @@ class Handler(BaseHTTPRequestHandler):
         refresh = qs.get("refresh", [""])[0] == "1"
         self.request_device = None
         self.client_ip, self.remote = access.client_address(self.client_address[0], self.headers,
-                                                            self.config.trusted_proxies, settings.local_networks(self.config))
+                                                            self.config.proxies(), settings.local_networks(self.config))
         if path == "/health":
             return self.response(HTTPStatus.OK, b"OK\n", "text/plain; charset=utf-8", head_only=head_only)
         if self.remote:
-            if not self.config.remote_access:
+            if not self.config.remote_access and not tunnel.active():
                 return self._error(403, "Accès distant désactivé : ce serveur n'accepte que le réseau local "
                                         "(REMOTE_ACCESS=true pour l'ouvrir, avec un code par appareil)", head_only=head_only)
             wait = self.guard.blocked_for(self.client_ip)
@@ -2275,6 +2290,9 @@ def main() -> None:
     providers = provider_store.ProviderStore(config.data_dir)
     provider_store.install(providers)
     settings.install(settings.Settings(config.data_dir))  # réglages de l'interface (ex. Tailscale = réseau local)
+    # Tunnel Cloudflare de l'interface (Système → Accès à distance) : redémarré s'il était activé.
+    tunnel.install(tunnel.Tunnel(config.data_dir, config.port))
+    tunnel.current().start()
     from .providers import ApiHolder
     api = ApiHolder(make_api(config, providers))  # remplaçable à chaud (abonnements de l'interface)
     store = PlaylistStore(config.data_dir)

@@ -17,6 +17,7 @@ import struct
 import threading
 import time
 import zlib
+from pathlib import Path
 
 from app import logos
 from app.custom import PlaylistStore
@@ -188,6 +189,10 @@ def main() -> None:
     provider_store.install(providers)
     from app import settings
     settings.install(settings.Settings(args.data))
+    # Tunnel Cloudflare de démonstration : faux cloudflared (aucun appel à Cloudflare).
+    from app import tunnel
+    fake = Path(__file__).resolve().parent.parent / "tests" / "fake_cloudflared.py"
+    tunnel.install(tunnel.Tunnel(args.data, args.port, binary=str(fake)))
     api = ApiHolder(make_api(config, providers))  # abonnements ajoutables depuis l'interface
     store = PlaylistStore(args.data)
     epg = make_epg(config, api)

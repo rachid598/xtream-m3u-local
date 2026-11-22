@@ -2,6 +2,14 @@
 
 Format inspiré de « Keep a Changelog ». Les versions suivent le versionnage sémantique.
 
+## [3.20.0] — 2026-11-22
+
+### Ajouté
+- **Tunnel Cloudflare en un clic** (Système → Accès à distance) : adresse voulue (domaine ou sous-domaine), « Connecter à Cloudflare » (connexion au compte et autorisation du domaine dans Cloudflare), puis création automatique du tunnel, de l'enregistrement DNS et démarrage ; redémarrage automatique (coupure, conteneur), arrêt / démarrage / suppression depuis l'interface, état dans le diagnostic.
+- Par le tunnel : seul le port des lecteurs est publié, code d'appareil obligatoire (sans `REMOTE_ACCESS`), vraie adresse du visiteur (`CF-Connecting-IP`) pour le blocage des essais, liens et `server_info` Xtream en `https`. L'interface de gestion reste à la maison.
+- Liens en `https` derrière tout reverse proxy déclaré (`TRUSTED_PROXIES`) qui envoie `X-Forwarded-Proto: https`.
+- Image Docker : `cloudflared` 2026.8.1 (amd64 et arm64).
+
 ## [3.19.0] — 2026-11-22
 
 ### Ajouté

@@ -229,6 +229,17 @@ def run(api, epg, series, streams, store, config, devices=None, profile: str | N
 
     # 2d. Accès distant ------------------------------------------------------------------
     results.append({**remote_check(config, devices), "ms": 0})
+    from . import tunnel
+    current = tunnel.current()
+    info = current.status() if current is not None else {}
+    if info.get("tunnel_id") and info.get("enabled"):
+        label = "Tunnel Cloudflare"
+        if info.get("connected"):
+            results.append(_result("tunnel", label, "ok", f"Connecté : https://{info['hostname']} (lecteurs, code d'appareil "
+                                   "obligatoire)", 0))
+        else:
+            results.append(_result("tunnel", label, "error", "Non connecté" + (f" : {info['error']}" if info.get("error")
+                                                                               else " (démarrage en cours ?)"), 0))
 
     # 3. Guide ---------------------------------------------------------------------------
     xmltv_result = None

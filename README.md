@@ -247,6 +247,14 @@ Fermé par défaut : toute connexion qui ne vient pas du réseau local (10.x, 17
 
 **Le plus simple et le plus sûr : Tailscale.** Application Tailscale sur Unraid et sur la TV / le téléphone de chaque personne invitée ; rien n'est publié sur Internet. Adresse à donner : `http://<adresse Tailscale du serveur>:7777`, avec `REMOTE_ACCESS=true`. Si ton réseau Tailscale ne contient que tes propres appareils (gestion à distance de ton serveur), coche **Système → Accès à distance → « Tailscale = mon réseau local »** : ils ont alors le même accès que chez toi, interface Web comprise, sans code. Le réglage est gardé dans `/data/settings.json`. Équivalent dans la configuration du conteneur : `LOCAL_NETWORKS=100.64.0.0/10`. Pour toute personne à qui tu as partagé ton serveur Tailscale, laisse plutôt la case décochée et donne-lui un code d'appareil.
 
+**Tunnel Cloudflare depuis l'interface (pour tester avec ton domaine).** Système → Accès à distance → « Tunnel Cloudflare » :
+
+1. écris l'adresse voulue (sous-domaine ou domaine géré par Cloudflare, ex. `tv.mondomaine.fr`) et clique sur **Connecter à Cloudflare** ;
+2. Cloudflare s'ouvre : connecte-toi, choisis ton domaine et clique sur « Authorize » ;
+3. la page continue toute seule : le tunnel est créé, l'adresse ajoutée dans tes DNS Cloudflare, puis le tunnel démarre (« Connecté ») et redémarre seul avec le conteneur.
+
+Seul le port des lecteurs (7777) est publié, en https, avec un **code d'appareil obligatoire** (pas besoin de `REMOTE_ACCESS`, ni d'ouvrir un port sur ta box) ; l'interface de gestion reste à la maison. Dans TiviMate hors de chez toi : serveur `https://tv.mondomaine.fr`, identifiant et mot de passe de l'appareil. Le compte et les clés du tunnel sont gardés dans `/data/cloudflared` (droits 0700), jamais affichés. « Supprimer le tunnel » le supprime aussi chez Cloudflare ; l'enregistrement DNS reste à effacer dans Cloudflare. **Attention :** les conditions du service gratuit de Cloudflare interdisent de faire passer surtout de la vidéo ; un usage intensif peut être coupé ou faire suspendre le compte. Pour un usage régulier, préfère Tailscale.
+
 **Avec un nom de domaine et Traefik** (ou Nginx Proxy Manager) : n'expose **que le port 7777**, en HTTPS, et seulement les chemins des lecteurs. Exemple d'étiquettes Docker pour Traefik :
 
 ```yaml

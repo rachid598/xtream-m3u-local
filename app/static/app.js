@@ -2092,6 +2092,7 @@
     loadHistory();
     loadProviders();
     loadSettings();
+    loadTunnel();
   }
 
   async function loadSettings() {
@@ -2103,6 +2104,84 @@
     $('tailscale-local').disabled = !data.editable;
     $('remote-hint').textContent = `Cette page est ouverte depuis ${data.client_ip}${data.client_tailscale ? ' (Tailscale)' : ''}.`
       + (data.remote_access ? ' Accès distant avec code d\'appareil : activé (REMOTE_ACCESS).' : '');
+  }
+
+  // ---------------------------------------------------- tunnel Cloudflare
+  let tunnelTimer = null;
+
+  function renderTunnel(t) {
+    $('tunnel-box').hidden = !t.managed;
+    if (!t.managed) return;
+    const ready = Boolean(t.tunnel_id && t.hostname);
+    const pill = $('tunnel-pill');
+    const [cls, text] = !t.available ? ['error', 'Indisponible']
+      : t.connected ? ['ok', 'Connecté'] : t.running ? ['warn', 'Connexion…']
+        : t.login_pending ? ['warn', 'En attente de Cloudflare'] : ready && !t.enabled ? ['', 'Arrêté']
+          : ready ? ['error', 'Déconnecté'] : ['', 'Non configuré'];
+    pill.className = `pill ${cls}`;
+    $('tunnel-pill-text').textContent = text;
+    $('tunnel-form').hidden = ready || !t.available;
+    $('tunnel-login').hidden = !(t.login_pending && t.login_url);
+    if (t.login_url) $('tunnel-login-link').href = t.login_url;
+    $('tunnel-ready').hidden = !ready;
+    if (ready) {
+      const url = `https://${t.hostname}`;
+      $('tunnel-link').href = url;
+      $('tunnel-link').textContent = url;
+      $('tunnel-toggle').textContent = t.enabled ? 'Arrêter' : 'Démarrer';
+      $('tunnel-detail').textContent = t.connected
+        ? `Dans TiviMate hors de chez toi : serveur ${url}, avec l'identifiant et le mot de passe de l'appareil.`
+        : (t.error ? `Dernière erreur : ${t.error}` : '');
+    }
+    $('tunnel-hint').textContent = !t.available ? 'cloudflared est absent de cette installation : mets à jour l\'image Docker.'
+      : (t.login_error && !t.login_pending && !t.logged_in ? t.login_error : '');
+  }
+
+  async function loadTunnel({ poll = false } = {}) {
+    clearTimeout(tunnelTimer);
+    let t;
+    try { t = await request('/api/tunnel'); } catch (_) { return; }
+    renderTunnel(t);
+    const pending = $('tunnel-host').dataset.pending;
+    if (t.logged_in && pending && !t.tunnel_id) {
+      // Autorisation donnée dans Cloudflare : création du tunnel et de l'adresse, sans autre clic.
+      delete $('tunnel-host').dataset.pending;
+      await setupTunnel(pending);
+      return;
+    }
+    if (poll || t.login_pending || (t.enabled && !t.connected)) tunnelTimer = setTimeout(() => loadTunnel(), 3000);
+  }
+
+  async function setupTunnel(hostname) {
+    $('tunnel-hint').textContent = `Création du tunnel et de l'adresse ${hostname}…`;
+    try {
+      renderTunnel(await request('/api/tunnel/setup', 'POST', { hostname }));
+      toast(`Tunnel créé : https://${hostname}`);
+    } catch (error) {
+      $('tunnel-hint').textContent = error.message;
+      toast(error.message, 'error');
+    }
+    loadTunnel({ poll: true });
+  }
+
+  async function connectTunnel(event) {
+    event.preventDefault();
+    const hostname = $('tunnel-host').value.trim().toLowerCase().replace(/^https?:\/\//, '').replace(/\/.*$/, '');
+    if (!/^([a-z0-9-]+\.)+[a-z]{2,}$/.test(hostname)) { toast('Adresse attendue : ex. tv.mondomaine.fr', 'error'); return; }
+    const button = $('tunnel-connect');
+    button.disabled = true;
+    try {
+      const t = await request('/api/tunnel/login', 'POST');
+      if (t.logged_in && !t.login_url) { await setupTunnel(hostname); return; }   // compte déjà connecté
+      $('tunnel-host').dataset.pending = hostname;
+      renderTunnel(t);
+      window.open(t.login_url, '_blank', 'noopener');
+      loadTunnel({ poll: true });
+    } catch (error) {
+      toast(error.message, 'error');
+    } finally {
+      button.disabled = false;
+    }
   }
 
   // ---------------------------------------------------------- abonnements
@@ -2570,6 +2649,17 @@
     loadSettings();
   });
   $('epg-suggest').addEventListener('click', suggestGuides);
+  $('tunnel-form').addEventListener('submit', connectTunnel);
+  $('tunnel-toggle').addEventListener('click', async () => {
+    const stopping = $('tunnel-toggle').textContent === 'Arrêter';
+    try { renderTunnel(await request(`/api/tunnel/${stopping ? 'stop' : 'start'}`, 'POST')); loadTunnel({ poll: !stopping }); }
+    catch (error) { toast(error.message, 'error'); }
+  });
+  $('tunnel-remove').addEventListener('click', async () => {
+    if (!(await ask({ title: 'Supprimer le tunnel ?', okLabel: 'Supprimer', danger: true,
+      text: 'Les TV hors de chez toi n\'auront plus accès. L\'adresse reste dans les DNS de ton domaine : tu peux l\'effacer dans Cloudflare.' }))) return;
+    try { renderTunnel(await request('/api/tunnel/remove', 'POST')); toast('Tunnel supprimé'); } catch (error) { toast(error.message, 'error'); }
+  });
   $('provider-form').addEventListener('submit', async (event) => {
     event.preventDefault();
     const button = $('provider-add');

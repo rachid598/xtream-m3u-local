@@ -11,7 +11,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
-from . import __version__, access, logos, provider_store, settings
+from . import __version__, access, logos, provider_store, settings, tunnel
 from .httputil import encode_body
 from .custom import InvalidPlaylist, PlaylistStore, validate_playlist
 from .epg import EpgCache
@@ -126,7 +126,7 @@ class WebHandler(BaseHTTPRequestHandler):
             self.output(403, "Nom d'hôte refusé : ouvre l'interface par l'adresse IP du serveur, un nom local "
                              "(.local, .lan…) ou ajoute ce nom dans ALLOWED_HOSTS\n".encode(), "text/plain; charset=utf-8")
             return False
-        ip, remote = access.client_address(self.client_address[0], self.headers, self.config.trusted_proxies,
+        ip, remote = access.client_address(self.client_address[0], self.headers, self.config.proxies(),
                                            settings.local_networks(self.config))
         if remote:
             # L'interface de gestion reste sur le réseau local, sauf WEB_REMOTE=true (mot de passe obligatoire).
@@ -215,6 +215,8 @@ class WebHandler(BaseHTTPRequestHandler):
             return self.backup()
         if path == "/api/epg":
             return self.epg_status(qs.get("slug", [""])[0] or None)
+        if path == "/api/tunnel":
+            return self.json(200, self.tunnel_status())
         if path == "/api/epg/suggest":
             return self.epg_suggest(qs.get("slug", [""])[0])
         if path == "/api/now":
@@ -231,7 +233,7 @@ class WebHandler(BaseHTTPRequestHandler):
     def settings_status(self) -> dict:
         store = settings.current()
         values = store.get() if store is not None else dict(settings.DEFAULTS)
-        ip, remote = access.client_address(self.client_address[0], self.headers, self.config.trusted_proxies,
+        ip, remote = access.client_address(self.client_address[0], self.headers, self.config.proxies(),
                                            settings.local_networks(self.config))
         tailscale = any(access._in(access._ip(ip), [n]) for n in settings.TAILSCALE)
         return {**values, "editable": store is not None, "client_ip": ip, "client_tailscale": tailscale,
@@ -563,6 +565,8 @@ class WebHandler(BaseHTTPRequestHandler):
             return self.restore()
         if path == "/api/diagnostic":
             return self.diagnostic()
+        if path.startswith("/api/tunnel/"):
+            return self.tunnel_action(path.rsplit("/", 1)[-1])
         if path == "/api/history/clear":
             if not self.same_origin():
                 return
@@ -688,6 +692,46 @@ class WebHandler(BaseHTTPRequestHandler):
                 data["error"] = str(exc)
             data["source"] = self.epg.status()
         return self.json(200, data)
+
+    # ------------------------------------------------------- tunnel Cloudflare
+    def tunnel_status(self) -> dict:
+        current = tunnel.current()
+        if current is None:
+            return {"available": False, "managed": False}
+        return {**current.status(), "managed": True, "port": self.config.port}
+
+    def tunnel_action(self, action: str) -> None:
+        """Connexion au compte Cloudflare, création / démarrage / arrêt / suppression du tunnel."""
+        if action in ("setup",):
+            body = self.read_payload()
+            if body is None:
+                return
+        elif not self.same_origin():
+            return
+        current = tunnel.current()
+        if current is None:
+            return self.json(409, {"error": "Tunnel indisponible dans ce mode de démarrage"})
+        try:
+            if action == "login":
+                url = current.login()
+                return self.json(200, {**self.tunnel_status(), "login_url": url})
+            if action == "setup":
+                current.setup(body.get("hostname"))
+            elif action == "start":
+                current.start()
+            elif action == "stop":
+                current.stop()
+            elif action == "remove":
+                current.remove()
+            elif action == "logout":
+                current.logout()
+            else:
+                return self.json(404, {"error": "Action inconnue"})
+        except tunnel.TunnelError as exc:
+            return self.json(400, {"error": str(exc)})
+        except OSError:
+            return self.json(500, {"error": "Impossible d'écrire dans /data/cloudflared"})
+        return self.json(200, self.tunnel_status())
 
     def epg_suggest(self, slug: str) -> None:
         """Chaînes sans programme d'une playlist et identifiants XMLTV de noms proches (à valider dans l'éditeur)."""

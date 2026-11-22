@@ -482,6 +482,31 @@
       </div>
       <label class="check-row"><input type="checkbox" id="tailscale-local"> <span><strong>Tailscale = mon réseau local</strong> : tes appareils connectés à Tailscale (téléphone, ordinateur, TV chez quelqu'un d'autre) ont le même accès que chez toi, interface Web comprise, sans code supplémentaire. À n'activer que si ton réseau Tailscale ne contient que tes propres appareils.</span></label>
       <p class="hint" id="remote-hint"></p>
+      <div class="tunnel-box" id="tunnel-box" hidden>
+        <h3>Tunnel Cloudflare <span class="pill" id="tunnel-pill"><span class="dot" aria-hidden="true"></span><span id="tunnel-pill-text">Non configuré</span></span></h3>
+        <p class="muted small">Ton domaine Cloudflare donne accès aux lecteurs (port 7777) depuis l'extérieur, en https, sans ouvrir de port sur ta box. Chaque TV utilise son code d'appareil ; l'interface de gestion reste à la maison.</p>
+        <p class="tunnel-warn small">Pour tester : les conditions du service gratuit de Cloudflare interdisent de faire passer surtout de la vidéo. Un usage intensif peut être coupé ou faire suspendre ton compte. Pour un usage régulier, Tailscale est plus sûr.</p>
+        <form class="tunnel-form" id="tunnel-form" autocomplete="off">
+          <div class="field">
+            <label for="tunnel-host">Adresse publique (domaine ou sous-domaine)</label>
+            <input id="tunnel-host" type="text" maxlength="253" placeholder="tv.mondomaine.fr" inputmode="url" spellcheck="false">
+          </div>
+          <button type="submit" class="btn primary" id="tunnel-connect">Connecter à Cloudflare</button>
+        </form>
+        <div class="tunnel-login" id="tunnel-login" hidden>
+          <p><strong>Étape 2 :</strong> ouvre Cloudflare, connecte-toi, choisis ton domaine puis clique sur « Authorize ». Cette page continue toute seule ensuite.</p>
+          <a class="btn primary" id="tunnel-login-link" href="#" target="_blank" rel="noopener noreferrer">Ouvrir Cloudflare et autoriser</a>
+        </div>
+        <div class="tunnel-ready" id="tunnel-ready" hidden>
+          <p>Adresse des lecteurs : <a id="tunnel-link" href="#" target="_blank" rel="noopener noreferrer"></a></p>
+          <p class="muted small" id="tunnel-detail"></p>
+          <div class="btn-row">
+            <button type="button" class="btn small" id="tunnel-toggle">Arrêter</button>
+            <button type="button" class="btn small danger" id="tunnel-remove">Supprimer le tunnel</button>
+          </div>
+        </div>
+        <p class="hint" id="tunnel-hint"></p>
+      </div>
     </section>
     <section class="card" id="providers-card">
       <div class="card-head">

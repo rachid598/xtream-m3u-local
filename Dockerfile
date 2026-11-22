@@ -14,9 +14,19 @@ ENV PYTHONUNBUFFERED=1 \
     PUID=99 \
     PGID=100
 
+# cloudflared : tunnel Cloudflare piloté depuis l'interface (Système → Accès à distance), facultatif.
+ARG CLOUDFLARED_VERSION=2026.8.1
+ARG TARGETARCH
+RUN apk add --no-cache tzdata \
+ && arch="${TARGETARCH:-amd64}" \
+ && wget -q -O /usr/local/bin/cloudflared \
+      "https://github.com/cloudflare/cloudflared/releases/download/${CLOUDFLARED_VERSION}/cloudflared-linux-${arch}" \
+ && chmod 755 /usr/local/bin/cloudflared \
+ && /usr/local/bin/cloudflared --version \
+ && mkdir -p /data && chown 99:100 /data
+
 WORKDIR /opt/xtream-m3u
 COPY app/ /opt/xtream-m3u/app/
-RUN apk add --no-cache tzdata && mkdir -p /data && chown 99:100 /data
 
 # Le processus démarre en root uniquement pour rendre /data inscriptible
 # (dossier appdata créé par Docker/Unraid), puis abandonne ses droits (PUID/PGID, 99:100 par défaut).
