@@ -492,7 +492,8 @@ dialog .field { margin-bottom: 16px; }
 .device-form select { width: 100%; }
 .provider-form { display: grid; grid-template-columns: 1fr 1.4fr 1fr 1fr auto; gap: 12px; align-items: end; margin-top: 12px; }
 .provider-form input { width: 100%; }
-.provider-form .provider-mix-row { grid-column: 1 / -1; }
+.provider-form .provider-mix-row, .provider-form .provider-buttons, .provider-form .provider-edit-hint { grid-column: 1 / -1; }
+.provider-form .provider-edit-hint { margin: 0; }
 .provider-form input[type="checkbox"] { width: auto; flex: none; }
 #providers-list .num { text-align: right; }
 #providers-list .row-actions { display: inline-flex; gap: 6px; flex: none; }

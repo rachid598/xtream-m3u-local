@@ -2,6 +2,11 @@
 
 Format inspiré de « Keep a Changelog ». Les versions suivent le versionnage sémantique.
 
+## [3.25.0] — 2026-11-22
+
+### Modifié
+- **Modifier un abonnement = tout l'abonnement** (Système → Abonnements) : « Modifier » remplit le formulaire avec le nom, l'adresse du serveur, le user agent et le mélange ; utilisateur et mot de passe vides = inchangés. Utile quand le fournisseur change d'adresse ou d'identifiants : la connexion est testée avant l'enregistrement, et le profil garde ses playlists et ses appareils. Le bouton « User agent » séparé disparaît (champ du formulaire). L'abonnement de la configuration du conteneur reste modifiable dans Unraid (seul son mélange se règle ici).
+
 ## [3.24.0] — 2026-11-22
 
 Retour réel : avec « Masquer les doublons » et la bascule automatique, « M6 4K » (une petite vidéo du logo en boucle, avec musique) était choisie à la place de M6 ; la bascule ne voit aucune coupure et ne change pas de version.

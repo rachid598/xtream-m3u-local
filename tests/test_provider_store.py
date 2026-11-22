@@ -127,6 +127,16 @@ class ProviderApiTests(StackTestCase):
         status, body = self.send(self.web_base + "/api/providers/2", "PUT", {"user_agent": "TiviMate/5.1.6"})
         self.assertEqual((status, body["user_agent"]), (200, "TiviMate/5.1.6"))
         self.assertEqual(self.store.list()[0]["password"], PASSWORD)              # mot de passe gardé
+        # Modification complète : nouvelle adresse et nouvel utilisateur testés avant l'enregistrement.
+        port = self.other_url.rsplit(":", 1)[1]
+        status, body = self.send(self.web_base + "/api/providers/2", "PUT",
+                                 {"url": f"http://localhost:{port}", "username": "inconnu", "password": ""})
+        self.assertEqual(status, 400)                                             # identifiants refusés
+        self.assertEqual(self.store.list()[0]["url"], self.other_url)              # rien d'enregistré
+        status, body = self.send(self.web_base + "/api/providers/2", "PUT",
+                                 {"url": f"http://localhost:{port}", "username": USERNAME, "password": PASSWORD})
+        self.assertEqual((status, body["url"]), (200, f"http://localhost:{port}"))
+        self.assertEqual(self.store.list()[0]["url"], f"http://localhost:{port}")
         # Renommage (sans nouveau test de connexion), puis suppression.
         status, body = self.send(self.web_base + "/api/providers/2", "PUT", {"name": "Ma sœur", "password": ""})
         self.assertEqual((status, body["name"]), (200, "Ma sœur"))

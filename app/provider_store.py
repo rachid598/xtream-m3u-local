@@ -141,7 +141,8 @@ def public(entry: dict) -> dict:
     """Vue sans secret pour l'interface : adresse réduite à l'hôte, utilisateur partiellement masqué."""
     host = re.sub(r"^https?://", "", entry["url"]).split("/")[0]
     user = entry["username"]
-    return {"index": entry["index"], "name": entry["name"], "host": host,
+    # Adresse complète (pas un secret) pour pouvoir la modifier ; utilisateur masqué, mot de passe jamais.
+    return {"index": entry["index"], "name": entry["name"], "host": host, "url": entry["url"],
             "username": (user[:2] + "•" * max(3, len(user) - 2)) if user else "", "password_set": True,
             "source": "interface", "created_at": entry.get("created_at"), "user_agent": entry.get("user_agent", "")}
 

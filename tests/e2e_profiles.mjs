@@ -97,6 +97,17 @@ try {
   await waitFor(async () => (await page.locator('#profile-buttons button').count()) === 3, 'profil « Maman » ajouté');
   await waitFor(async () => /Maman/.test(await page.innerText('#providers-list')), 'abonnement listé');
   if (shots) await page.screenshot({ path: join(shots, 'desktop-providers.png'), fullPage: false });
+  // « Modifier » un abonnement de l'interface : tout le formulaire (nom, adresse, utilisateur, mot de passe…)
+  await page.locator('#providers-list li', { hasText: 'Maman' }).getByRole('button', { name: 'Modifier' }).click();
+  assert(await page.inputValue('#provider-name') === 'Maman', 'nom repris');
+  assert(/^http:\/\/localhost:\d+$/.test(await page.inputValue('#provider-url')), 'adresse reprise');
+  assert(await page.inputValue('#provider-user') === '' && /inchangé/.test(await page.getAttribute('#provider-user', 'placeholder')), 'utilisateur inchangé par défaut');
+  if (shots) await page.locator('#providers-card').screenshot({ path: join(shots, 'desktop-provider-edit.png') });
+  await page.fill('#provider-name', 'Maman 2');
+  await page.click('#provider-add');
+  await waitFor(async () => /Maman 2/.test(await page.innerText('#providers-list')), 'abonnement renommé');
+  await waitFor(async () => !(await page.isVisible('#provider-cancel')), 'formulaire revenu en ajout');
+  assert((await page.innerText('#provider-add')).includes('Ajouter'), 'bouton « Ajouter » rétabli');
   // Mélange : réglage de chaque abonnement. « Maman » (ajouté sans cocher) et les autres restent isolés.
   const providers = async () => (await api('/api/providers')).providers;
   assert((await providers()).every((p) => !p.mixable), 'abonnements isolés par défaut');
@@ -117,7 +128,7 @@ try {
   await showSection('options');
   await page.selectOption('#opt-provider', 'mix');
   await showSection('content');
-  await waitFor(async () => (await page.locator('#categories details.provider-group').count()) === 2, 'blocs Moi et Sœur (pas Maman)');
+  await waitFor(async () => (await page.locator('#categories details.provider-group').count()) === 2, 'blocs Moi et Sœur (pas Maman 2)');
   const groups = page.locator('#categories details.provider-group');
   assert(/Moi/.test(await groups.nth(0).locator('summary').innerText()), 'premier bloc : abonnement du profil');
   assert(await groups.nth(0).evaluate((d) => d.open) && !(await groups.nth(1).evaluate((d) => d.open)), 'Moi déplié, autres repliés');

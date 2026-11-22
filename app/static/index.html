@@ -554,7 +554,11 @@
           <input id="provider-ua" type="text" maxlength="200" autocomplete="off" placeholder="par défaut">
         </div>
         <label class="check-row provider-mix-row"><input type="checkbox" id="provider-mix"> <span><strong>Peut être mélangé aux autres abonnements</strong> : proposé dans les playlists « mélange » des autres profils (ex. abonnement d'appoint à plusieurs connexions). Non coché : il reste isolé dans son profil.</span></label>
-        <button type="submit" class="btn primary" id="provider-add">+ Ajouter l'abonnement</button>
+        <p class="provider-edit-hint hint" id="provider-edit-hint" hidden></p>
+        <div class="btn-row provider-buttons">
+          <button type="submit" class="btn primary" id="provider-add">+ Ajouter l'abonnement</button>
+          <button type="button" class="btn" id="provider-cancel" hidden>Annuler</button>
+        </div>
       </form>
       <p class="hint" id="providers-hint"></p>
     </section>

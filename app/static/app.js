@@ -2275,7 +2275,6 @@
           h('button', { type: 'button', class: 'btn small', text: 'Modifier', onclick: () => editMix(p) })) : null)
         : h('span', { class: 'row-actions' },
         h('button', { type: 'button', class: 'btn small', text: 'Modifier', onclick: () => editProvider(p) }),
-        h('button', { type: 'button', class: 'btn small', text: 'User agent', onclick: () => editUserAgent(p) }),
         h('button', { type: 'button', class: 'btn small danger', text: 'Supprimer', onclick: () => deleteProvider(p) }));
       return h('li', null,
         h('span', null, h('strong', { text: `${p.index}. ${p.name}` }), h('br'),
@@ -2323,36 +2322,42 @@
     try { await saveMix(p, choice); toast('Abonnement enregistré'); afterProvidersChange(); } catch (error) { toast(error.message, 'error'); }
   }
 
-  async function editProvider(p) {
-    const field = $('dialog-input2');
-    field.type = 'password';
-    let result;
-    try {
-      result = await ask({ title: `Modifier « ${p.name} »`, okLabel: 'Enregistrer',
-        text: 'Laisse le mot de passe vide pour le garder. Un nouveau mot de passe est testé auprès du fournisseur avant l\'enregistrement.',
-        input: { label: 'Nom (profil)', value: p.name }, input2: { label: 'Nouveau mot de passe (facultatif)', value: '' },
-        select: providersData.mix_editable ? { ...MIX_CHOICE, value: p.mixable ? '1' : '0' } : null });
-    } finally { field.type = 'text'; }
-    if (!result) return;
-    try {
-      await request(`/api/providers/${p.index}`, 'PUT', { name: result.value.trim(), password: result.value2 });
-      if (result.choice !== undefined) await saveMix(p, result.choice);
-      toast('Abonnement enregistré');
-      afterProvidersChange();
-    } catch (error) { toast(error.message, 'error'); }
+  /** Modifier un abonnement ajouté dans l'interface : le formulaire passe en mode édition (tous les champs). */
+  function editProvider(p) {
+    const form = $('provider-form');
+    form.dataset.edit = String(p.index);
+    form.dataset.mixable = p.mixable ? '1' : '0';
+    $('provider-name').value = p.name;
+    $('provider-url').value = p.url || '';
+    $('provider-user').value = '';
+    $('provider-user').placeholder = `inchangé (${p.username})`;
+    $('provider-pass').value = '';
+    $('provider-pass').placeholder = 'inchangé';
+    $('provider-user').required = false;
+    $('provider-pass').required = false;
+    $('provider-ua').value = p.user_agent || '';
+    $('provider-mix').checked = Boolean(p.mixable);
+    $('provider-add').textContent = `Enregistrer « ${p.name} »`;
+    $('provider-cancel').hidden = false;
+    $('provider-edit-hint').hidden = false;
+    $('provider-edit-hint').textContent = `Modification de « ${p.name} » : laisse l'utilisateur ou le mot de passe vide pour les garder. Une nouvelle adresse ou de nouveaux identifiants sont testés auprès du fournisseur avant l'enregistrement.`;
+    form.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    $('provider-name').focus();
   }
 
-  /** Certains fournisseurs n'acceptent qu'un lecteur précis : user agent propre à cet abonnement. */
-  async function editUserAgent(p) {
-    const result = await ask({ title: `User agent de « ${p.name} »`, okLabel: 'Tester et enregistrer',
-      text: 'Utilisé pour l\'API et les flux de cet abonnement. Vide = celui par défaut du serveur. La connexion est testée avant l\'enregistrement.',
-      input: { label: 'User agent', value: p.user_agent || '' } });
-    if (!result) return;
-    try {
-      await request(`/api/providers/${p.index}`, 'PUT', { user_agent: result.value.trim() });
-      toast(result.value.trim() ? 'User agent enregistré' : 'User agent par défaut');
-      afterProvidersChange();
-    } catch (error) { toast(error.message, 'error'); }
+  function resetProviderForm() {
+    const form = $('provider-form');
+    delete form.dataset.edit;
+    delete form.dataset.mixable;
+    for (const id of ['provider-name', 'provider-url', 'provider-user', 'provider-pass', 'provider-ua']) $(id).value = '';
+    $('provider-user').placeholder = '';
+    $('provider-pass').placeholder = '';
+    $('provider-user').required = true;
+    $('provider-pass').required = true;
+    $('provider-mix').checked = false;
+    $('provider-add').textContent = '+ Ajouter l\'abonnement';
+    $('provider-cancel').hidden = true;
+    $('provider-edit-hint').hidden = true;
   }
 
   async function deleteProvider(p) {
@@ -2747,25 +2752,37 @@
   });
   $('provider-form').addEventListener('submit', async (event) => {
     event.preventDefault();
+    const form = $('provider-form');
+    const editing = form.dataset.edit;
     const button = $('provider-add');
+    const label = button.textContent;
     button.disabled = true;
     button.textContent = 'Test de la connexion…';
+    const body = {
+      name: $('provider-name').value.trim(), url: $('provider-url').value.trim(),
+      username: $('provider-user').value.trim(), password: $('provider-pass').value,
+      user_agent: $('provider-ua').value.trim() };
     try {
-      const added = await request('/api/providers', 'POST', {
-        name: $('provider-name').value.trim(), url: $('provider-url').value.trim(),
-        username: $('provider-user').value.trim(), password: $('provider-pass').value,
-        user_agent: $('provider-ua').value.trim(), mixable: $('provider-mix').checked });
-      $('provider-mix').checked = false;
-      for (const id of ['provider-name', 'provider-url', 'provider-user', 'provider-pass', 'provider-ua']) $(id).value = '';
-      toast(`Abonnement « ${added.name} » ajouté : choisis son profil en haut`);
+      if (editing) {
+        // Vide = inchangé (utilisateur, mot de passe) ; le serveur teste la connexion si quelque chose change.
+        const saved = await request(`/api/providers/${editing}`, 'PUT', body);
+        await saveMix({ index: Number(editing), mixable: form.dataset.mixable === '1' }, $('provider-mix').checked ? '1' : '0');
+        toast(`Abonnement « ${saved.name} » enregistré`);
+      } else {
+        const added = await request('/api/providers', 'POST', { ...body, mixable: $('provider-mix').checked });
+        toast(`Abonnement « ${added.name} » ajouté : choisis son profil en haut`);
+      }
+      resetProviderForm();
       await afterProvidersChange();
     } catch (error) {
       toast(error.message, 'error');
+      button.textContent = label;
     } finally {
       button.disabled = false;
-      button.textContent = '+ Ajouter l\'abonnement';
+      if (button.textContent === 'Test de la connexion…') button.textContent = label;
     }
   });
+  $('provider-cancel').addEventListener('click', resetProviderForm);
   $('opt-failover-any').addEventListener('change', () => { renderOptionsPill(); refresh({ channels: false }); });
   $('opt-uhd').addEventListener('change', () => { state.hiddenCache = null; renderOptionsPill(); refresh(); });
   $('opt-separators').addEventListener('change', () => { renderOptionsPill(); refresh(); });
