@@ -299,20 +299,33 @@ def item_key(item: dict) -> str:
     return item["stream_id"]
 
 
+def playlist_providers(saved: dict) -> set[str] | None:
+    """Abonnements utilisés par une playlist (``None`` = tous).
+
+    ``provider`` = abonnement du profil (vide = 1, playlists d'avant les profils : en mélange) ;
+    ``mix`` = playlist « mélange » : son abonnement + les abonnements « mélangeables ».
+    """
+    from . import settings
+    provider = str(saved.get("provider") or "1")
+    if saved.get("mix") or not saved.get("provider"):
+        mixable = settings.mixable()
+        return None if mixable is None else {provider} | mixable
+    return {provider}
+
+
 def select_items(api, saved: dict, kind: str, *, refresh: bool = False) -> tuple[list[tuple[dict, str]], dict[str, str]]:
     """Éléments d'un type (direct, films ou séries) retenus par la playlist, personnalisations comprises.
 
     Retourne ``(entrées [(élément, clé_de_groupe)], {clé_de_groupe: nom d'origine})``.
     """
     items, categories = api.catalog(refresh=refresh, kind=kind)
-    from . import settings
-    provider = str(saved.get("provider") or ("" if settings.mix_allowed() else "1"))
-    if provider and len(getattr(api, "apis", ())) > 1:
-        # Profils : une playlist n'utilise que l'abonnement de son profil (jamais celui d'un autre membre).
-        # Sans profil (« tous les abonnements ») : seulement si le mélange est autorisé dans Système.
-        items = [item for item in items if api.provider_of(item["stream_id"]) == provider]
+    allowed = playlist_providers(saved)
+    if allowed is not None and len(getattr(api, "apis", ())) > 1:
+        # Profils : une playlist n'utilise que l'abonnement de son profil (jamais celui d'un autre membre),
+        # plus — playlist « mélange » — les abonnements cochés « peut être mélangé aux autres ».
+        items = [item for item in items if api.provider_of(item["stream_id"]) in allowed]
         categories = {cid: name for cid, name in categories.items()
-                      if cid == "none" or api.provider_of(cid) == provider}
+                      if cid == "none" or api.provider_of(cid) in allowed}
     prefix = GROUP_PREFIX[kind]
     cats_field = SELECTION_FIELDS[kind][0]
     effective = saved

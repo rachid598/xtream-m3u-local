@@ -491,6 +491,8 @@ dialog .field { margin-bottom: 16px; }
 .device-form select { width: 100%; }
 .provider-form { display: grid; grid-template-columns: 1fr 1.4fr 1fr 1fr auto; gap: 12px; align-items: end; margin-top: 12px; }
 .provider-form input { width: 100%; }
+.provider-form .provider-mix-row { grid-column: 1 / -1; }
+.provider-form input[type="checkbox"] { width: auto; flex: none; }
 #providers-list .num { text-align: right; }
 #providers-list .row-actions { display: inline-flex; gap: 6px; flex: none; }
 @media (max-width: 980px) { .provider-form { grid-template-columns: 1fr 1fr; } .provider-form > .btn { grid-column: 1 / -1; } }

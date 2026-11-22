@@ -124,13 +124,22 @@
   // Un profil = un abonnement (XTREAM_URL, XTREAM_URL_2…) avec ses playlists et ses appareils.
   const multiProfile = () => state.profiles.length > 1;
   const profileName = (id) => (state.profiles.find((p) => p.id === String(id)) || {}).name || `Abonnement ${id}`;
-  const playlistProfile = (p) => (p && p.provider) || '';
+  const playlistProfile = (p) => (p && p.provider) || '1';
+  // Playlist « mélange » : son abonnement + les abonnements cochés « peut être mélangé aux autres ».
+  // Une playlist d'avant les profils (sans abonnement) est en mélange sur le profil 1.
+  const playlistMixed = (p) => Boolean(p && (p.mix || !p.provider));
   // Un profil = un serveur à part : seulement ses playlists. Une ancienne playlist sans abonnement appartient
   // au profil 1, sauf si le mélange est autorisé (Système → Abonnements) : elle est alors visible partout.
-  const allowMix = () => Boolean(state.status && state.status.allow_mix);
-  const inProfile = (p) => !multiProfile() || (playlistProfile(p) || (allowMix() ? state.profile : '1')) === state.profile;
+  /** Autres abonnements mélangeables (proposés aux playlists « mélange » du profil affiché). */
+  const mixPartners = () => state.profiles.filter((p) => p.mixable && p.id !== state.profile);
+  const allowMix = () => mixPartners().length > 0;
+  const inProfile = (p) => !multiProfile() || playlistProfile(p) === state.profile;
   const profileQuery = () => (multiProfile() ? `?profile=${encodeURIComponent(state.profile)}` : '');
-  const catalogProvider = () => (multiProfile() ? $('opt-provider').value : '');
+  /** Abonnements visibles dans l'éditeur (null = tous) : le profil, plus les mélangeables en mode « mélange ». */
+  const catalogProviders = () => {
+    if (!multiProfile()) return null;
+    return new Set([state.profile, ...($('opt-provider').value === 'mix' ? mixPartners().map((p) => p.id) : [])]);
+  };
 
   function renderProfileBar() {
     $('profile-bar').hidden = !multiProfile();
@@ -141,16 +150,20 @@
     })));
   }
 
+  /** Choix « cet abonnement seul » ou « mélange » ; ``value`` = 'mix' ou l'abonnement du profil. */
   function renderProviderSelect(value) {
     const select = $('opt-provider');
     $('opt-provider-row').hidden = !multiProfile();
+    const own = profileName(state.profile);
     const options = multiProfile()
-      ? [[state.profile, profileName(state.profile)],
-        ...(allowMix() || (value === '' && allowMix()) ? [['', 'Tous les abonnements (mélange)']] : [])]
-      : [[value || '', 'Abonnement principal']];
+      ? [[state.profile, `${own} seul`],
+        ...(allowMix() ? [['mix', `${own} + ${mixPartners().map((p) => p.name).join(', ')} (mélange)`]] : [])]
+      : [[state.profile || '1', 'Abonnement principal']];
     select.replaceChildren(...options.map(([id, name]) => h('option', { value: id, text: name })));
-    select.value = options.some(([id]) => id === (value || '')) ? (value || '') : options[0][0];
+    select.value = options.some(([id]) => id === value) ? value : options[0][0];
   }
+
+  const providerChoice = (p) => (p && playlistMixed(p) && allowMix() ? 'mix' : state.profile);
 
   /** Catalogues filtrés sur l'abonnement de la playlist ouverte (tous si « mélange »). */
   function reapplyCatalogs() {
@@ -234,7 +247,8 @@
       dialog.returnValue = 'cancel';
       dialog.addEventListener('close', () => {
         if (dialog.returnValue !== 'ok') return resolve(null);
-        if (select) resolve($('dialog-select').value);
+        if (select && input) resolve({ value: $('dialog-input').value, value2: $('dialog-input2').value, choice: $('dialog-select').value });
+        else if (select) resolve($('dialog-select').value);
         else if (input2) resolve({ value: $('dialog-input').value, value2: $('dialog-input2').value });
         else resolve(input ? $('dialog-input').value : true);
       }, { once: true });
@@ -505,7 +519,8 @@
     data.failover = $('opt-failover').checked;
     data.failover_any_category = $('opt-failover-any').checked;
     data.hq_logos = $('opt-hq-logos').checked;
-    data.provider = $('opt-provider').value;
+    data.provider = multiProfile() ? state.profile : '';
+    data.mix = multiProfile() && $('opt-provider').value === 'mix';
     data.hide_separators = $('opt-separators').checked;
     data.favorites_name = $('opt-fav-name').value.trim() || '★ Favoris';
     data.rules = state.rules.map((r) => ({ ...r }));
@@ -870,7 +885,7 @@
         type: 'button', class: 'playlist-item', 'aria-current': p.slug === state.editing ? 'true' : 'false',
         onclick: () => openPlaylist(p.slug),
       }, h('span', { class: 'pl-name', text: p.name },
-        multiProfile() && !playlistProfile(p) ? h('span', { class: 'pl-tag', text: 'tous abonnements' }) : null),
+        multiProfile() && playlistMixed(p) && allowMix() ? h('span', { class: 'pl-tag', text: 'mélange' }) : null),
       h('span', { class: 'pl-meta', text: `/p/${p.slug}.m3u${count}` }))));
     }
     if (!sorted.length) list.append(h('li', { class: 'empty', text: `Aucune playlist dans le profil « ${profileName(state.profile)} ». Crée-la avec « + Nouvelle ».` }));
@@ -1789,7 +1804,7 @@
     $('opt-hq-logos').checked = !p || p.hq_logos !== false;
     $('opt-separators').checked = Boolean(p && p.hide_separators);
     $('opt-fav-name').value = (p && p.favorites_name) || '★ Favoris';
-    renderProviderSelect(p ? playlistProfile(p) : state.profile);
+    renderProviderSelect(providerChoice(p));
     reapplyCatalogs();
     state.rules = p && p.rules ? p.rules.map((r) => ({ ...r })) : [];
     state.favorites = p && p.favorites ? [...p.favorites] : [];
@@ -2099,8 +2114,6 @@
     let data;
     try { data = await request('/api/settings'); } catch (_) { return; }
     $('tailscale-local').checked = data.tailscale_local;
-    $('allow-mix').checked = data.allow_mix;
-    $('allow-mix').disabled = !data.editable;
     $('tailscale-local').disabled = !data.editable;
     $('remote-hint').textContent = `Cette page est ouverte depuis ${data.client_ip}${data.client_tailscale ? ' (Tailscale)' : ''}.`
       + (data.remote_access ? ' Accès distant avec code d\'appareil : activé (REMOTE_ACCESS).' : '');
@@ -2195,13 +2208,17 @@
         ? `${p.host} · configuration du conteneur`
         : `${p.host} · ${p.username} · ajouté dans l'interface`;
       const agent = p.user_agent ? ` · user agent : ${p.user_agent}` : '';
-      const actions = p.source === 'configuration' ? null : h('span', { class: 'row-actions' },
+      const mix = p.mixable ? ' · mélangeable avec les autres abonnements' : ' · isolé (jamais mélangé)';
+      const actions = p.source === 'configuration'
+        ? (providersData.mix_editable ? h('span', { class: 'row-actions' },
+          h('button', { type: 'button', class: 'btn small', text: 'Modifier', onclick: () => editMix(p) })) : null)
+        : h('span', { class: 'row-actions' },
         h('button', { type: 'button', class: 'btn small', text: 'Modifier', onclick: () => editProvider(p) }),
         h('button', { type: 'button', class: 'btn small', text: 'User agent', onclick: () => editUserAgent(p) }),
         h('button', { type: 'button', class: 'btn small danger', text: 'Supprimer', onclick: () => deleteProvider(p) }));
       return h('li', null,
         h('span', null, h('strong', { text: `${p.index}. ${p.name}` }), h('br'),
-          h('span', { class: p.error ? 'warn-text' : 'muted small', text: p.error || meta + agent })),
+          h('span', { class: p.error ? 'warn-text' : 'muted small', text: p.error || meta + mix + agent })),
         actions);
     }));
     $('provider-form').hidden = !providersData.editable;
@@ -2227,6 +2244,24 @@
     loadProviders();
   }
 
+  const MIX_CHOICE = { label: 'Mélange avec les autres abonnements',
+    options: [['0', 'Non : reste isolé dans son profil'], ['1', 'Oui : proposé dans les playlists « mélange » des autres profils']] };
+
+  async function saveMix(p, choice) {
+    const mixable = choice === '1';
+    if (mixable === Boolean(p.mixable)) return;
+    await request(`/api/providers/${p.index}/mix`, 'PUT', { mixable });
+  }
+
+  /** Abonnement de la configuration du conteneur : seul le mélange se modifie ici. */
+  async function editMix(p) {
+    const choice = await ask({ title: `Modifier « ${p.name} »`, okLabel: 'Enregistrer',
+      text: 'Adresse et identifiants se modifient dans la configuration du conteneur (Unraid).',
+      select: { ...MIX_CHOICE, value: p.mixable ? '1' : '0' } });
+    if (choice === null) return;
+    try { await saveMix(p, choice); toast('Abonnement enregistré'); afterProvidersChange(); } catch (error) { toast(error.message, 'error'); }
+  }
+
   async function editProvider(p) {
     const field = $('dialog-input2');
     field.type = 'password';
@@ -2234,11 +2269,13 @@
     try {
       result = await ask({ title: `Modifier « ${p.name} »`, okLabel: 'Enregistrer',
         text: 'Laisse le mot de passe vide pour le garder. Un nouveau mot de passe est testé auprès du fournisseur avant l\'enregistrement.',
-        input: { label: 'Nom (profil)', value: p.name }, input2: { label: 'Nouveau mot de passe (facultatif)', value: '' } });
+        input: { label: 'Nom (profil)', value: p.name }, input2: { label: 'Nouveau mot de passe (facultatif)', value: '' },
+        select: providersData.mix_editable ? { ...MIX_CHOICE, value: p.mixable ? '1' : '0' } : null });
     } finally { field.type = 'text'; }
     if (!result) return;
     try {
       await request(`/api/providers/${p.index}`, 'PUT', { name: result.value.trim(), password: result.value2 });
+      if (result.choice !== undefined) await saveMix(p, result.choice);
       toast('Abonnement enregistré');
       afterProvidersChange();
     } catch (error) { toast(error.message, 'error'); }
@@ -2387,8 +2424,8 @@
     const target = state.cat[kind];
     ruleCache.clear();
     target.raw = catalog;
-    const provider = catalogProvider();
-    const keep = (x) => !provider || (x.profile || '1') === provider;
+    const allowed = catalogProviders();
+    const keep = (x) => !allowed || allowed.has(x.profile || '1');
     target.categories = catalog.categories.filter(keep).map((cat) => ({ ...cat, _search: `${norm(cat.name)} #${cat.category_id}` }));
     target.categoryNames = new Map(target.categories.map((cat) => [cat.category_id, cat.name]));
     target.channels = catalog.channels.filter(keep).map((c) => ({ ...c, _search: norm(`${c.name} ${c.year || ''}`) }));
@@ -2619,19 +2656,6 @@
   $('opt-failover').addEventListener('change', () => { renderOptionsPill(); refresh({ channels: false }); });
   $('opt-hq-logos').addEventListener('change', () => { renderOptionsPill(); refresh(); });
   $('opt-provider').addEventListener('change', () => { reapplyCatalogs(); refresh(); });
-  $('allow-mix').addEventListener('change', async (event) => {
-    const on = event.target.checked;
-    try {
-      await request('/api/settings', 'PUT', { allow_mix: on });
-      if (state.status) state.status.allow_mix = on;
-      renderProviderSelect($('opt-provider').value);
-      renderPlaylists();
-      toast(on ? 'Playlists « tous les abonnements » autorisées' : 'Profils complètement séparés');
-    } catch (error) {
-      event.target.checked = !on;
-      toast(error.message, 'error');
-    }
-  });
   $('tailscale-local').addEventListener('change', async (event) => {
     const on = event.target.checked;
     if (on && !(await ask({ title: 'Tailscale = mon réseau local ?', okLabel: 'Activer',
@@ -2669,7 +2693,8 @@
       const added = await request('/api/providers', 'POST', {
         name: $('provider-name').value.trim(), url: $('provider-url').value.trim(),
         username: $('provider-user').value.trim(), password: $('provider-pass').value,
-        user_agent: $('provider-ua').value.trim() });
+        user_agent: $('provider-ua').value.trim(), mixable: $('provider-mix').checked });
+      $('provider-mix').checked = false;
       for (const id of ['provider-name', 'provider-url', 'provider-user', 'provider-pass', 'provider-ua']) $(id).value = '';
       toast(`Abonnement « ${added.name} » ajouté : choisis son profil en haut`);
       await afterProvidersChange();

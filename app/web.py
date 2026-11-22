@@ -43,6 +43,7 @@ SERIES_API = re.compile(r"^/api/series/([0-9]{1,12})$")
 DEVICE_API = re.compile(r"^/api/devices/([A-Za-z0-9_-]{1,16})$")
 STREAM_STOP_API = re.compile(r"^/api/streams/([0-9]{1,9})/stop$")
 PROVIDER_API = re.compile(r"^/api/providers/([2-9])$")
+MIX_API = re.compile(r"^/api/providers/([1-9])/mix$")
 CSP = (
     "default-src 'none'; style-src 'self'; script-src 'self'; connect-src 'self'{players}; "
     "media-src 'self' blob:{players}; img-src 'self' data: http: https:; base-uri 'none'; form-action 'none'; "
@@ -267,7 +268,10 @@ class WebHandler(BaseHTTPRequestHandler):
             if entry["index"] not in active or any(r["index"] == entry["index"] for r in rows):
                 row["error"] = "Numéro déjà pris par la configuration du conteneur : abonnement ignoré"
             rows.append(row)
-        return {"editable": self.providers_editable(), "providers": rows}
+        mixable = settings.mixable()
+        for row in rows:
+            row["mixable"] = mixable is None or str(row["index"]) in mixable
+        return {"editable": self.providers_editable(), "mix_editable": settings.current() is not None, "providers": rows}
 
     def reload_providers(self) -> None:
         """Applique tout de suite les abonnements enregistrés (sans redémarrer le conteneur)."""
@@ -287,6 +291,21 @@ class WebHandler(BaseHTTPRequestHandler):
             return f"Abonnement « {account.get('status')} » chez le fournisseur"
         return None
 
+    def provider_mix(self, index: int) -> None:
+        """« Peut être mélangé aux autres abonnements » : réglage d'un abonnement (configuration comprise)."""
+        body = self.read_payload()
+        if body is None:
+            return
+        if index not in (getattr(self.api, "indices", None) or [1]):
+            return self.json(404, {"error": "Abonnement introuvable"})
+        if settings.current() is None:
+            return self.json(409, {"error": "Réglages non modifiables dans ce mode de démarrage"})
+        try:
+            settings.set_mixable(index, bool(body.get("mixable")))
+        except OSError:
+            return self.json(500, {"error": "Impossible d'enregistrer /data/settings.json"})
+        return self.json(200, {"index": index, "mixable": bool(body.get("mixable"))})
+
     def provider_write(self, method: str, index: int | None) -> None:
         if method != "DELETE":
             body = self.read_payload()
@@ -304,6 +323,8 @@ class WebHandler(BaseHTTPRequestHandler):
             if method == "DELETE":
                 if not store.delete(index):
                     return self.json(404, {"error": "Abonnement introuvable (ceux de la configuration ne se suppriment pas ici)"})
+                if settings.current() is not None:
+                    settings.set_mixable(index, False)   # numéro réutilisable : pas de réglage hérité
                 self.reload_providers()
                 return self.json(200, {"deleted": True})
             current = next((p for p in store.list() if p["index"] == index), None) if index else None
@@ -329,6 +350,8 @@ class WebHandler(BaseHTTPRequestHandler):
             if method == "POST":
                 entry = store.add(name=body.get("name"), url=url, username=username, password=password, reserved=reserved,
                                   user_agent=agent)
+                if settings.current() is not None:
+                    settings.set_mixable(entry["index"], bool(body.get("mixable")))
             else:
                 entry = store.update(index, name=body.get("name"), url=url, username=username,
                                      password=password if changed else "", user_agent=agent)
@@ -515,7 +538,6 @@ class WebHandler(BaseHTTPRequestHandler):
             "epg_mode": self.config.epg_source,
             "logos": logos.current().status() if logos.current() else None,
             "profiles": profiles(self.api, self.config),
-            "allow_mix": settings.mix_allowed(),
         }
         # Le token des lecteurs n'est transmis que si l'interface est protégée par mot de passe.
         if self.config.access_token and self.config.web_password:
@@ -606,6 +628,9 @@ class WebHandler(BaseHTTPRequestHandler):
         provider = PROVIDER_API.fullmatch(urlsplit(self.path).path)
         if provider:
             return self.provider_write("PUT", int(provider.group(1)))
+        mix = MIX_API.fullmatch(urlsplit(self.path).path)
+        if mix:
+            return self.provider_mix(int(mix.group(1)))
         if urlsplit(self.path).path == "/api/settings":
             body = self.read_payload()
             if body is None:
@@ -888,7 +913,9 @@ def profiles(api, config) -> list[dict]:
     """Profils = abonnements configurés (``XTREAM_URL``, ``XTREAM_URL_2``…), chacun avec son nom."""
     names = getattr(api, "names", None) or [config.provider_name or "Mon abonnement"]
     indices = getattr(api, "indices", None) or list(range(1, len(names) + 1))
-    return [{"id": str(i), "name": name} for i, name in zip(indices, names)]
+    mixable = settings.mixable()
+    return [{"id": str(i), "name": name, "mixable": mixable is None or str(i) in mixable}
+            for i, name in zip(indices, names)]
 
 
 def catalog_payload(channels: list[dict], categories: dict[str, str], api: XtreamAPI | None = None,

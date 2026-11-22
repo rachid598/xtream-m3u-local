@@ -115,7 +115,7 @@ class ProviderApiTests(StackTestCase):
         self.assertEqual(body["index"], 2)
         self.assertNotIn(PASSWORD, json.dumps(body))
         profiles = json.loads(self.get(self.web_base + "/api/status")[1])["profiles"]
-        self.assertEqual(profiles, [{"id": "1", "name": "Moi"}, {"id": "2", "name": "Sœur"}])
+        self.assertEqual([(p["id"], p["name"]) for p in profiles], [("1", "Moi"), ("2", "Sœur")])
         catalog = json.loads(self.get(self.web_base + "/api/catalog")[1])
         self.assertIn(str(2 * OFFSET + 42), [c["stream_id"] for c in catalog["channels"]])
         self.assertEqual(self.get(f"{self.base}/stream/{2 * OFFSET + 42}.ts")[0], 200)
@@ -145,3 +145,22 @@ class ProviderApiTests(StackTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class MixableSettingTests(unittest.TestCase):
+    def test_migration_and_updates(self):
+        import json as _json
+        import tempfile as _tempfile
+        from pathlib import Path as _Path
+        from app import settings
+        with _tempfile.TemporaryDirectory() as tmp:
+            store = settings.Settings(tmp)
+            self.assertEqual(store.get()["mixable"], [])                       # isolés par défaut
+            (_Path(tmp) / "settings.json").write_text(_json.dumps({"allow_mix": True}))
+            self.assertEqual(store.get()["mixable"], list(range(1, 10)))       # ancienne case globale cochée
+            settings.install(store)
+            self.addCleanup(settings.install, None)
+            self.assertEqual(settings.set_mixable(3, False), [1, 2, 4, 5, 6, 7, 8, 9])
+            self.assertEqual(store.update({"mixable": ["2", 2, "x", 12, True]})["mixable"], [2])
+            self.assertEqual(settings.mixable(), {"2"})
+            self.assertEqual(settings.set_mixable(5, True), [2, 5])

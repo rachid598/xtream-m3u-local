@@ -2,6 +2,13 @@
 
 Format inspiré de « Keep a Changelog ». Les versions suivent le versionnage sémantique.
 
+## [3.21.0] — 2026-11-22
+
+### Modifié
+- **Mélange réglé par abonnement** au lieu d'une case globale : « Peut être mélangé aux autres abonnements » à l'ajout d'un abonnement (non coché = isolé), et bouton **Modifier** pour chaque abonnement, celui de la configuration du conteneur compris. Une playlist « mélange » d'un profil = son abonnement + les abonnements mélangeables seulement (catalogue, catégories, bascule automatique). Le choix n'apparaît dans une playlist que s'il existe un autre abonnement mélangeable ; il affiche les abonnements concernés (« Moi + Appoint (mélange) »).
+- Ancienne case globale cochée : tous les abonnements deviennent mélangeables (rien ne change pour les playlists existantes). Réglage gardé dans `/data/settings.json` (`mixable`).
+- API : `PUT /api/providers/<n>/mix` ; champ `mixable` des abonnements et des profils ; champ de playlist `mix`.
+
 ## [3.20.1] — 2026-11-22
 
 ### Sécurité

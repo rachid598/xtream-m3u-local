@@ -13,7 +13,15 @@ from pathlib import Path
 from . import access
 
 TAILSCALE = access.parse_networks("100.64.0.0/10, fd7a:115c:a1e0::/48")
-DEFAULTS = {"tailscale_local": False, "allow_mix": False}
+DEFAULTS = {"tailscale_local": False}
+INDICES = range(1, 10)   # numéros d'abonnement
+
+
+def _indices(value) -> list[int]:
+    """Liste de numéros d'abonnement valides (1 à 9), triés, sans doublon."""
+    if not isinstance(value, list):
+        return []
+    return sorted({int(v) for v in value if isinstance(v, (int, str)) and str(v).isdigit() and int(v) in INDICES})
 
 
 class Settings:
@@ -27,19 +35,25 @@ class Settings:
             try:
                 stamp = self.path.stat().st_mtime
             except OSError:
-                return dict(DEFAULTS)
+                return {**DEFAULTS, "mixable": []}
             if self._cache and self._cache[0] == stamp:
-                return dict(self._cache[1])
+                return {**self._cache[1], "mixable": list(self._cache[1]["mixable"])}
             try:
                 data = json.loads(self.path.read_text(encoding="utf-8"))
             except (OSError, ValueError):
                 data = {}
             values = {**DEFAULTS, **{k: bool(data.get(k)) for k in DEFAULTS if k in data}}
+            # Abonnements « mélangeables » (playlists mélange des autres profils). Ancienne case globale
+            # « autoriser le mélange » cochée : tous les abonnements le restent.
+            values["mixable"] = _indices(data["mixable"]) if "mixable" in data else (
+                list(INDICES) if data.get("allow_mix") else [])
             self._cache = (stamp, values)
             return dict(values)
 
     def update(self, changes: dict) -> dict:
         values = {**self.get(), **{k: bool(v) for k, v in changes.items() if k in DEFAULTS}}
+        if "mixable" in changes:
+            values["mixable"] = _indices(changes["mixable"])
         with self._lock:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             tmp = self.path.with_suffix(".tmp")
@@ -61,11 +75,21 @@ def current() -> Settings | None:
     return _SETTINGS
 
 
-def mix_allowed() -> bool:
-    """Playlists « tous les abonnements » autorisées ? (désactivé par défaut : un profil = un serveur)."""
+def mixable() -> set[str] | None:
+    """Abonnements qui peuvent être mélangés aux playlists des autres profils (``None`` = tous : pas de
+    réglages installés, comportement d'avant les profils pour les tests et intégrations)."""
     if _SETTINGS is None:
-        return True  # sans réglages (tests, intégrations) : comportement d'avant les profils
-    return bool(_SETTINGS.get().get("allow_mix"))
+        return None
+    return {str(i) for i in _SETTINGS.get()["mixable"]}
+
+
+def set_mixable(index: int, on: bool) -> list[int]:
+    """Coche ou décoche « peut être mélangé aux autres abonnements » pour un abonnement."""
+    if _SETTINGS is None:
+        raise RuntimeError("Réglages non modifiables dans ce mode de démarrage")
+    current = set(_SETTINGS.get()["mixable"])
+    current = current | {index} if on else current - {index}
+    return _SETTINGS.update({"mixable": sorted(current)})["mixable"]
 
 
 def local_networks(config) -> tuple:

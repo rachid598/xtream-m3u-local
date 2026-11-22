@@ -281,6 +281,8 @@ def validate_playlist(payload: object, *, slug: str | None = None) -> dict:
     if provider and not (provider.isdigit() and 1 <= int(provider) <= 9):
         raise InvalidPlaylist("Profil (abonnement) invalide")
     result["provider"] = provider
+    # Playlist « mélange » : son abonnement + les abonnements cochés « peut être mélangé aux autres ».
+    result["mix"] = bool(payload.get("mix", False))
     result["failover_any_category"] = bool(payload.get("failover_any_category", False))
     result["rules"] = _rules(payload.get("rules"))
     result["item_names"] = _item_names(payload.get("item_names"))

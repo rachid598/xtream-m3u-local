@@ -133,7 +133,7 @@ class MultiProviderTests(StackTestCase):
 
     def test_profiles_keep_subscriptions_apart(self):
         status = json.loads(self.get(self.web_base + "/api/status")[1])
-        self.assertEqual(status["profiles"], [{"id": "1", "name": "A"}, {"id": "2", "name": "B"}])
+        self.assertEqual([(p["id"], p["name"]) for p in status["profiles"]], [("1", "A"), ("2", "B")])
         catalog = json.loads(self.get(self.web_base + "/api/catalog")[1])
         by_profile = {c["stream_id"]: c["profile"] for c in catalog["channels"]}
         self.assertEqual((by_profile["42"], by_profile[str(2 * OFFSET + 42)]), ("1", "2"))
@@ -157,18 +157,31 @@ class MultiProviderTests(StackTestCase):
                                    {"slug": "x", "name": "X", "provider": "12"})[0], 400)
 
     def test_profile_is_a_separate_server(self):
-        """Un profil = un serveur à part ; le mélange « tous les abonnements » reste à activer soi-même."""
+        """Un profil = un serveur à part ; un abonnement n'entre dans les mélanges que s'il est « mélangeable »."""
         from app import settings
         settings.install(settings.Settings(self.tmp.name))
         self.addCleanup(settings.install, None)
-        self.assertFalse(json.loads(self.get(self.web_base + "/api/status")[1])["allow_mix"])
+        profiles = json.loads(self.get(self.web_base + "/api/status")[1])["profiles"]
+        self.assertEqual([p["mixable"] for p in profiles], [False, False])   # isolés par défaut
         self.create_playlist()                                       # ancienne playlist sans profil
-        data = self.get(self.base + "/p/mix.m3u")[1].decode()
-        self.assertIn("/stream/42.ts", data)                         # mélange désactivé : profil 1 seul
-        self.assertNotIn(f"/stream/{2 * OFFSET + 42}.ts", data)
-        self.assertEqual(self.send(self.web_base + "/api/settings", "PUT", {"allow_mix": True})[1]["allow_mix"], True)
-        data = self.get(self.base + "/p/mix.m3u")[1].decode()
-        self.assertIn(f"/stream/{2 * OFFSET + 42}.ts", data)         # activé : les deux abonnements
+        has = lambda slug, sid: f"/stream/{sid}.ts" in self.get(f"{self.base}/p/{slug}.m3u")[1].decode()  # noqa: E731
+        b42 = 2 * OFFSET + 42
+        self.assertEqual((has("mix", 42), has("mix", b42)), (True, False))   # rien de mélangeable : profil 1 seul
+        status, body = self.send(self.web_base + "/api/providers/2/mix", "PUT", {"mixable": True})
+        self.assertEqual((status, body["mixable"]), (200, True))
+        self.assertEqual(json.loads(self.get(self.web_base + "/api/providers")[1])["providers"][1]["mixable"], True)
+        self.assertEqual((has("mix", 42), has("mix", b42)), (True, True))    # B mélangeable : ajouté au mélange
+        cats = ["1", str(2 * OFFSET + 1)]
+        for slug, provider, mix in (("seul", "1", False), ("a-mix", "1", True), ("b-mix", "2", True)):
+            self.assertEqual(self.send(self.web_base + "/api/playlists", "POST", {
+                "slug": slug, "name": slug, "provider": provider, "mix": mix, "category_ids": cats})[0], 201)
+        self.assertEqual((has("seul", 42), has("seul", b42)), (True, False))  # « A seul » : jamais B
+        self.assertEqual((has("a-mix", 42), has("a-mix", b42)), (True, True))  # A + B (mélangeable)
+        self.assertEqual((has("b-mix", 42), has("b-mix", b42)), (False, True))  # A n'est pas mélangeable
+        self.assertEqual(self.send(self.web_base + "/api/providers/1/mix", "PUT", {"mixable": True})[0], 200)
+        self.assertEqual((has("b-mix", 42), has("b-mix", b42)), (True, True))
+        self.assertEqual(self.send(self.web_base + "/api/providers/7/mix", "PUT", {"mixable": True})[0], 404)
+        self.send(self.web_base + "/api/providers/1/mix", "PUT", {"mixable": False})
         # Lectures et historique : seulement ceux du profil demandé.
         self.get(f"{self.base}/stream/{2 * OFFSET + 42}.ts")
         self.get(f"{self.base}/stream/42.ts")

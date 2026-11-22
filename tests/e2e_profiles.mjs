@@ -97,17 +97,27 @@ try {
   await waitFor(async () => (await page.locator('#profile-buttons button').count()) === 3, 'profil « Maman » ajouté');
   await waitFor(async () => /Maman/.test(await page.innerText('#providers-list')), 'abonnement listé');
   if (shots) await page.screenshot({ path: join(shots, 'desktop-providers.png'), fullPage: false });
-  // Mélange : à activer soi-même, il ajoute « Tous les abonnements »
-  assert(!(await page.isChecked('#allow-mix')), 'mélange désactivé par défaut');
-  await page.check('#allow-mix');
-  await waitFor(async () => (await api('/api/settings')).allow_mix === true, 'mélange autorisé');
+  // Mélange : réglage de chaque abonnement. « Maman » (ajouté sans cocher) et les autres restent isolés.
+  const providers = async () => (await api('/api/providers')).providers;
+  assert((await providers()).every((p) => !p.mixable), 'abonnements isolés par défaut');
   await page.click('#view-btn-playlists');
-  await waitFor(async () => (await page.locator('#opt-provider option').count()) === 2, 'choix « Tous les abonnements »');
+  await waitFor(async () => (await page.locator('#opt-provider option').count()) === 1, 'aucun mélange proposé');
+  // Abonnement de « Sœur » rendu mélangeable avec le bouton « Modifier ».
+  await page.click('#view-btn-system');
+  const row = page.locator('#providers-list li', { hasText: 'Sœur' });
+  await row.getByRole('button', { name: 'Modifier' }).click();
+  await page.selectOption('#dialog-select', '1');
+  await page.click('#dialog-ok');
+  await waitFor(async () => (await providers()).find((p) => p.index === 2).mixable === true, 'Sœur mélangeable');
+  await waitFor(async () => /mélangeable avec les autres/.test(await row.innerText()), 'état affiché');
+  await page.click('#view-btn-playlists');
+  await waitFor(async () => (await page.locator('#opt-provider option').count()) === 2, 'choix « mélange » proposé');
+  assert(/Moi \+ Sœur/.test((await page.locator('#opt-provider option').allInnerTexts())[1]), 'mélange = Moi + Sœur seulement');
   // Playlist « mélange » : un bloc repliable par fournisseur, celui du profil déplié, les autres repliés.
   await showSection('options');
-  await page.selectOption('#opt-provider', '');
+  await page.selectOption('#opt-provider', 'mix');
   await showSection('content');
-  await waitFor(async () => (await page.locator('#categories details.provider-group').count()) >= 2, 'blocs par fournisseur');
+  await waitFor(async () => (await page.locator('#categories details.provider-group').count()) === 2, 'blocs Moi et Sœur (pas Maman)');
   const groups = page.locator('#categories details.provider-group');
   assert(/Moi/.test(await groups.nth(0).locator('summary').innerText()), 'premier bloc : abonnement du profil');
   assert(await groups.nth(0).evaluate((d) => d.open) && !(await groups.nth(1).evaluate((d) => d.open)), 'Moi déplié, autres repliés');
@@ -119,10 +129,11 @@ try {
   await page.selectOption('#opt-provider', '1');
   await waitFor(async () => (await page.locator('#categories details.provider-group').count()) === 0, 'un seul abonnement : pas de blocs');
   await showSection('content');
-  await page.click('#view-btn-system');
-  await page.uncheck('#allow-mix');
-  await waitFor(async () => (await api('/api/settings')).allow_mix === false, 'mélange désactivé');
-  await page.click('#view-btn-playlists');
+  if (shots) {
+    await page.click('#view-btn-system');
+    await page.locator('#providers-card').screenshot({ path: join(shots, 'desktop-providers-mix.png') });
+    await page.click('#view-btn-playlists');
+  }
 
   // Téléphone : pas de défilement horizontal avec la barre de profils
   const phone = await browser.newPage({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2 });
