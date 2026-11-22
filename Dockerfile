@@ -1,5 +1,5 @@
 # Xtream M3U Local — un seul conteneur, Python standard library uniquement.
-FROM python:3.13-alpine
+FROM python:3.15-alpine
 
 LABEL org.opencontainers.image.title="Xtream M3U Local" \
       org.opencontainers.image.description="Playlists M3U personnalisées et relais TS depuis l'API Xtream (port 7777 lecteurs, 7778 interface Web)" \
