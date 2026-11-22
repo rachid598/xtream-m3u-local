@@ -44,6 +44,7 @@ DEVICE_API = re.compile(r"^/api/devices/([A-Za-z0-9_-]{1,16})$")
 STREAM_STOP_API = re.compile(r"^/api/streams/([0-9]{1,9})/stop$")
 PROVIDER_API = re.compile(r"^/api/providers/([2-9])$")
 MIX_API = re.compile(r"^/api/providers/([1-9])/mix$")
+CREDENTIALS_API = re.compile(r"^/api/providers/([1-9])/credentials$")
 CSP = (
     "default-src 'none'; style-src 'self'; script-src 'self'; connect-src 'self'{players}; "
     "media-src 'self' blob:{players}; img-src 'self' data: http: https:; base-uri 'none'; form-action 'none'; "
@@ -224,6 +225,9 @@ class WebHandler(BaseHTTPRequestHandler):
             return self.backup()
         if path == "/api/epg":
             return self.epg_status(qs.get("slug", [""])[0] or None)
+        creds = CREDENTIALS_API.fullmatch(path)
+        if creds:
+            return self.provider_credentials(int(creds.group(1)))
         if path == "/api/tunnel":
             return self.json(200, self.tunnel_status())
         if path == "/api/epg/suggest":
@@ -298,6 +302,36 @@ class WebHandler(BaseHTTPRequestHandler):
         if str(account.get("status") or "Active").lower() not in ("active", ""):
             return f"Abonnement « {account.get('status')} » chez le fournisseur"
         return None
+
+    def provider_credentials(self, index: int) -> None:
+        """Utilisateur et mot de passe d'un abonnement, à la demande (bouton « Afficher »).
+
+        Réseau local seulement (jamais par un accès distant, même avec mot de passe), en-tête de l'interface
+        exigé, jamais mis en cache ni écrit dans le journal.
+        """
+        if not self.same_origin():
+            return
+        _, remote = access.client_address(self.client_address[0], self.headers, self.config.proxies(),
+                                          settings.local_networks(self.config))
+        if remote:
+            return self.json(403, {"error": "Identifiants affichables seulement depuis le réseau local"})
+        found = None
+        if index == 1:
+            found = (self.config.username, self.config.password)
+        elif index - 2 < len(self.config.extra_providers):
+            _, _, user, password = self.config.extra_providers[index - 2]
+            found = (user, password)
+        else:
+            store = provider_store.current()
+            try:
+                entry = next((p for p in store.list() if p["index"] == index), None) if store else None
+            except RuntimeError:
+                entry = None
+            if entry:
+                found = (entry["username"], entry["password"])
+        if found is None:
+            return self.json(404, {"error": "Abonnement introuvable"})
+        return self.json(200, {"index": index, "username": found[0], "password": found[1]})
 
     def provider_mix(self, index: int) -> None:
         """« Peut être mélangé aux autres abonnements » : réglage d'un abonnement (configuration comprise)."""

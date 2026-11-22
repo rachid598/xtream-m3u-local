@@ -127,6 +127,16 @@ class ProviderApiTests(StackTestCase):
         status, body = self.send(self.web_base + "/api/providers/2", "PUT", {"user_agent": "TiviMate/5.1.6"})
         self.assertEqual((status, body["user_agent"]), (200, "TiviMate/5.1.6"))
         self.assertEqual(self.store.list()[0]["password"], PASSWORD)              # mot de passe gardé
+        # Identifiants affichés à la demande : réseau local seulement, en-tête de l'interface exigé.
+        creds = json.loads(self.get(self.web_base + "/api/providers/2/credentials",
+                                    {"X-Requested-With": "XtreamM3ULocal"})[1])
+        self.assertEqual((creds["username"], creds["password"]), (USERNAME, PASSWORD))
+        main = json.loads(self.get(self.web_base + "/api/providers/1/credentials",
+                                   {"X-Requested-With": "XtreamM3ULocal"})[1])
+        self.assertEqual(main["index"], 1)
+        self.assertEqual(self.get(self.web_base + "/api/providers/2/credentials")[0], 403)          # sans en-tête
+        self.assertEqual(self.get(self.web_base + "/api/providers/7/credentials",
+                                  {"X-Requested-With": "XtreamM3ULocal"})[0], 404)
         # Modification complète : nouvelle adresse et nouvel utilisateur testés avant l'enregistrement.
         port = self.other_url.rsplit(":", 1)[1]
         status, body = self.send(self.web_base + "/api/providers/2", "PUT",

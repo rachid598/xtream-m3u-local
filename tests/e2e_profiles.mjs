@@ -101,7 +101,10 @@ try {
   await page.locator('#providers-list li', { hasText: 'Maman' }).getByRole('button', { name: 'Modifier' }).click();
   assert(await page.inputValue('#provider-name') === 'Maman', 'nom repris');
   assert(/^http:\/\/localhost:\d+$/.test(await page.inputValue('#provider-url')), 'adresse reprise');
-  assert(await page.inputValue('#provider-user') === '' && /inchangé/.test(await page.getAttribute('#provider-user', 'placeholder')), 'utilisateur inchangé par défaut');
+  await waitFor(async () => (await page.inputValue('#provider-user')) === 'user', 'utilisateur pré-rempli');
+  assert(await page.getAttribute('#provider-pass', 'type') === 'password' && await page.inputValue('#provider-pass') === 'pw', 'mot de passe pré-rempli, masqué');
+  await page.click('#provider-pass-eye');
+  assert(await page.getAttribute('#provider-pass', 'type') === 'text', 'œil : mot de passe visible');
   if (shots) await page.locator('#providers-card').screenshot({ path: join(shots, 'desktop-provider-edit.png') });
   await page.fill('#provider-name', 'Maman 2');
   await page.click('#provider-add');

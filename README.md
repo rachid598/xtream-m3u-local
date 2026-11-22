@@ -274,7 +274,7 @@ et dans l'environnement du conteneur : `REMOTE_ACCESS=true`, `PUBLIC_BASE_URL=ht
 ## Sécurité et limites
 
 - **Réseau local par défaut.** Ne redirige pas 7777/7778 vers Internet sans lire « Accès distant » ci-dessus ; 7778 (gestion) ne doit jamais être exposé. Sur un réseau partagé : `WEB_PASSWORD` (gestion) et l'option « exiger un code d'appareil » (lecteurs).
-- Les identifiants Xtream restent dans le conteneur : absents des playlists (hors `mode=direct`), des manifestes HLS, de l'API Web, des exports et sauvegardes, des journaux et du diagnostic.
+- Les identifiants Xtream restent dans le conteneur : absents des playlists (hors `mode=direct`), des manifestes HLS, des exports et sauvegardes, des journaux et du diagnostic. L'interface les affiche seulement à la demande (bouton « Afficher » d'un abonnement, formulaire « Modifier »), et seulement depuis le réseau local — jamais à distance, même avec `WEB_REMOTE`.
 - `devices.json` contient les codes d'appareils (droits 0600). Protection CSRF de l'API, CSP stricte sans script inline, validation de toutes les entrées, écritures atomiques avec copie `.bak`.
 - **Protection DNS rebinding** : un site web piégé ouvert sur un ordinateur de la maison ne peut pas lire l'interface (codes d'appareils, sauvegarde) ni les liens `mode=direct`. Seuls les adresses IP, les noms locaux, `PUBLIC_BASE_URL`, `ALLOWED_HOSTS` et les reverse proxys de `TRUSTED_PROXIES` sont acceptés ; sinon « Nom d'hôte refusé » (ajoute ton nom dans `ALLOWED_HOSTS`).
 - Démarrage en root uniquement pour corriger les droits de `/data`, puis UID 99 / GID 100.

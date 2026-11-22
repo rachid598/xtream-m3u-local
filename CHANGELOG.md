@@ -2,6 +2,11 @@
 
 Format inspiré de « Keep a Changelog ». Les versions suivent le versionnage sémantique.
 
+## [3.26.0] — 2026-11-22
+
+### Ajouté
+- **Utilisateur et mot de passe visibles à la demande** (Système → Abonnements) : bouton « Afficher » sur chaque abonnement (configuration du conteneur comprise), et formulaire « Modifier » pré-rempli avec l'utilisateur et le mot de passe (masqué, bouton 👁 pour le voir). Servis seulement à l'interface ouverte depuis le réseau local (`GET /api/providers/<n>/credentials`, jamais à distance même avec `WEB_REMOTE`), jamais mis dans le journal.
+
 ## [3.25.0] — 2026-11-22
 
 ### Modifié

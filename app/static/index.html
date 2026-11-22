@@ -528,7 +528,7 @@
       <div class="card-head">
         <div>
           <h2>Abonnements</h2>
-          <p class="muted small">Un abonnement = un profil (barre « Profil » en haut) : un serveur à part, avec ses playlists, ses appareils, son guide, ses lectures et son diagnostic. Changer de profil recharge toute l'interface sur ce profil seul. Celui de la configuration du conteneur se modifie dans Unraid (seul son mélange se règle ici). Les autres s'ajoutent ici : la connexion est testée avant l'enregistrement, et le mot de passe n'est plus jamais affiché.</p>
+          <p class="muted small">Un abonnement = un profil (barre « Profil » en haut) : un serveur à part, avec ses playlists, ses appareils, son guide, ses lectures et son diagnostic. Changer de profil recharge toute l'interface sur ce profil seul. Celui de la configuration du conteneur se modifie dans Unraid (seul son mélange se règle ici). Les autres s'ajoutent ici : la connexion est testée avant l'enregistrement. Utilisateur et mot de passe s'affichent seulement à la demande (bouton « Afficher »), depuis ton réseau local.</p>
         </div>
       </div>
       <ul class="sum-list" id="providers-list"><li class="empty">Chargement…</li></ul>
@@ -547,7 +547,7 @@
         </div>
         <div class="field">
           <label for="provider-pass">Mot de passe</label>
-          <input id="provider-pass" type="password" maxlength="200" autocomplete="new-password" required>
+          <span class="pass-wrap"><input id="provider-pass" type="password" maxlength="200" autocomplete="new-password" required><button type="button" class="pass-eye" id="provider-pass-eye" aria-label="Afficher le mot de passe" title="Afficher le mot de passe">👁</button></span>
         </div>
         <div class="field">
           <label for="provider-ua">User agent (facultatif)</label>

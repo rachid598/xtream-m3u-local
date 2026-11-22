@@ -243,3 +243,19 @@ class DnsRebindingTests(StackTestCase):
         self.assertEqual(self.get(self.stack.proxy_base + "/playlist.m3u", evil)[0], 200)    # liens sans secret
         stack = self.make_stack(allowed_hosts=access.parse_hosts("evil.example.com"))
         self.assertEqual(self.get(stack.web_base + "/api/status", evil)[0], 200)
+
+
+class CredentialsRemoteTests(StackTestCase):
+    """Identifiants des abonnements : jamais affichés à distance, même avec l'interface ouverte (WEB_REMOTE)."""
+
+    def test_refused_remotely(self):
+        import base64
+        stack = self.make_stack(web_remote=True, web_password="secret-123", trusted_proxies=PROXY)
+        auth = "Basic " + base64.b64encode(f"{stack.config.web_username}:secret-123".encode()).decode()
+        headers = {**REMOTE, "Authorization": auth, "X-Requested-With": "XtreamM3ULocal"}
+        self.assertEqual(self.get(stack.web_base + "/api/status", headers)[0], 200)            # interface ouverte
+        status, body, _ = self.get(stack.web_base + "/api/providers/1/credentials", headers)
+        self.assertEqual(status, 403)
+        self.assertIn("réseau local", body.decode())
+        local = {"Authorization": auth, "X-Requested-With": "XtreamM3ULocal"}
+        self.assertEqual(self.get(stack.web_base + "/api/providers/1/credentials", local)[0], 200)

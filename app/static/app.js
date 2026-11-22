@@ -180,9 +180,9 @@
   }
 
   async function request(path, method = 'GET', body) {
-    const options = { method, headers: { Accept: 'application/json' }, credentials: 'same-origin' };
+    // En-tête de l'interface sur toutes les requêtes (exigé pour les écritures et l'affichage des identifiants).
+    const options = { method, headers: { Accept: 'application/json', 'X-Requested-With': 'XtreamM3ULocal' }, credentials: 'same-origin' };
     if (method !== 'GET') {
-      options.headers['X-Requested-With'] = 'XtreamM3ULocal';
       if (body !== undefined) {
         options.headers['Content-Type'] = 'application/json';
         options.body = JSON.stringify(body);
@@ -2270,15 +2270,18 @@
         : `${p.host} · ${p.username} · ajouté dans l'interface`;
       const agent = p.user_agent ? ` · user agent : ${p.user_agent}` : '';
       const mix = p.mixable ? ' · mélangeable avec les autres abonnements' : ' · isolé (jamais mélangé)';
+      const creds = h('span', { class: 'prov-creds', hidden: true });
+      const show = h('button', { type: 'button', class: 'btn small', text: 'Afficher', title: 'Afficher l\'utilisateur et le mot de passe',
+        onclick: () => toggleCredentials(p, creds, show) });
       const actions = p.source === 'configuration'
-        ? (providersData.mix_editable ? h('span', { class: 'row-actions' },
-          h('button', { type: 'button', class: 'btn small', text: 'Modifier', onclick: () => editMix(p) })) : null)
-        : h('span', { class: 'row-actions' },
+        ? h('span', { class: 'row-actions' }, show,
+          providersData.mix_editable ? h('button', { type: 'button', class: 'btn small', text: 'Modifier', onclick: () => editMix(p) }) : null)
+        : h('span', { class: 'row-actions' }, show,
         h('button', { type: 'button', class: 'btn small', text: 'Modifier', onclick: () => editProvider(p) }),
         h('button', { type: 'button', class: 'btn small danger', text: 'Supprimer', onclick: () => deleteProvider(p) }));
       return h('li', null,
         h('span', null, h('strong', { text: `${p.index}. ${p.name}` }), h('br'),
-          h('span', { class: p.error ? 'warn-text' : 'muted small', text: p.error || meta + mix + agent })),
+          h('span', { class: p.error ? 'warn-text' : 'muted small', text: p.error || meta + mix + agent }), creds),
         actions);
     }));
     $('provider-form').hidden = !providersData.editable;
@@ -2322,8 +2325,27 @@
     try { await saveMix(p, choice); toast('Abonnement enregistré'); afterProvidersChange(); } catch (error) { toast(error.message, 'error'); }
   }
 
+  /** Identifiants d'un abonnement, demandés au serveur seulement quand on clique (réseau local seulement). */
+  const fetchCredentials = (p) => request(`/api/providers/${p.index}/credentials`);
+
+  async function toggleCredentials(p, box, button) {
+    if (!box.hidden) {
+      box.hidden = true;
+      box.replaceChildren();
+      button.textContent = 'Afficher';
+      return;
+    }
+    try {
+      const c = await fetchCredentials(p);
+      box.replaceChildren(h('br'), h('span', { class: 'k', text: 'Utilisateur : ' }), h('code', { text: c.username }),
+        h('span', { class: 'k', text: ' · Mot de passe : ' }), h('code', { text: c.password }));
+      box.hidden = false;
+      button.textContent = 'Masquer';
+    } catch (error) { toast(error.message, 'error'); }
+  }
+
   /** Modifier un abonnement ajouté dans l'interface : le formulaire passe en mode édition (tous les champs). */
-  function editProvider(p) {
+  async function editProvider(p) {
     const form = $('provider-form');
     form.dataset.edit = String(p.index);
     form.dataset.mixable = p.mixable ? '1' : '0';
@@ -2333,6 +2355,12 @@
     $('provider-user').placeholder = `inchangé (${p.username})`;
     $('provider-pass').value = '';
     $('provider-pass').placeholder = 'inchangé';
+    try {
+      // Identifiants actuels pré-remplis (mot de passe masqué, bouton œil pour le voir).
+      const c = await fetchCredentials(p);
+      $('provider-user').value = c.username;
+      $('provider-pass').value = c.password;
+    } catch (_) { /* vide = inchangé */ }
     $('provider-user').required = false;
     $('provider-pass').required = false;
     $('provider-ua').value = p.user_agent || '';
@@ -2340,7 +2368,7 @@
     $('provider-add').textContent = `Enregistrer « ${p.name} »`;
     $('provider-cancel').hidden = false;
     $('provider-edit-hint').hidden = false;
-    $('provider-edit-hint').textContent = `Modification de « ${p.name} » : laisse l'utilisateur ou le mot de passe vide pour les garder. Une nouvelle adresse ou de nouveaux identifiants sont testés auprès du fournisseur avant l'enregistrement.`;
+    $('provider-edit-hint').textContent = `Modification de « ${p.name} » : corrige ce qui a changé (👁 pour voir le mot de passe). Une nouvelle adresse ou de nouveaux identifiants sont testés auprès du fournisseur avant l'enregistrement.`;
     form.scrollIntoView({ behavior: 'smooth', block: 'center' });
     $('provider-name').focus();
   }
@@ -2352,6 +2380,7 @@
     for (const id of ['provider-name', 'provider-url', 'provider-user', 'provider-pass', 'provider-ua']) $(id).value = '';
     $('provider-user').placeholder = '';
     $('provider-pass').placeholder = '';
+    $('provider-pass').type = 'password';
     $('provider-user').required = true;
     $('provider-pass').required = true;
     $('provider-mix').checked = false;
@@ -2783,6 +2812,10 @@
     }
   });
   $('provider-cancel').addEventListener('click', resetProviderForm);
+  $('provider-pass-eye').addEventListener('click', () => {
+    const field = $('provider-pass');
+    field.type = field.type === 'password' ? 'text' : 'password';
+  });
   $('opt-failover-any').addEventListener('change', () => { renderOptionsPill(); refresh({ channels: false }); });
   $('opt-uhd').addEventListener('change', () => { state.hiddenCache = null; renderOptionsPill(); refresh(); });
   $('opt-separators').addEventListener('change', () => { renderOptionsPill(); refresh(); });

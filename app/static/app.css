@@ -651,3 +651,8 @@ dialog.preview-dialog { width: min(920px, calc(100vw - 24px)); padding: 14px; }
 .tunnel-login, .tunnel-ready { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
 .tunnel-ready a { overflow-wrap: anywhere; }
 .tunnel-warn { color: var(--warn); }
+.pass-wrap { display: flex; gap: 6px; align-items: center; }
+.pass-wrap input { flex: 1; min-width: 0; }
+.pass-eye { border: 1px solid var(--border); background: var(--bg-soft); border-radius: var(--radius-sm); padding: 8px 10px; cursor: pointer; line-height: 1; }
+.prov-creds { font-size: 13px; overflow-wrap: anywhere; }
+.prov-creds code { user-select: all; }
