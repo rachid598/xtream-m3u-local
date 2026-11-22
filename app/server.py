@@ -887,22 +887,39 @@ def order_entries(entries: list[tuple[dict, str]], categories: dict[str, str],
     return [entry for _, entry in sorted(enumerate(entries), key=key)]
 
 
+_CRED_RE = re.compile(r"(?i)\b(username|password)=[^&#\s]*")
+
+
 def redact(value: object, config: Config) -> object:
-    """Copie profonde d'une réponse brute du fournisseur sans identifiants (tous les fournisseurs)."""
+    """Copie profonde d'une réponse brute du fournisseur sans identifiants (tous les fournisseurs).
+
+    Les identifiants sont lus une seule fois par appel (pas une fois par texte : des dizaines de milliers
+    de films à envoyer à un lecteur prenaient sinon des dizaines de secondes).
+    """
+    credentials = list(config.credentials) + provider_store.credentials()
+    paths = [pattern for user, password in credentials
+             for pattern in {f"/{user}/{password}/", f"/{quote(user, safe='')}/{quote(password, safe='')}/"}]
+    passwords = [p for _, p in credentials if len(p) >= 4]
+    return _redact(value, paths, passwords + [quote(p, safe="") for p in passwords if quote(p, safe="") != p])
+
+
+def _redact(value: object, paths: list, passwords: list) -> object:
     if isinstance(value, dict):
-        return {k: ("***" if str(k).lower() in ("username", "password") else redact(v, config))
+        return {k: ("***" if str(k).lower() in ("username", "password") else _redact(v, paths, passwords))
                 for k, v in value.items()}
     if isinstance(value, list):
-        return [redact(v, config) for v in value]
+        return [_redact(v, paths, passwords) for v in value]
     if isinstance(value, str):
-        credentials = list(config.credentials) + provider_store.credentials()
-        for user, password in credentials:
-            for pattern in (f"/{user}/{password}/", f"/{quote(user, safe='')}/{quote(password, safe='')}/"):
-                value = value.replace(pattern, "/***/***/")
-        value = re.sub(r"(?i)\b(username|password)=[^&#\s]*", r"\1=***", value)
-        for _, password in credentials:
-            if len(password) >= 4:
-                value = value.replace(password, "***")
+        low = value.lower()
+        # Texte sans aucun secret possible : rendu tel quel (cas de presque tous les champs).
+        if "username=" not in low and "password=" not in low and not any(p in value for p in paths) \
+                and not any(p in value for p in passwords):
+            return value
+        for pattern in paths:
+            value = value.replace(pattern, "/***/***/")
+        value = _CRED_RE.sub(r"\1=***", value)
+        for password in passwords:
+            value = value.replace(password, "***")
         return value
     return value
 
@@ -1092,6 +1109,14 @@ def collect_entries(api: XtreamAPI, series: "SeriesCache", saved: dict, kinds: t
 
 
 class Handler(BaseHTTPRequestHandler):
+
+    def handle(self) -> None:
+        # Navigateur ou lecteur qui ferme la connexion avant la fin de la réponse (rechargement, zapping,
+        # délai dépassé) : normal, pas de trace d'erreur dans le journal.
+        try:
+            super().handle()
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            self.close_connection = True
     server_version = f"XtreamM3ULocal/{__version__}"
     sys_version = ""
     # Ferme les connexions inactives : un lecteur en pause ne bloque pas
@@ -1147,6 +1172,10 @@ class Handler(BaseHTTPRequestHandler):
             self.handle_request(head_only=head_only)
         except UnknownProvider:
             self._error(404, "Contenu introuvable (fournisseur non configuré)", head_only=head_only)
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            # Le lecteur a fermé la connexion avant la fin de la réponse (zapping, délai dépassé) : normal.
+            LOG.debug("Connexion fermée par le lecteur : %s", mask_path(urlsplit(self.path).path))
+            self.close_connection = True
 
     def response(self, status: int, content: bytes, content_type: str, *, head_only: bool,
                  filename: str | None = None, extra: dict[str, str] | None = None,
@@ -1326,7 +1355,8 @@ class Handler(BaseHTTPRequestHandler):
         try:
             return self.streams.acquire(kind=kind, item_id=item_id, client=self.client_ip or self.client_address[0],
                                         label=label, virtual=virtual, provider=provider,
-                                        device=device.get("name", ""), priority=device.get("priority", "normal"))
+                                        device=device.get("name", ""), priority=device.get("priority", "normal"),
+                                        device_id=device.get("id", ""))
         except EvictedRecently:
             self._error(409, "Lecture arrêtée : la connexion au fournisseur a été donnée à un autre appareil "
                              "(réessaie dans 30 secondes ou choisis une autre chaîne)", head_only=False)
@@ -1640,7 +1670,10 @@ class Handler(BaseHTTPRequestHandler):
                 scheme = "https" if base.scheme == "https" else "http"
                 data = emu.account(device, base.hostname or "", str(base.port or (443 if scheme == "https" else 80)),
                                    scheme)
-                log_device_login(emu, device, self.client_ip or self.client_address[0])
+                # Journal calculé en arrière-plan : la réponse de connexion part tout de suite (un lecteur
+                # distant abandonne s'il attend le décompte des films et séries).
+                threading.Thread(target=log_device_login, args=(emu, device, self.client_ip or self.client_address[0]),
+                                 daemon=True, name="device-login-log").start()
             elif action.endswith("_categories") and action in kind_of:
                 data = emu.categories(device, kind_of[action])
             elif action in kind_of:

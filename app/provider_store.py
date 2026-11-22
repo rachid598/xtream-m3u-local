@@ -40,15 +40,23 @@ class ProviderStore:
     def __init__(self, data_dir: str) -> None:
         self.path = Path(data_dir) / "providers.json"
         self._lock = threading.RLock()
+        self._cache: tuple[object, list[dict]] | None = None   # (date du fichier, contenu) : lu une fois
 
     # --------------------------------------------------------------- lecture
     def list(self) -> list[dict]:
         """Abonnements de l'interface, **avec** leurs identifiants (usage interne uniquement)."""
         with self._lock:
             try:
-                data = json.loads(self.path.read_text(encoding="utf-8"))
+                stat = self.path.stat()
+                stamp = (stat.st_mtime_ns, stat.st_size)
             except FileNotFoundError:
                 return []
+            except OSError:
+                raise RuntimeError("providers.json illisible") from None
+            if self._cache is not None and self._cache[0] == stamp:
+                return [dict(p) for p in self._cache[1]]
+            try:
+                data = json.loads(self.path.read_text(encoding="utf-8"))
             except (OSError, ValueError):
                 raise RuntimeError("providers.json illisible") from None
         result = []
@@ -62,7 +70,10 @@ class ProviderStore:
                                "url": str(raw["url"]), "username": str(raw["username"]),
                                "password": str(raw["password"]), "created_at": int(raw.get("created_at") or 0),
                                "user_agent": str(raw.get("user_agent") or "")[:200]})
-        return sorted(result, key=lambda p: p["index"])
+        result.sort(key=lambda p: p["index"])
+        with self._lock:
+            self._cache = (stamp, result)
+        return [dict(p) for p in result]
 
     def credentials(self) -> list[tuple[str, str]]:
         try:
@@ -72,6 +83,7 @@ class ProviderStore:
 
     # --------------------------------------------------------------- écriture
     def _write(self, providers: list[dict]) -> None:
+        self._cache = None
         self.path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self.path.with_suffix(".tmp")
         fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)

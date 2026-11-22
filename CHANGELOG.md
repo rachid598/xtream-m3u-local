@@ -2,6 +2,18 @@
 
 Format inspiré de « Keep a Changelog ». Les versions suivent le versionnage sémantique.
 
+## [3.23.0] — 2026-11-22
+
+Retour réel : appli testée hors de la maison par le tunnel Cloudflare ; les groupes s'affichent mais les chaînes non, journaux pleins de « BrokenPipeError » sur `player_api.php`.
+
+### Corrigé
+- **Listes Xtream beaucoup plus rapides** (chaînes, films, séries envoyés aux lecteurs) : le masquage des identifiants relisait `providers.json` sur le disque pour chaque champ de chaque élément (des centaines de milliers de lectures pour 17 000 films). Il lit maintenant les identifiants une fois par réponse et saute les textes sans secret : 17 000 films en 0,35 s au lieu de 3,6 s (bien plus sur un petit serveur). Les lecteurs distants n'abandonnent plus avant la fin.
+- **Connexion d'un appareil immédiate** : la ligne de journal « Appareil … connecté (chaînes, films, séries) » est calculée en arrière-plan au lieu de retarder la réponse de connexion.
+- **Plus de traces « Broken pipe »** dans le journal quand un lecteur ou le navigateur ferme la connexion avant la fin (zapping, rechargement) : c'est normal.
+
+### Ajouté
+- **« En lecture » dans la fiche de chaque appareil** : chaîne regardée, type et durée, mis à jour toutes les 8 s (identifiant de l'appareil gardé dans chaque lecture).
+
 ## [3.22.0] — 2026-11-22
 
 ### Ajouté

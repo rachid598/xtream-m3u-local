@@ -52,6 +52,14 @@ CSP = (
 
 
 class WebHandler(BaseHTTPRequestHandler):
+    def handle(self) -> None:
+        # Navigateur ou lecteur qui ferme la connexion avant la fin de la réponse (rechargement, zapping,
+        # délai dépassé) : normal, pas de trace d'erreur dans le journal.
+        try:
+            super().handle()
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            self.close_connection = True
+
     server_version = f"XtreamM3ULocal-Web/{__version__}"
     sys_version = ""
     timeout = 60

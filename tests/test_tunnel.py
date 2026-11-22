@@ -119,3 +119,24 @@ class DeviceLinksTests(StackTestCase):
         self.addCleanup(tunnel.install, None)
         self.assertEqual(json.loads(self.get(self.stack.web_base + "/api/status")[1])["external_base"],
                          "https://tv.mondomaine.fr")
+
+
+class DeviceLiveTests(StackTestCase):
+    """Fiche d'appareil « En lecture » : la lecture en cours porte l'identifiant de l'appareil."""
+
+    def test_stream_carries_device_id(self):
+        import threading
+        from urllib.request import urlopen
+        device = self.send(self.stack.web_base + "/api/devices", "POST", {"name": "Chambre"})[1]   # sans playlist
+        url = f"{self.stack.proxy_base}/stream/60.ts?token={device['password']}"   # flux qui dure 20 s
+        reader = threading.Thread(target=lambda: urlopen(url, timeout=30).read(4096), daemon=True)
+        reader.start()
+        streams = []
+        for _ in range(50):
+            streams = json.loads(self.get(self.stack.web_base + "/api/streams")[1])["streams"]
+            if streams:
+                break
+            time.sleep(0.1)
+        self.assertTrue(streams)
+        self.assertEqual((streams[0]["device_id"], streams[0]["device"]), (device["id"], "Chambre"))
+        self.assertIn("channel", streams[0])

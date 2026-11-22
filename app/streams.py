@@ -51,8 +51,9 @@ class StreamSession:
     _ids = itertools.count(1)
 
     def __init__(self, *, kind: str, item_id: str, client: str, provider: str, label: str, virtual: bool,
-                 device: str = "", priority: str = "normal"):
+                 device: str = "", priority: str = "normal", device_id: str = ""):
         self.id = next(self._ids)
+        self.device_id = device_id      # identifiant de l'appareil (fiche « Appareils » : en cours de lecture)
         self.kind = kind
         self.item_id = item_id
         self.client = client
@@ -105,6 +106,8 @@ class StreamSession:
             "client": self.client, "provider": self.provider, "started_at": int(self.started),
             "seconds": int(time.time() - self.started), "bytes": self.bytes,
             "device": self.device, "priority": self.priority, "switches": self.switches,
+            "device_id": self.device_id, "channel": self.channel,
+            "idle": int(time.monotonic() - self.last_activity) if self.virtual else 0,
         }
 
 
@@ -190,7 +193,7 @@ class StreamManager:
 
     # ------------------------------------------------------------- public
     def acquire(self, *, kind: str, item_id: str, client: str, provider: str = "1", label: str = "",
-                virtual: bool = False, device: str = "", priority: str = "normal") -> StreamSession:
+                virtual: bool = False, device: str = "", priority: str = "normal", device_id: str = "") -> StreamSession:
         """Réserve une connexion fournisseur pour une lecture ; coupe une autre lecture si nécessaire."""
         evicted: list[StreamSession] = []
         with self._lock:
@@ -237,7 +240,8 @@ class StreamManager:
                     LOG.info("Limite de %d connexion(s) : arrêt de « %s » (%s) pour « %s »",
                              limit, victim.label or victim.item_id, victim.client, label or item_id)
             session = StreamSession(kind=kind, item_id=item_id, client=client, provider=provider,
-                                    label=label, virtual=virtual, device=device, priority=priority)
+                                    label=label, virtual=virtual, device=device, priority=priority,
+                                    device_id=device_id)
             self._sessions[session.id] = session
         # Laisser le temps aux connexions coupées de se fermer avant d'en ouvrir une nouvelle.
         for victim in evicted:

@@ -1984,7 +1984,11 @@
     const seen = d.last_seen ? `vu le ${new Date(d.last_seen * 1000).toLocaleString('fr-FR', { dateStyle: 'short', timeStyle: 'short' })}` : 'jamais utilisé depuis le démarrage';
     return h('section', { class: 'card device-card' },
       h('div', { class: 'card-head' },
-        h('div', null, h('h3', { text: d.name }), h('p', { class: 'muted small', text: `Identifiant ${d.username} · ${seen}` })),
+        h('div', null,
+          h('h3', { class: 'dev-title' }, h('span', { text: d.name }),
+            h('span', { class: 'pill ok dev-live', id: `dev-live-${d.id}`, hidden: true },
+              h('span', { class: 'dot', 'aria-hidden': 'true' }), h('span', { class: 'dev-live-text' }))),
+          h('p', { class: 'muted small', text: `Identifiant ${d.username} · ${seen}` })),
         h('div', { class: 'btn-row' },
           h('button', { type: 'button', class: 'btn small', text: 'Renommer', onclick: async () => {
             const name = await ask({ title: 'Renommer l\'appareil', okLabel: 'Renommer', input: { label: 'Nom', value: d.name } });
@@ -2070,9 +2074,35 @@
       return p ? inProfile(p) : state.profile === '1';
     });
     list.replaceChildren(...visible.map(deviceCard));
+    refreshDeviceLive();
     if (!visible.length) list.append(h('p', { class: 'empty', text: multiProfile()
       ? `Aucun appareil dans le profil « ${profileName(state.profile)} ». Ajoute sa TV ci-dessus, liée à une de ses playlists.`
       : 'Aucun appareil pour le moment. Ajoute ta première TV ci-dessus.' }));
+  }
+
+  /** « En lecture » dans la fiche de chaque appareil (mis à jour toutes les 8 s tant que la vue est ouverte). */
+  let deviceLiveTimer = null;
+  async function refreshDeviceLive() {
+    clearTimeout(deviceLiveTimer);
+    if (state.view !== 'devices' || !devicesData) return;
+    let data = null;
+    try { data = await request(`/api/streams${profileQuery()}`); } catch (_) { /* affichage seulement */ }
+    for (const d of devicesData.devices) {
+      const pill = $(`dev-live-${d.id}`);
+      if (!pill) continue;
+      // Lecture de cet appareil (par son identifiant ; anciennes sessions : par son nom). Un aperçu HLS
+      // sans requête depuis 20 s n'est plus compté comme regardé.
+      const mine = ((data && data.streams) || []).filter((s) => (s.device_id ? s.device_id === d.id : s.device === d.name)
+        && !(s.kind === 'hls' && s.idle > 20));
+      pill.hidden = !mine.length;
+      if (!mine.length) continue;
+      const s = mine[mine.length - 1];
+      const extra = mine.length > 1 ? ` (+${mine.length - 1})` : '';
+      pill.querySelector('.dev-live-text').textContent =
+        `En lecture : ${s.channel || s.label} · ${KIND_LABEL[s.kind] || s.kind} · depuis ${formatDuration(s.seconds)}${extra}`;
+      pill.title = `${s.label}${s.switches ? ` · ${plural(s.switches, 'bascule', 'bascules')}` : ''} · ${formatBytes(s.bytes)}`;
+    }
+    deviceLiveTimer = setTimeout(refreshDeviceLive, 8000);
   }
 
   // ------------------------------------------------------------- système
