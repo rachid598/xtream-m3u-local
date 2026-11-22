@@ -51,6 +51,8 @@
     groupCache: null,        // chaînes rangées dans les groupes perso (calculé à la demande)
     itemLogos: {},           // logos de remplacement {clé: URL}
     itemEpg: {},             // guide emprunté {id_chaîne: id_chaîne_source}
+    itemXmltv: {},           // guide choisi {id_chaîne: identifiant XMLTV} (suggestions validées)
+    epgSuggestions: null,    // suggestions de guide de la playlist ouverte {id_chaîne: [{id, name, source, …}]}
     section: 'content',      // partie de l'éditeur : content | organize | options | guide
   };
   // Raccourcis vers le catalogue et la sélection du type affiché (state.categories, state.selected…).
@@ -515,6 +517,7 @@
     data.group_names = cleanGroupNames();
     data.item_logos = sortedObject(state.itemLogos);
     data.item_epg = sortedObject(state.itemEpg);
+    data.item_xmltv = sortedObject(state.itemXmltv);
     data.custom_groups = state.customGroups.map((g) => ({ id: g.id, name: String(g.name || '').trim() || g.id, match: g.match,
       patterns: [...new Set((g.patterns || []).map((p) => String(p).trim()).filter(Boolean))] }));
     const known = new Set(state.customGroups.map((g) => g.id));
@@ -699,6 +702,8 @@
     $('epg-pill-text').textContent = text;
   }
 
+  let lastMissing = [];   // chaînes sans programme de la playlist ouverte (dernier état du guide)
+
   function renderEpg(data) {
     const pl = data.playlist;
     const src = data.source || {};
@@ -737,14 +742,56 @@
     }
     if (pl.pending) parts.push(`${plural(pl.pending, 'chaîne', 'chaînes')} en cours de récupération (actualisation automatique).`);
     $('epg-source').textContent = parts.join(' ');
-    const list = $('epg-missing');
-    list.replaceChildren();
-    for (const item of pl.missing.slice(0, 300)) {
-      list.append(h('li', null, h('span', { text: item.name }), h('span', { class: 'num', text: item.epg_id ? `tvg-id ${item.epg_id}` : 'sans identifiant EPG' })));
-    }
-    if (pl.missing.length > 300) list.append(h('li', { class: 'empty', text: `… et ${pl.missing.length - 300} autres` }));
+    lastMissing = pl.missing;
+    renderMissing();
     $('epg-missing-summary').textContent = `${plural(pl.missing.length, 'chaîne', 'chaînes')} sans programme (le fournisseur n'en publie pas)`;
     $('epg-missing-box').hidden = !pl.missing.length;
+  }
+
+  /** Chaînes sans programme, avec les guides proposés (noms proches) à choisir en un clic. */
+  function renderMissing() {
+    const list = $('epg-missing');
+    list.replaceChildren();
+    const suggestions = state.epgSuggestions || {};
+    for (const item of lastMissing.slice(0, 300)) {
+      const chosen = state.itemXmltv[item.stream_id];
+      const options = suggestions[item.stream_id] || [];
+      const meta = chosen ? `guide choisi : ${chosen} (à enregistrer)` : item.epg_id ? `tvg-id ${item.epg_id}` : 'sans identifiant EPG';
+      const row = h('li', { class: 'epg-row' }, h('span', { class: 'epg-name' }, h('span', { text: item.name }),
+        h('span', { class: `num${chosen ? ' ok-text' : ''}`, text: meta })));
+      if (options.length && !chosen) {
+        row.append(h('span', { class: 'epg-choices' }, ...options.map((o) => h('button', {
+          type: 'button', class: 'btn small', title: `${o.source} · ${o.programmes} programmes · ressemblance ${o.score} %`,
+          text: `${o.name} · ${o.score} %`,
+          onclick: () => { state.itemXmltv[item.stream_id] = o.id; refresh({ channels: false }); renderMissing(); },
+        }))));
+      } else if (chosen) {
+        row.append(h('button', { type: 'button', class: 'btn small ghost', text: 'Annuler',
+          onclick: () => { delete state.itemXmltv[item.stream_id]; refresh({ channels: false }); renderMissing(); } }));
+      }
+      list.append(row);
+    }
+    if (lastMissing.length > 300) list.append(h('li', { class: 'empty', text: `… et ${lastMissing.length - 300} autres` }));
+  }
+
+  async function suggestGuides() {
+    if (!state.editing) return;
+    const button = $('epg-suggest');
+    button.disabled = true;
+    button.textContent = 'Recherche…';
+    try {
+      const data = await request(`/api/epg/suggest?slug=${encodeURIComponent(state.editing)}`);
+      state.epgSuggestions = Object.fromEntries(data.suggestions.map((s) => [s.stream_id, s.suggestions]));
+      renderMissing();
+      toast(data.suggestions.length
+        ? `${plural(data.suggestions.length, 'chaîne', 'chaînes')} avec un guide proposé : choisis, puis enregistre la playlist`
+        : 'Aucun guide au nom proche trouvé');
+    } catch (error) {
+      toast(error.message, 'error');
+    } finally {
+      button.disabled = false;
+      button.textContent = 'Proposer des guides';
+    }
   }
 
   async function refreshEpg() {
@@ -1446,7 +1493,7 @@
     const custom = $('sum-custom');
     custom.replaceChildren();
     const keys = new Set([...Object.keys(state.itemNames), ...Object.keys(state.itemNumbers),
-      ...Object.keys(state.itemLogos), ...Object.keys(state.itemEpg)]);
+      ...Object.keys(state.itemLogos), ...Object.keys(state.itemEpg), ...Object.keys(state.itemXmltv)]);
     for (const key of keys) {
       const { kind, item } = itemByKey(key);
       const parts = [];
@@ -1457,10 +1504,12 @@
         const source = state.cat.live.channelById.get(state.itemEpg[key]);
         parts.push(`guide de « ${source ? source.name : state.itemEpg[key]} »`);
       }
+      if (kind === 'live' && state.itemXmltv[key]) parts.push(`guide ${state.itemXmltv[key]}`);
       custom.append(h('li', null,
         h('span', null, h('span', { class: `kind-tag ${kind}`, text: KIND[kind].label }), ' ', `${item ? item.name : key} → ${parts.join(' · ')}`),
         h('button', { type: 'button', class: 'x', text: '×', title: 'Annuler la personnalisation', onclick: () => {
-          delete state.itemNames[key]; delete state.itemNumbers[key]; delete state.itemLogos[key]; delete state.itemEpg[key]; refresh();
+          delete state.itemNames[key]; delete state.itemNumbers[key]; delete state.itemLogos[key]; delete state.itemEpg[key];
+          delete state.itemXmltv[key]; refresh();
         } })));
     }
     if (!keys.size) custom.append(h('li', { class: 'empty', text: 'Aucune personnalisation (nom, numéro, logo, guide).' }));
@@ -1748,6 +1797,8 @@
     state.itemNumbers = p && p.item_numbers ? { ...p.item_numbers } : {};
     state.itemLogos = p && p.item_logos ? { ...p.item_logos } : {};
     state.itemEpg = p && p.item_epg ? { ...p.item_epg } : {};
+    state.itemXmltv = p && p.item_xmltv ? { ...p.item_xmltv } : {};
+    state.epgSuggestions = null;
     state.hiddenCache = null;
     renderOptionsPill();
     state.groupOrder = p && p.group_order ? [...p.group_order] : [];
@@ -1933,7 +1984,12 @@
         h('div', { class: 'device-mode' },
           h('h4', { text: '🔐 Mode « Xtream Codes » (TiviMate, IPTV Smarters…)' }),
           credRow('Serveur', server), credRow('Identifiant', d.username), credRow('Mot de passe', d.password, { secret: true }),
-          h('p', { class: 'hint', text: 'Rubriques Direct / Films / Séries natives du lecteur, guide et replay inclus.' }))));
+          h('p', { class: 'hint', text: 'Rubriques Direct / Films / Séries natives du lecteur, guide et replay inclus.' })),
+        h('div', { class: 'device-mode' },
+          h('h4', { text: '📡 Tuner HDHomeRun (Plex, Jellyfin, Emby)' }),
+          credRow('Tuner', `${server}/hdhr/${d.username}/${d.password}`, { secret: true }),
+          credRow('Guide (XMLTV)', `${server}/hdhr/${d.username}/${d.password}/guide.xml`, { secret: true }),
+          h('p', { class: 'hint', text: `Jellyfin / Emby : ajoute un tuner HDHomeRun avec cette adresse. Plex : si seule « IP:port » est acceptée, mets ${server.replace(/^https?:\/\//, '')} et indique ci-dessus l'adresse IP du serveur Plex.` }))));
   }
 
   function prioritySelect(d) {
@@ -2059,12 +2115,14 @@
       const meta = p.source === 'configuration'
         ? `${p.host} · configuration du conteneur`
         : `${p.host} · ${p.username} · ajouté dans l'interface`;
+      const agent = p.user_agent ? ` · user agent : ${p.user_agent}` : '';
       const actions = p.source === 'configuration' ? null : h('span', { class: 'row-actions' },
         h('button', { type: 'button', class: 'btn small', text: 'Modifier', onclick: () => editProvider(p) }),
+        h('button', { type: 'button', class: 'btn small', text: 'User agent', onclick: () => editUserAgent(p) }),
         h('button', { type: 'button', class: 'btn small danger', text: 'Supprimer', onclick: () => deleteProvider(p) }));
       return h('li', null,
         h('span', null, h('strong', { text: `${p.index}. ${p.name}` }), h('br'),
-          h('span', { class: p.error ? 'warn-text' : 'muted small', text: p.error || meta })),
+          h('span', { class: p.error ? 'warn-text' : 'muted small', text: p.error || meta + agent })),
         actions);
     }));
     $('provider-form').hidden = !providersData.editable;
@@ -2103,6 +2161,19 @@
     try {
       await request(`/api/providers/${p.index}`, 'PUT', { name: result.value.trim(), password: result.value2 });
       toast('Abonnement enregistré');
+      afterProvidersChange();
+    } catch (error) { toast(error.message, 'error'); }
+  }
+
+  /** Certains fournisseurs n'acceptent qu'un lecteur précis : user agent propre à cet abonnement. */
+  async function editUserAgent(p) {
+    const result = await ask({ title: `User agent de « ${p.name} »`, okLabel: 'Tester et enregistrer',
+      text: 'Utilisé pour l\'API et les flux de cet abonnement. Vide = celui par défaut du serveur. La connexion est testée avant l\'enregistrement.',
+      input: { label: 'User agent', value: p.user_agent || '' } });
+    if (!result) return;
+    try {
+      await request(`/api/providers/${p.index}`, 'PUT', { user_agent: result.value.trim() });
+      toast(result.value.trim() ? 'User agent enregistré' : 'User agent par défaut');
       afterProvidersChange();
     } catch (error) { toast(error.message, 'error'); }
   }
@@ -2498,6 +2569,7 @@
     }
     loadSettings();
   });
+  $('epg-suggest').addEventListener('click', suggestGuides);
   $('provider-form').addEventListener('submit', async (event) => {
     event.preventDefault();
     const button = $('provider-add');
@@ -2506,8 +2578,9 @@
     try {
       const added = await request('/api/providers', 'POST', {
         name: $('provider-name').value.trim(), url: $('provider-url').value.trim(),
-        username: $('provider-user').value.trim(), password: $('provider-pass').value });
-      for (const id of ['provider-name', 'provider-url', 'provider-user', 'provider-pass']) $(id).value = '';
+        username: $('provider-user').value.trim(), password: $('provider-pass').value,
+        user_agent: $('provider-ua').value.trim() });
+      for (const id of ['provider-name', 'provider-url', 'provider-user', 'provider-pass', 'provider-ua']) $(id).value = '';
       toast(`Abonnement « ${added.name} » ajouté : choisis son profil en haut`);
       await afterProvidersChange();
     } catch (error) {

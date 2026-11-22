@@ -2,6 +2,23 @@
 
 Format inspiré de « Keep a Changelog ». Les versions suivent le versionnage sémantique.
 
+## [3.19.0] — 2026-11-22
+
+### Ajouté
+- **Tuner HDHomeRun** (Plex, Jellyfin, Emby) : `/hdhr/<identifiant>/<mot de passe>/` (`discover.json`, `lineup.json`, `lineup_status.json`, `device.xml`, `guide.xml`) par appareil, et `/discover.json` à la racine pour Plex (appareil reconnu à l'adresse IP du serveur Plex, réseau local seulement). Tuners = connexions de l'abonnement ; chaînes lues avec les droits, la priorité et la bascule de l'appareil. Adresses affichées dans la fiche de chaque appareil.
+- **Guides proposés pour les chaînes sans programme** : Playlist → Guide → « Proposer des guides » cherche dans le guide du fournisseur et les guides externes des chaînes au nom proche (score de ressemblance, numéros différents jamais proposés), à choisir en un clic (champ de playlist `item_xmltv`, appliqué comme `tvg-id`).
+- **User agent par abonnement** : champ dans Système → Abonnements (testé avant l'enregistrement) et `XTREAM_USER_AGENT_2` … `_9` ; utilisé pour l'API, les flux, le HLS et le diagnostic de cet abonnement.
+
+### Sécurité (audit)
+- **Protection DNS rebinding** : l'interface (codes d'appareils, sauvegarde) et `mode=direct` (identifiants du fournisseur) refusent un nom d'hôte inconnu. Acceptés : adresses IP, noms locaux (`.local`, `.lan`, `.home.arpa`, `.ts.net`, nom sans point), `PUBLIC_BASE_URL`, `ALLOWED_HOSTS`, reverse proxys de `TRUSTED_PROXIES`.
+- User agents refusés s'ils contiennent un saut de ligne ou un caractère de contrôle (pas d'en-tête injecté).
+
+### Corrigé (audit)
+- Restauration d'une sauvegarde : appareils entièrement validés avant toute écriture (plus de restauration à moitié faite), identifiants et codes en double refusés, identifiant interne invalide ou date illisible réparés au lieu d'une erreur 500.
+- M3U : numéro de chaîne (`tvg-chno`) échappé comme les autres attributs.
+- Serveur Xtream local : liste d'un appareil réutilisée seulement pour le même catalogue chargé (comparaison d'identité, plus de numéro mémoire réutilisable).
+- Guide : les séparateurs (« ##### FR | GÉNÉRALISTES ##### ») ne comptent plus comme « chaînes sans programme ».
+
 ## [3.18.2] — 2026-11-21
 
 Retour réel : appareil du profil 2 connecté (3 810 chaînes envoyées), mais TiviMate affiche « Une erreur s'est produite lors du traitement de la liste de lecture ».

@@ -19,6 +19,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import shutil
 import tempfile
 import threading
@@ -296,12 +297,15 @@ class EpgCache:
             return cached[1]
         from .builder import match_name
         result: dict[str, str] = {}
+        labels: dict[str, str] = {}
         try:
             for _, elem in ET.iterparse(self.source, events=("end",)):
                 if elem.tag == "channel":
                     cid = elem.get("id", "").strip().lower()
                     for name in elem.findall("display-name"):
                         core = squash_name(match_name(name.text or ""))
+                        if cid and name.text and cid not in labels:
+                            labels[cid] = name.text.strip()[:80]
                         if cid and core and core not in result:
                             result[core] = cid
                     elem.clear()
@@ -310,7 +314,14 @@ class EpgCache:
         except (ET.ParseError, OSError):
             return {}
         self._names = (key, result)
+        self._labels = (key, labels)
         return result
+
+    def labels(self) -> dict[str, str]:
+        """``{identifiant: nom affiché}`` des chaînes du XMLTV en cache (suggestions de guide)."""
+        self.names()
+        cached = getattr(self, "_labels", None)
+        return cached[1] if cached and cached[0] == self._source_key() else {}
 
     def status(self) -> dict:
         """État de la source XMLTV (sans URL ni identifiants)."""
@@ -346,6 +357,7 @@ class EpgCache:
         ``api_ids`` : si fourni (guide complet), seules ces chaînes peuvent être complétées par l'API ;
         ``EpgUnavailable`` est levée si ni le XMLTV ni l'API ne peuvent fournir de programmes.
         """
+        from .builder import is_separator
         mode = mode or self.mode
         api = api if api is not None else self.api_cache
         source = None
@@ -432,9 +444,10 @@ class EpgCache:
             "external": len(from_extra),
             "api": len(from_api),
             "pending": pending,
+            # Séparateurs (« ##### FR | GÉNÉRALISTES ##### ») : pas des chaînes, jamais « sans programme ».
             "missing": [{"stream_id": c["stream_id"], "name": c["name"], "epg_id": c.get("epg_id") or ""}
                         for c in channels if c["stream_id"] not in covered and c["stream_id"] not in from_api
-                        and c["stream_id"] not in from_extra],
+                        and c["stream_id"] not in from_extra and not is_separator(c["name"])],
         }
         digest = hashlib.sha256()
         digest.update(f"{mode}\n{self._source_key() if source else '-'}\n".encode())
@@ -489,6 +502,65 @@ class EpgCache:
                 (self.directory / name).unlink()
             except OSError:
                 pass
+
+
+def suggest_guides(sources: list[tuple[str, "EpgCache"]], missing: list[dict], *, per_channel: int = 3,
+                   max_channels: int = 300) -> list[dict]:
+    """Chaînes sans programme : identifiants XMLTV de noms proches, pris dans les guides disponibles.
+
+    ``sources`` : ``[(libellé, EpgCache)]`` (guide du fournisseur, guides externes). Seules les chaînes du
+    guide qui ont des programmes sont proposées, avec un score de ressemblance (0–100).
+    """
+    import difflib
+    from .builder import match_name
+    pool: dict[str, list[tuple[str, str, str, int]]] = {}   # nom comparable → [(id, nom, source, programmes)]
+    for label, cache in sources:
+        try:
+            names, labels, counts = cache.names(), cache.labels(), cache.index()
+        except Exception:  # guide illisible : simplement ignoré
+            continue
+        for core, cid in names.items():
+            count = counts.get(cid, 0)
+            if count > 0:
+                pool.setdefault(core, []).append((cid, labels.get(cid, cid), label, count))
+    keys = list(pool)
+    by_prefix: dict[str, list[str]] = {}
+    for key in keys:
+        by_prefix.setdefault(key[:2], []).append(key)
+    result = []
+    for channel in missing[:max_channels]:
+        core = squash_name(match_name(channel.get("name") or ""))
+        if len(core) < 2:
+            continue
+        digits = re.findall(r"\d+", core)
+        # Candidats : même début de nom, ou l'un contient l'autre (« tf1 » / « tf1series »), puis ressemblance.
+        candidates = set(by_prefix.get(core[:2], ()))
+        if len(core) >= 3:
+            candidates.update(k for k in keys if len(k) >= 3 and (core in k or k in core))
+        scored = []
+        for key in candidates:
+            if re.findall(r"\d+", key) != digits:
+                continue  # « France 2 » n'est pas « France 3 », ni « Sport 560 » « Sport 507 »
+            ratio = difflib.SequenceMatcher(None, core, key).ratio()
+            if key == core:
+                ratio = 1.0
+            if ratio >= 0.6:
+                scored.append((ratio, key))
+        scored.sort(key=lambda r: (-r[0], r[1]))
+        options, seen = [], set()
+        for ratio, key in scored:
+            for cid, name, label, count in pool[key]:
+                if (cid, label) in seen:
+                    continue
+                seen.add((cid, label))
+                options.append({"id": cid, "name": name, "source": label, "programmes": count,
+                                "score": int(round(ratio * 100))})
+            if len(options) >= per_channel:
+                break
+        if options:
+            result.append({"stream_id": channel["stream_id"], "name": channel["name"],
+                           "suggestions": options[:per_channel]})
+    return result
 
 
 def squash_name(core: str) -> str:

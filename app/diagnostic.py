@@ -21,7 +21,9 @@ class Probe:
         self.status, self.head, self.headers, self.ms, self.error = status, head, headers, ms, error
 
 
-def probe(url: str, user_agent: str, *, read: int = 4096, range_end: int | None = None, timeout: float = 12) -> Probe:
+def probe(url: str, user_agent, *, read: int = 4096, range_end: int | None = None, timeout: float = 12) -> Probe:
+    if callable(user_agent):  # user agent de l'abonnement qui sert cette adresse
+        user_agent = user_agent(url)
     """Ouvre une URL, lit les premiers octets puis ferme (aucune URL dans le résultat)."""
     headers = {"User-Agent": user_agent, "Accept": "*/*"}
     if range_end is not None:
@@ -75,7 +77,8 @@ class _ProfileStore:
 def run(api, epg, series, streams, store, config, devices=None, profile: str | None = None) -> list[dict]:
     from .server import UpstreamError  # import local : évite une dépendance circulaire
     results: list[dict] = []
-    ua = config.user_agent
+    finder = getattr(api, "user_agent_for_url", None)
+    ua = (lambda url: finder(url) or config.user_agent) if finder else config.user_agent
 
     # 1. API de chaque fournisseur ---------------------------------------------------------
     indices = list(getattr(api, "indices", None) or range(1, len(getattr(api, "apis", [api])) + 1))

@@ -111,6 +111,14 @@ class ProviderSet:
         api, raw, _ = self._route(item_id)
         return api.direct_url(kind, raw, extension)
 
+    def user_agent_for_url(self, url: str) -> str:
+        """User agent de l'abonnement dont l'adresse sert ``url`` (sinon celui du principal)."""
+        for api in self.apis:
+            base = api.config.xtream_url.rstrip("/")
+            if url == base or url.startswith(base + "/"):
+                return api.config.user_agent
+        return self.apis[0].config.user_agent
+
     def direct_stream(self, stream_id: str, extension: str = "ts") -> str:
         return self.direct_url("live", stream_id, extension)
 

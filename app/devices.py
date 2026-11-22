@@ -234,10 +234,12 @@ class DeviceStore:
     def export(self) -> dict:
         return self._load()
 
-    def restore(self, data: object) -> None:
+    def restore(self, data: object, *, dry_run: bool = False) -> None:
+        """Remplace les appareils par ceux d'une sauvegarde. ``dry_run`` : valider seulement, sans écrire."""
         if not isinstance(data, dict) or not isinstance(data.get("devices"), list):
             raise InvalidDevice("Sauvegarde des appareils invalide")
         devices = []
+        seen_users, seen_codes, seen_ids = set(), set(), set()
         for raw in data["devices"][:MAX_DEVICES]:
             if not isinstance(raw, dict):
                 continue
@@ -248,11 +250,26 @@ class DeviceStore:
                 raise InvalidDevice("Identifiant d'appareil invalide dans la sauvegarde")
             if not isinstance(password, str) or not re.fullmatch(r"[A-Za-z0-9_-]{6,64}", password):
                 raise InvalidDevice("Code d'appareil invalide dans la sauvegarde")
-            devices.append({"id": str(raw.get("id") or secrets.token_hex(4))[:16], "name": name,
+            if username in seen_users or password in seen_codes:
+                raise InvalidDevice("Deux appareils avec le même identifiant ou le même code dans la sauvegarde")
+            seen_users.add(username)
+            seen_codes.add(password)
+            # Identifiant interne : sert dans les adresses de l'interface (/api/devices/<id>).
+            device_id = str(raw.get("id") or "")
+            if not re.fullmatch(r"[A-Za-z0-9_-]{1,16}", device_id) or device_id in seen_ids:
+                device_id = secrets.token_hex(4)
+            seen_ids.add(device_id)
+            try:
+                created = int(raw.get("created_at") or time.time())
+            except (TypeError, ValueError):
+                created = int(time.time())
+            devices.append({"id": device_id, "name": name,
                             "username": username, "password": password,
                             "playlist": self._check_playlist(raw.get("playlist")),
                             "priority": self._check_priority(raw.get("priority")),
                             "ip": self._check_ip(raw.get("ip")),
-                            "created_at": int(raw.get("created_at") or time.time())})
+                            "created_at": created})
+        if dry_run:
+            return
         with self._lock:
             self._write({"require_token": bool(data.get("require_token")), "devices": devices})

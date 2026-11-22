@@ -166,3 +166,62 @@ class PrudentModeTests(unittest.TestCase):
             self.assertEqual(again._refreshing, set())                       # pas de rafraîchissement 10 min
 
 
+
+
+class SuggestTests(unittest.TestCase):
+    """Chaînes sans programme : guides de noms proches proposés, puis choisis dans la playlist."""
+
+    def test_suggestions_and_choice(self):
+        from app.builder import select_items
+        from app.custom import InvalidPlaylist, validate_playlist
+        from app.epg import suggest_guides
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "extra.xml").write_text(EXTRA_XML, encoding="utf-8")
+            (root / "provider.xml").write_text(PROVIDER_XML, encoding="utf-8")
+            provider = EpgCache(lambda: (root / "provider.xml").as_uri(), str(root / "p"))
+            extra = EpgCache(lambda: (root / "extra.xml").as_uri(), str(root / "x"))
+            provider.ensure()
+            extra.ensure()
+            missing = [{"stream_id": "2", "name": "FR: M6 HD"}, {"stream_id": "3", "name": "FR: FRANCE 2 FHD"},
+                       {"stream_id": "4", "name": "VIP: TF1 ᴴᴰ"}, {"stream_id": "6", "name": "TF1 Séries Films"}, {"stream_id": "8", "name": "FR: FRANCE 3"}, {"stream_id": "5", "name": "Zzz inconnue"}]
+            result = {r["stream_id"]: r["suggestions"] for r in
+                      suggest_guides([("guide du fournisseur", provider), ("guide externe 1", extra)], missing)}
+        self.assertEqual(result["2"][0]["id"], "m6.fr")
+        self.assertEqual((result["2"][0]["score"], result["2"][0]["source"], result["2"][0]["name"]),
+                         (100, "guide externe 1", "M6"))
+        self.assertEqual(result["3"][0]["id"], "france2.fr")
+        self.assertEqual(result["4"][0]["id"], "tf1.fr")               # préfixe et qualité ignorés
+        self.assertNotIn("5", result)
+        self.assertNotIn("6", result)                                  # autre chaîne : pas le guide de TF1
+        self.assertNotIn("8", result)                                  # France 3 ≠ France 2 (numéros différents)
+        # Choix enregistré dans la playlist : identifiant XMLTV appliqué à la chaîne.
+        saved = validate_playlist({"slug": "salon", "name": "Salon", "category_ids": ["1"],
+                                   "item_xmltv": {"2": "m6.fr"}})
+        self.assertEqual(saved["item_xmltv"], {"2": "m6.fr"})
+        for bad in ({"2": "a<b"}, {"x": "m6.fr"}, {"2": ""}, {"2": 5}):
+            with self.assertRaises(InvalidPlaylist):
+                validate_playlist({"slug": "salon", "name": "Salon", "item_xmltv": bad})
+
+        class Api:
+            def catalog(self, refresh=False, kind="live"):
+                return [channel(2, "FR: M6 HD"), channel(7, "Autre")], {"1": "Généralistes"}
+
+        entries, _ = select_items(Api(), saved, "live")
+        self.assertEqual({i["stream_id"]: i["epg_id"] for i, _ in entries}, {"2": "m6.fr", "7": ""})
+
+
+from .helpers import StackTestCase  # noqa: E402
+
+
+class SuggestApiTests(StackTestCase):
+    def test_endpoint(self):
+        import json
+        self.create({"slug": "salon", "name": "Salon", "category_ids": ["1", "2"]})
+        status, body, _ = self.get(self.stack.web_base + "/api/epg/suggest?slug=salon")
+        self.assertEqual(status, 200, body[:200])
+        data = json.loads(body)
+        self.assertIn("missing", data)
+        self.assertIsInstance(data["suggestions"], list)
+        self.assertEqual(self.get(self.stack.web_base + "/api/epg/suggest?slug=../x")[0], 400)
+        self.assertEqual(self.get(self.stack.web_base + "/api/epg/suggest?slug=absente")[0], 404)

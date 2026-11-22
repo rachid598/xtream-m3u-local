@@ -119,6 +119,13 @@ class WebHandler(BaseHTTPRequestHandler):
         return user_ok and pass_ok
 
     def check_auth(self) -> bool:
+        if not self.config.host_ok(self.headers.get("Host", ""), self.client_address[0]):
+            # DNS rebinding : un site piégé ne doit pas pouvoir lire l'interface (codes, sauvegarde…).
+            LOG.warning("Interface Web : nom d'hôte « %s » refusé (protection DNS rebinding) — ajoute-le dans "
+                        "ALLOWED_HOSTS s'il est à toi", access.host_name(self.headers.get("Host", ""))[:80])
+            self.output(403, "Nom d'hôte refusé : ouvre l'interface par l'adresse IP du serveur, un nom local "
+                             "(.local, .lan…) ou ajoute ce nom dans ALLOWED_HOSTS\n".encode(), "text/plain; charset=utf-8")
+            return False
         ip, remote = access.client_address(self.client_address[0], self.headers, self.config.trusted_proxies,
                                            settings.local_networks(self.config))
         if remote:
@@ -208,6 +215,8 @@ class WebHandler(BaseHTTPRequestHandler):
             return self.backup()
         if path == "/api/epg":
             return self.epg_status(qs.get("slug", [""])[0] or None)
+        if path == "/api/epg/suggest":
+            return self.epg_suggest(qs.get("slug", [""])[0])
         if path == "/api/now":
             return self.now_on_tv(qs)
         series_match = SERIES_API.fullmatch(path)
@@ -239,8 +248,12 @@ class WebHandler(BaseHTTPRequestHandler):
         config = self.config
         rows = [{"index": 1, "name": config.provider_name or "Fournisseur 1",
                  "host": _split(config.xtream_url).netloc, "source": "configuration"}]
+        from .server import DEFAULT_USER_AGENT
+        agents = dict(config.provider_user_agents)
+        rows[0]["user_agent"] = "" if config.user_agent == DEFAULT_USER_AGENT else config.user_agent
         for offset, (name, url, _, _) in enumerate(config.extra_providers, start=2):
-            rows.append({"index": offset, "name": name, "host": _split(url).netloc, "source": "configuration"})
+            rows.append({"index": offset, "name": name, "host": _split(url).netloc, "source": "configuration",
+                         "user_agent": agents.get(offset) or rows[0]["user_agent"]})
         active = set(getattr(self.api, "indices", None) or [1])
         store = provider_store.current()
         try:
@@ -259,11 +272,12 @@ class WebHandler(BaseHTTPRequestHandler):
         from .server import make_api
         self.api.swap(make_api(self.config, provider_store.current(), self.api, migrate=False))
 
-    def test_provider(self, url: str, username: str, password: str) -> str | None:
+    def test_provider(self, url: str, username: str, password: str, user_agent: str = "") -> str | None:
         """Vérifie l'abonnement auprès du fournisseur ; retourne un message d'erreur ou ``None``."""
         from dataclasses import replace
         from .server import XtreamAPI
-        probe = XtreamAPI(replace(self.config, xtream_url=url, username=username, password=password, extra_providers=()))
+        probe = XtreamAPI(replace(self.config, xtream_url=url, username=username, password=password, extra_providers=(),
+                                  provider_user_agents=(), user_agent=user_agent or self.config.user_agent))
         account = probe.account()
         if not account:
             return "Connexion refusée : vérifie l'adresse et les identifiants (aucune réponse valide du fournisseur)"
@@ -303,16 +317,19 @@ class WebHandler(BaseHTTPRequestHandler):
             others += [(p["url"], p["username"]) for p in store.list() if p["index"] != index]
             if (url, username) in others:
                 return self.json(400, {"error": "Cet abonnement est déjà configuré"})
+            agent = provider_store._clean(body["user_agent"], "User agent", required=False) \
+                if "user_agent" in body else (current or {}).get("user_agent", "")
             changed = current is None or (url, username, password) != (current["url"], current["username"], current["password"])
-            if changed:
-                error = self.test_provider(url, username, password)
+            if changed or agent != (current or {}).get("user_agent", ""):
+                error = self.test_provider(url, username, password, agent)
                 if error:
                     return self.json(400, {"error": error})
             if method == "POST":
-                entry = store.add(name=body.get("name"), url=url, username=username, password=password, reserved=reserved)
+                entry = store.add(name=body.get("name"), url=url, username=username, password=password, reserved=reserved,
+                                  user_agent=agent)
             else:
                 entry = store.update(index, name=body.get("name"), url=url, username=username,
-                                     password=password if changed else "")
+                                     password=password if changed else "", user_agent=agent)
             self.reload_providers()
             return self.json(201 if method == "POST" else 200, provider_store.public(entry))
         except (provider_store.InvalidProvider, ValueError) as exc:
@@ -401,9 +418,13 @@ class WebHandler(BaseHTTPRequestHandler):
                 validate_playlist(item)
             if mode not in ("merge", "replace"):
                 raise InvalidPlaylist("Mode de restauration : merge ou replace")
-            if body.get("include_devices") and isinstance(backup.get("devices"), dict) and self.devices is not None:
-                self.devices.restore(backup["devices"])
+            with_devices = bool(body.get("include_devices") and isinstance(backup.get("devices"), dict)
+                                and self.devices is not None)
+            if with_devices:
+                self.devices.restore(backup["devices"], dry_run=True)
             result = self.store.restore(backup["playlists"], mode=mode)
+            if with_devices:
+                self.devices.restore(backup["devices"])
         except (InvalidPlaylist, InvalidDevice) as exc:
             return self.json(400, {"error": str(exc)})
         except RuntimeError as exc:
@@ -667,6 +688,31 @@ class WebHandler(BaseHTTPRequestHandler):
                 data["error"] = str(exc)
             data["source"] = self.epg.status()
         return self.json(200, data)
+
+    def epg_suggest(self, slug: str) -> None:
+        """Chaînes sans programme d'une playlist et identifiants XMLTV de noms proches (à valider dans l'éditeur)."""
+        from .epg import suggest_guides
+        if self.epg is None or not self.config.enable_epg:
+            return self.json(409, {"error": "EPG désactivé (ENABLE_EPG=false)"})
+        if not SLUG_RE.fullmatch(slug or ""):
+            return self.json(400, {"error": "Playlist invalide"})
+        try:
+            saved = self.store.get(slug)
+        except RuntimeError:
+            return self.json(500, {"error": "Sauvegarde illisible"})
+        if saved is None:
+            return self.json(404, {"error": "Playlist introuvable"})
+        try:
+            ordered = live_channels_in_order(self.api, saved, with_groups=True)
+            _, stats = self.epg.playlist_guide(slug, [c for c, _ in ordered], budget=0)
+        except (UpstreamError, EpgUnavailable) as exc:
+            return self.json(502, {"error": str(exc)})
+        sources = []
+        if self.config.epg_source != "api":
+            sources.append(("guide du fournisseur", self.epg))
+        sources += [(f"guide externe {n}", extra) for n, extra in enumerate(getattr(self.epg, "extras", []) or [], start=1)]
+        suggestions = suggest_guides(sources, stats["missing"])
+        return self.json(200, {"missing": len(stats["missing"]), "suggestions": suggestions})
 
     def now_on_tv(self, qs: dict[str, list[str]]) -> None:
         """« En ce moment à la TV » : programme à l'instant ``at`` (défaut : maintenant) et suivant,

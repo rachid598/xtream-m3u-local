@@ -121,6 +121,12 @@ class ProviderApiTests(StackTestCase):
         self.assertEqual(self.get(f"{self.base}/stream/{2 * OFFSET + 42}.ts")[0], 200)
         listing = json.loads(self.get(self.web_base + "/api/providers")[1])
         self.assertNotIn(PASSWORD, json.dumps(listing).replace('"password_set"', ""))
+        # User agent propre à l'abonnement : testé, enregistré, refusé s'il contient un saut de ligne.
+        status, body = self.send(self.web_base + "/api/providers/2", "PUT", {"user_agent": "a\r\nX-Evil: 1"})
+        self.assertEqual(status, 400)
+        status, body = self.send(self.web_base + "/api/providers/2", "PUT", {"user_agent": "TiviMate/5.1.6"})
+        self.assertEqual((status, body["user_agent"]), (200, "TiviMate/5.1.6"))
+        self.assertEqual(self.store.list()[0]["password"], PASSWORD)              # mot de passe gardé
         # Renommage (sans nouveau test de connexion), puis suppression.
         status, body = self.send(self.web_base + "/api/providers/2", "PUT", {"name": "Ma sœur", "password": ""})
         self.assertEqual((status, body["name"]), (200, "Ma sœur"))

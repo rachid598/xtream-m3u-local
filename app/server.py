@@ -27,14 +27,14 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, quote, urlencode, urlsplit
 from urllib.request import Request, urlopen
 
-from . import __version__, access, logos, provider_store, settings
+from . import __version__, access, hdhr, logos, provider_store, settings
 from .httputil import accepts_gzip, encode_body, etag_matches, etag_of, gzip_stream
 from .builder import FAVORITES_GROUP, GROUP_PREFIX, add_favorites, display_logo, select_items
 from .devices import DeviceStore
 from .providers import UnknownProvider
 from .hls import MAX_MANIFEST_BYTES, SEGMENT_MIME, HlsRegistry, rewrite_manifest, segment_ext
 from .streams import EvictedRecently, LimitReached, StreamManager
-from .custom import CATEGORY_RE, UNCATEGORIZED, PlaylistStore, filter_channels, filter_kind, uses
+from .custom import CATEGORY_RE, UNCATEGORIZED, PlaylistStore, uses
 from .epg import EPG_MODES, EpgCache, EpgUnavailable, normalize_listings, xml_channel_id
 from .xtream_emu import EMPTY_AUTH, XtreamEmulator
 from .vod import KeyedCache, SeriesCache, episode_name, mime_for, normalize_movie, normalize_series
@@ -146,6 +146,24 @@ def _extra_providers() -> tuple:
         name = os.environ.get(f"XTREAM_NAME_{index}", "").strip()[:40] or f"Fournisseur {index}"
         extras.append((name, normalize_xtream_url(raw_url), user, password))
     return tuple(extras)
+
+
+def _clean_user_agent(raw: str, name: str) -> str:
+    """User agent lu dans la configuration : une seule ligne imprimable (jamais d'en-tête injecté)."""
+    value = raw.strip()
+    if any(ord(ch) < 32 or ord(ch) == 127 for ch in value) or len(value) > 200:
+        raise ValueError(f"{name} : une seule ligne de 200 caractères au plus")
+    return value
+
+
+def _provider_user_agents() -> tuple:
+    """``XTREAM_USER_AGENT_2`` … ``_9`` : user agent propre à un abonnement de la configuration."""
+    result = []
+    for index in range(2, 10):
+        value = _clean_user_agent(os.environ.get(f"XTREAM_USER_AGENT_{index}", ""), f"XTREAM_USER_AGENT_{index}")
+        if value:
+            result.append((index, value))
+    return tuple(result)
 
 
 # Le fournisseur refuse une connexion de plus (abonnement déjà utilisé ailleurs) : 429, 458, 509.
@@ -293,11 +311,19 @@ class Config:
     provider_timezone: str = ""      # vide = fuseau annoncé par le fournisseur (server_info.timezone)
     provider_name: str = ""          # XTREAM_NAME : nom affiché du fournisseur principal
     extra_providers: tuple = ()      # ((nom, url, utilisateur, mot de passe), …) : XTREAM_URL_2 … _9
+    provider_user_agents: tuple = ()  # ((n°, user agent), …) : XTREAM_USER_AGENT_2 … _9
     remote_access: bool = False      # REMOTE_ACCESS : accepter les connexions hors du réseau local (code obligatoire)
     trusted_proxies: tuple = ()      # TRUSTED_PROXIES : reverse proxys dont on lit X-Forwarded-For
     web_remote: bool = False         # WEB_REMOTE : interface Web joignable hors du réseau local (mot de passe exigé)
     epg_extra_urls: tuple = ()       # EPG_EXTRA_URLS : guides XMLTV externes (avant les appels API chaîne par chaîne)
     local_networks: tuple = ()       # LOCAL_NETWORKS : réseaux en plus considérés locaux (ex. Tailscale 100.64.0.0/10)
+    allowed_hosts: tuple = ()        # ALLOWED_HOSTS : noms de domaine acceptés en plus des noms locaux et des IP
+
+    def host_ok(self, host_header: str, peer: str) -> bool:
+        """Protection DNS rebinding : nom d'hôte de la requête acceptable (voir :func:`access.host_allowed`)."""
+        public = access.host_name(urlsplit(self.public_base_url).netloc) if self.public_base_url else ""
+        via_proxy = bool(self.trusted_proxies) and access._in(access._ip(peer), self.trusted_proxies)
+        return access.host_allowed(host_header, self.allowed_hosts + ((public,) if public else ()), via_proxy=via_proxy)
 
     @property
     def guide_ids(self) -> bool:
@@ -338,6 +364,7 @@ class Config:
             password=password,
             port=port,
             public_base_url=base,
+            allowed_hosts=access.parse_hosts(os.environ.get("ALLOWED_HOSTS", "")),
             cache_seconds=max(0, _env_int("CACHE_SECONDS", 1800)),
             access_token=os.environ.get("ACCESS_TOKEN", "").strip(),
             enable_epg=_env_bool("ENABLE_EPG", True),
@@ -345,7 +372,7 @@ class Config:
             data_dir=os.environ.get("DATA_DIR", "/data").strip() or "/data",
             web_username=os.environ.get("WEB_USERNAME", "").strip() or "admin",
             web_password=os.environ.get("WEB_PASSWORD", ""),
-            user_agent=os.environ.get("XTREAM_USER_AGENT", "").strip() or DEFAULT_USER_AGENT,
+            user_agent=_clean_user_agent(os.environ.get("XTREAM_USER_AGENT", ""), "XTREAM_USER_AGENT") or DEFAULT_USER_AGENT,
             epg_cache_hours=max(1, _env_int("EPG_CACHE_HOURS", 12)),
             series_cache_hours=max(1, _env_int("SERIES_CACHE_HOURS", 168)),
             series_per_second=max(0, min(50, _env_int("SERIES_PER_SECOND", 2))),
@@ -365,6 +392,7 @@ class Config:
             provider_timezone=_timezone_env(),
             provider_name=os.environ.get("XTREAM_NAME", "").strip()[:40],
             extra_providers=_extra_providers(),
+            provider_user_agents=_provider_user_agents(),
             series_fetch_seconds=max(0, _env_int("SERIES_FETCH_SECONDS", 20)),
             remote_access=_env_bool("REMOTE_ACCESS", False),
             trusted_proxies=_trusted_proxies(),
@@ -515,6 +543,9 @@ class XtreamAPI:
             f"{quote(self.config.password, safe='')}/"
             f"{item_id}.{extension}"
         )
+
+    def user_agent_for_url(self, url: str) -> str:
+        return self.config.user_agent
 
     def direct_stream(self, stream_id: str, extension: str = "ts") -> str:
         return self.direct_url("live", stream_id, extension)
@@ -931,7 +962,7 @@ def playlist(config: Config, entries: list[tuple[dict, str]], categories: dict[s
             attrs.append(f'tvg-logo="{escape_attribute(logo)}"')
         kind = channel.get("kind", "live")
         if channel.get("num") and kind == "live":
-            attrs.append(f'tvg-chno="{channel["num"]}"')
+            attrs.append(f'tvg-chno="{escape_attribute(channel["num"])}"')
         if catchup and kind == "live" and channel.get("archive") and mode == "proxy":
             # Replay : le lecteur remplace {utc}/{utcend} par le début et la fin du programme (secondes UTC).
             source = with_token(f"{base}/timeshift/{stream_id}.ts?start={{utc}}&end={{utcend}}", token)
@@ -1307,7 +1338,7 @@ class Handler(BaseHTTPRequestHandler):
             session = self.open_session(track[0], track[1], self.item_label(*track))
             if session is None:
                 return
-        headers = {"User-Agent": self.config.user_agent, "Accept": "*/*"}
+        headers = {"User-Agent": self.user_agent_for(upstream_url), "Accept": "*/*"}
         for h in ("Range", "If-Range"):
             if self.headers.get(h):
                 headers[h] = self.headers[h]
@@ -1470,7 +1501,8 @@ class Handler(BaseHTTPRequestHandler):
     def _pump_live(self, sid: str, session, state: dict, *, return_after: float = 0) -> str:
         """Relaie une version. Retourne client | cancelled | failed | stalled | slow | ended | best."""
         stall = self.config.failover_stall_seconds
-        request = Request(self.api.direct_stream(sid), headers={"User-Agent": self.config.user_agent, "Accept": "*/*"})
+        url = self.api.direct_stream(sid)
+        request = Request(url, headers={"User-Agent": self.user_agent_for(url), "Accept": "*/*"})
         try:
             upstream = urlopen(request, timeout=stall + 4)  # délai de démarrage un peu plus large
         except (HTTPError, URLError, TimeoutError, OSError, HTTPException, ValueError) as exc:
@@ -1657,6 +1689,49 @@ class Handler(BaseHTTPRequestHandler):
         return self.relay(self.api.timeshift_raw_url(stream_id, int(minutes), start), head_only=head_only,
                           track=("timeshift", stream_id))
 
+    def handle_hdhr(self, match, path: str, qs: dict[str, list[str]], *, head_only: bool) -> None:
+        """Tuner HDHomeRun émulé (Plex, Jellyfin, Emby) : voir :mod:`app.hdhr`."""
+        if self.devices is None:
+            return self._error(404, "Appareils indisponibles", head_only=head_only)
+        server_base = self.public_base()
+        if match:
+            username, password, name = match.group(1), match.group(2), match.group(3) or "discover.json"
+            device = self.device_from(username, password)
+            if device is None:
+                note_refused_login(self.client_ip or self.client_address[0], username)
+                return self._error(403, "Identifiants d'appareil invalides", head_only=head_only)
+            base = f"{server_base}/hdhr/{username}/{password}"
+        else:
+            # Plex n'accepte souvent que « IP:port » : appareil reconnu à l'adresse du serveur Plex.
+            if self.remote:
+                return self._error(403, "Tuner HDHomeRun sans code : réseau local seulement", head_only=head_only)
+            ip = self.client_ip or self.client_address[0]
+            device = self.devices.by_ip(ip)
+            if device is None:
+                LOG.warning("HDHomeRun : aucun appareil pour l'adresse %s — crée un appareil avec cette adresse IP "
+                            "(celle du serveur Plex) ou utilise /hdhr/<utilisateur>/<mot de passe>/", ip)
+                return self._error(404, f"Aucun appareil pour l'adresse {ip} : crée dans « Appareils » un appareil "
+                                        "avec cette adresse IP", head_only=head_only)
+            name, base = path.lstrip("/"), server_base
+        self.request_device = device
+        self.request_token = device["password"]
+        emu = self.emulator
+        try:
+            if name == "discover.json":
+                return self.send_json(hdhr.discover(emu, device, base), head_only=head_only)
+            if name == "lineup_status.json":
+                return self.send_json(hdhr.LINEUP_STATUS, head_only=head_only)
+            if name == "lineup.json":
+                return self.send_json(hdhr.lineup(emu, device, server_base), head_only=head_only)
+            if name == "lineup.post":
+                return self.response(200, b"", "text/plain; charset=utf-8", head_only=head_only)
+            if name == "device.xml":
+                return self.response(200, hdhr.device_xml(emu, device, base).encode(), "application/xml; charset=utf-8",
+                                     head_only=head_only)
+            return self.serve_device_files(device, "/xmltv.php", qs, head_only=head_only, refresh=False)
+        except UpstreamError as exc:
+            return self._error(502, f"Catalogue indisponible : {exc}", head_only=head_only)
+
     def handle_device_files(self, path: str, qs: dict[str, list[str]], *, head_only: bool, refresh: bool) -> None:
         """``get.php`` / ``xmltv.php`` avec identifiants d'appareil : playlist ou guide de l'appareil."""
         username, password = qs.get("username", [""])[0], qs.get("password", [""])[0]
@@ -1712,12 +1787,17 @@ class Handler(BaseHTTPRequestHandler):
         return self.relay(self.api.timeshift_url(stream_id, start, minutes), head_only=head_only,
                           track=("timeshift", stream_id))
 
+    def user_agent_for(self, url: str) -> str:
+        """User agent de l'abonnement qui sert cette adresse (``XTREAM_USER_AGENT_N`` ou interface)."""
+        finder = getattr(self.api, "user_agent_for_url", None)
+        return (finder(url) if finder else None) or self.config.user_agent
+
     def token_suffix(self) -> str:
         return f"?{urlencode({'token': self.request_token})}" if self.request_token else ""
 
     def hls_manifest(self, upstream_url: str, session, *, head_only: bool) -> None:
         """Télécharge un manifeste HLS chez le fournisseur et le réécrit vers des adresses locales."""
-        request = Request(upstream_url, headers={"User-Agent": self.config.user_agent, "Accept": "*/*"})
+        request = Request(upstream_url, headers={"User-Agent": self.user_agent_for(upstream_url), "Accept": "*/*"})
         try:
             with urlopen(request, timeout=20) as upstream:
                 raw = upstream.read(MAX_MANIFEST_BYTES + 1)
@@ -1822,6 +1902,9 @@ class Handler(BaseHTTPRequestHandler):
             if wait:
                 return self.response(429, f"Trop d'essais de code : réessaie dans {wait} s\n".encode(),
                                      "text/plain; charset=utf-8", head_only=head_only, extra={"Retry-After": str(wait)})
+        hdhr_match = hdhr.HDHR_RE.fullmatch(path)
+        if hdhr_match or path in hdhr.ROOT_FILES:
+            return self.handle_hdhr(hdhr_match, path, qs, head_only=head_only)
         if path == "/":
             text = (
                 f"Xtream M3U Local {__version__}\n"
@@ -1849,6 +1932,11 @@ class Handler(BaseHTTPRequestHandler):
             return self.handle_device_files(path, qs, head_only=head_only, refresh=refresh)
         if not self.authorized(qs):
             return self._error(HTTPStatus.FORBIDDEN, "Token requis ou invalide (?token=...)", head_only=head_only)
+        if qs.get("mode", [""])[0] == "direct" and not self.config.host_ok(self.headers.get("Host", ""), self.client_address[0]):
+            LOG.warning("mode=direct refusé : nom d'hôte « %s » inconnu (protection DNS rebinding, voir ALLOWED_HOSTS)",
+                        access.host_name(self.headers.get("Host", ""))[:80])
+            return self._error(403, "Nom d'hôte refusé : utilise l'adresse IP du serveur ou ajoute ce nom dans ALLOWED_HOSTS",
+                               head_only=head_only)
         if qs.get("mode", [""])[0] == "direct" and (self.remote or self.request_device is not None):
             # Le mode direct écrit les identifiants du fournisseur dans les liens : réseau local et code global seulement.
             return self._error(403, "mode=direct indisponible avec un code d'appareil ou hors du réseau local",
@@ -1971,12 +2059,13 @@ class Handler(BaseHTTPRequestHandler):
         return self._error(404, "Page introuvable", head_only=head_only)
 
 
-_SECRET_PATH = re.compile(r"^/(live|movie|series|timeshift)/([^/]+)/([^/]+)/")
+_SECRET_PATH = re.compile(r"^/(live|movie|series|timeshift|hdhr)/([^/]+)/([^/]+)(?:/|$)")
 
 
 def mask_path(path: str) -> str:
     """« /live/salon/abc123/42.ts » → « /live/salon/***/42.ts » (mot de passe d'appareil hors des journaux)."""
-    return _SECRET_PATH.sub(lambda m: f"/{m.group(1)}/{m.group(2)}/***/", path, count=1)
+    return _SECRET_PATH.sub(lambda m: f"/{m.group(1)}/{m.group(2)}/***" + ("/" if m.group(0).endswith("/") else ""),
+                            path, count=1)
 
 
 def shutil_copy(src, dst, size: int = 256 * 1024) -> None:
@@ -2061,10 +2150,12 @@ def make_api(config: Config, store=None, previous=None, *, migrate: bool = True)
     ``previous`` : client actuel, dont les abonnements inchangés sont réutilisés (catalogue gardé en mémoire).
     """
     from .providers import ProviderSet
-    base = replace(config, extra_providers=())
+    base = replace(config, extra_providers=(), provider_user_agents=())
+    agents = dict(config.provider_user_agents)   # user agent propre à un abonnement (sinon XTREAM_USER_AGENT)
     entries = [(1, config.provider_name or "Fournisseur 1", base)]
     for offset, (name, url, user, password) in enumerate(config.extra_providers, start=2):
-        entries.append((offset, name, replace(base, xtream_url=url, username=user, password=password, provider_name=name)))
+        entries.append((offset, name, replace(base, xtream_url=url, username=user, password=password, provider_name=name,
+                                              user_agent=agents.get(offset) or base.user_agent)))
     taken = {index for index, _, _ in entries}
     try:
         stored = store.list() if store is not None else []
@@ -2078,15 +2169,15 @@ def make_api(config: Config, store=None, previous=None, *, migrate: bool = True)
             continue
         entries.append((entry["index"], entry["name"], replace(
             base, xtream_url=entry["url"], username=entry["username"], password=entry["password"],
-            provider_name=entry["name"])))
+            provider_name=entry["name"], user_agent=entry.get("user_agent") or base.user_agent)))
         taken.add(entry["index"])
     old = getattr(previous, "current", previous)
     reusable = {}
     for api in (getattr(old, "apis", None) or ([old] if old is not None else [])):
-        reusable[(api.config.xtream_url, api.config.username, api.config.password)] = api
+        reusable[(api.config.xtream_url, api.config.username, api.config.password, api.config.user_agent)] = api
     apis = []
     for _, name, cfg in entries:
-        api = reusable.get((cfg.xtream_url, cfg.username, cfg.password)) or XtreamAPI(cfg)
+        api = reusable.get((cfg.xtream_url, cfg.username, cfg.password, cfg.user_agent)) or XtreamAPI(cfg)
         apis.append(api)
     if migrate:
         migrate_catalog_cache(config.data_dir, apis)

@@ -71,20 +71,21 @@ class XtreamEmulator:
         from .server import order_entries  # import local : évite une dépendance circulaire
         saved = self.saved_for(device)
         state = self.api.kind_state(kind)
-        # Clé = identité du catalogue chargé (pas seulement sa date) : un abonnement ajouté ou modifié dans
-        # l'interface peut charger une copie plus ancienne que celle du principal ; la date fusionnée ne
-        # change alors pas et une liste vide calculée trop tôt resterait servie à l'appareil.
-        key = (device.get("id"), kind, saved.get("slug"), saved.get("updated_at"), state.updated_at,
-               id(state.items), len(state.items or ()), json.dumps(saved, sort_keys=True, default=str))
+        # Le résultat n'est réutilisé que pour le même catalogue chargé (même objet, pas seulement la même
+        # date) et la même playlist : un abonnement ajouté ou modifié dans l'interface peut charger une copie
+        # plus ancienne que celle du principal ; la date fusionnée ne change alors pas et une liste vide
+        # calculée trop tôt resterait servie à l'appareil.
+        key = (device.get("id"), kind, saved.get("slug"))
+        signature = json.dumps(saved, sort_keys=True, default=str)
         cached = self._cache.get(key)
-        if cached is not None:
-            return cached
+        if cached is not None and cached[0] is state.items and cached[1] == signature:
+            return cached[2]
         selected, groups = select_items(self.api, saved, kind)
         ordered = order_entries(selected, groups, saved.get("group_order"))
         result = (ordered, groups, saved)
         if len(self._cache) > 200:
             self._cache.clear()
-        self._cache[key] = result
+        self._cache[key] = (state.items, signature, result)
         return result
 
     def allows(self, device: dict, kind: str, item_id: str) -> bool:

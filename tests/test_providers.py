@@ -23,10 +23,12 @@ B = str(2 * OFFSET)
 class FakeB(FakeXtream):
     """Second fournisseur : mêmes données, journal des chemins séparé."""
     paths: list[str] = []
+    agents: list[str] = []
     down = False
 
     def do_GET(self):
         type(self).paths.append(self.path.split("?")[0])
+        type(self).agents.append(self.headers.get("User-Agent", ""))
         if type(self).down:
             return self.send_body(503, b"down", "text/plain")
         return super().do_GET()
@@ -228,6 +230,35 @@ class MultiProviderTests(StackTestCase):
         self.assertEqual(from_public(to_public(str(9 * OFFSET + 99_999_999))), str(9 * OFFSET + 99_999_999))
         self.assertEqual((to_public("42"), from_public("42")), ("42", "42"))
         self.assertEqual(to_public(str(2 * OFFSET + 10 ** 8)), str(2 * OFFSET + 10 ** 8))
+
+    def test_user_agent_per_provider(self):
+        """XTREAM_USER_AGENT_2 : API et flux de l'abonnement 2 avec son user agent, le principal inchangé."""
+        cfg = replace(self.stack.config, provider_name="A", provider_user_agents=((2, "TiviMate/5.1.6"),),
+                      extra_providers=(("B", f"http://127.0.0.1:{self.server_b.server_address[1]}", USERNAME, PASSWORD),))
+        api = make_api(cfg, migrate=False)
+        self.assertEqual(api.user_agent_for_url(api.direct_stream(str(2 * OFFSET + 42))), "TiviMate/5.1.6")
+        self.assertEqual(api.user_agent_for_url(api.direct_stream("42")), cfg.user_agent)
+        self.assertEqual(api.user_agent_for_url("http://ailleurs.invalid/x.ts"), cfg.user_agent)
+        FakeB.agents = []
+        api.apis[1].catalog(kind="live", refresh=True)
+        self.assertTrue(FakeB.agents and set(FakeB.agents) == {"TiviMate/5.1.6"}, FakeB.agents)
+        # Flux relayé par le serveur : même user agent.
+        proxy = make_server(cfg, host="127.0.0.1", port=0, api=api, store=PlaylistStore(self.tmp.name + "/ua"),
+                            epg=make_epg(cfg, api), series=make_series(cfg, api), streams=make_streams(cfg, api),
+                            devices=DeviceStore(self.tmp.name + "/ua"))
+        threading.Thread(target=proxy.serve_forever, daemon=True).start()
+        self.addCleanup(proxy.server_close)
+        self.addCleanup(proxy.shutdown)
+        FakeB.agents = []
+        self.get(f"http://127.0.0.1:{proxy.server_address[1]}/stream/{2 * OFFSET + 42}.ts")
+        self.assertEqual(FakeB.agents[-1:], ["TiviMate/5.1.6"])
+
+    def test_user_agent_config_rejects_header_injection(self):
+        from app.server import _clean_user_agent
+        self.assertEqual(_clean_user_agent("  VLC/3.0  ", "X"), "VLC/3.0")
+        for bad in ("a\r\nX-Evil: 1", "a\x7f", "x" * 201):
+            with self.assertRaises(ValueError):
+                _clean_user_agent(bad, "X")
 
     def test_one_provider_down(self):
         FakeB.down = True

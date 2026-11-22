@@ -27,7 +27,7 @@ class InvalidProvider(ValueError):
 
 def _clean(value: object, label: str, *, limit: int = 200, required: bool = True) -> str:
     text = str(value if value is not None else "").strip()
-    if any(ord(ch) < 32 for ch in text):
+    if any(ord(ch) < 32 or ord(ch) == 127 for ch in text):
         raise InvalidProvider(f"{label} : caractères invalides")
     if required and not text:
         raise InvalidProvider(f"{label} obligatoire")
@@ -60,7 +60,8 @@ class ProviderStore:
             if 2 <= index <= MAX_INDEX and raw.get("url") and raw.get("username") and raw.get("password"):
                 result.append({"index": index, "name": str(raw.get("name") or f"Abonnement {index}")[:NAME_MAX],
                                "url": str(raw["url"]), "username": str(raw["username"]),
-                               "password": str(raw["password"]), "created_at": int(raw.get("created_at") or 0)})
+                               "password": str(raw["password"]), "created_at": int(raw.get("created_at") or 0),
+                               "user_agent": str(raw.get("user_agent") or "")[:200]})
         return sorted(result, key=lambda p: p["index"])
 
     def credentials(self) -> list[tuple[str, str]]:
@@ -79,7 +80,8 @@ class ProviderStore:
         os.replace(tmp, self.path)
         os.chmod(self.path, 0o600)
 
-    def add(self, *, name: object, url: str, username: object, password: object, reserved: set[int]) -> dict:
+    def add(self, *, name: object, url: str, username: object, password: object, reserved: set[int],
+            user_agent: object = "") -> dict:
         """Ajoute un abonnement au premier numéro libre (``reserved`` : numéros de la configuration)."""
         with self._lock:
             providers = self.list()
@@ -89,7 +91,8 @@ class ProviderStore:
                 raise InvalidProvider("9 abonnements au maximum")
             entry = {"index": free[0], "name": _clean(name, "Nom", limit=NAME_MAX),
                      "url": url, "username": _clean(username, "Utilisateur"),
-                     "password": _clean(password, "Mot de passe"), "created_at": int(time.time())}
+                     "password": _clean(password, "Mot de passe"), "created_at": int(time.time()),
+                     "user_agent": _clean(user_agent, "User agent", required=False)}
             self._write(providers + [entry])
             return entry
 
@@ -107,6 +110,8 @@ class ProviderStore:
                 entry["username"] = _clean(fields["username"], "Utilisateur")
             if fields.get("password"):  # vide : mot de passe inchangé
                 entry["password"] = _clean(fields["password"], "Mot de passe")
+            if fields.get("user_agent") is not None:  # vide : user agent par défaut (XTREAM_USER_AGENT)
+                entry["user_agent"] = _clean(fields["user_agent"], "User agent", required=False)
             self._write(providers)
             return entry
 
@@ -126,7 +131,7 @@ def public(entry: dict) -> dict:
     user = entry["username"]
     return {"index": entry["index"], "name": entry["name"], "host": host,
             "username": (user[:2] + "•" * max(3, len(user) - 2)) if user else "", "password_set": True,
-            "source": "interface", "created_at": entry.get("created_at")}
+            "source": "interface", "created_at": entry.get("created_at"), "user_agent": entry.get("user_agent", "")}
 
 
 _STORE: ProviderStore | None = None

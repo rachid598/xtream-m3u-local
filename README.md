@@ -124,6 +124,7 @@ Le rapprochement utilise le nom normalisé (sans pays, qualité ni accents : « 
 
 - **Guides externes** : `EPG_EXTRA_URLS` = jusqu'à 5 adresses de guides XMLTV publics (`.xml`, `.xml.gz` ou `.zip`), séparées par des virgules. Une chaîne y est trouvée par son identifiant EPG, sinon **par son nom** (« FR: TF1 FHD » = « TF1 »). Ses programmes sont repris sous l'identifiant de la playlist, et il n'y a plus d'appel au fournisseur pour elle. Mise à jour comme le guide principal (`EPG_CACHE_HOURS`). Le diagnostic indique pour chaque guide le nombre de chaînes et combien de chaînes de tes playlists il couvre. Exemples à tester, sans garantie qu'ils soient toujours en ligne : `https://epgshare01.online/epgshare01/epg_ripper_FR1.xml.gz` (France ; d'autres pays dans le même dossier) et les fichiers de [xmltvfr.fr](https://xmltvfr.fr/).
 - **Appels à l'API freinés** : 2 par seconde au maximum (`EPG_API_PER_SECOND`). Ils sont mis en attente pendant 20 s quand une lecture démarre (priorité à la vidéo, le fournisseur refusait sinon le flux pendant sa pause « 429 »). Au plus `EPG_API_MAX_CHANNELS` chaînes par playlist, dans l'ordre de la playlist. En cas d'échec, une seule ligne de journal par minute, et pas de nouvel essai pour une chaîne avant 5 min.
+- **Chaînes sans programme : guides proposés.** Playlist → Guide → « Chaînes sans programme » → **Proposer des guides** : le serveur cherche, dans le guide du fournisseur et tes guides externes, des chaînes au nom proche (préfixes, qualité et accents ignorés ; « France 2 » n'est jamais proposé pour « France 3 »), avec un score de ressemblance. Un clic choisit le guide, puis enregistre la playlist : la chaîne reçoit cet identifiant (`tvg-id`) et ses programmes.
 - **Mode prudent automatique** (fournisseurs sensibles). Dès que le fournisseur répond « 429 trop de requêtes », quelle que soit la requête, le guide « chaîne par chaîne » est **suspendu 1 heure** : seuls le guide XMLTV et les guides externes restent utilisés, et la vidéo n'est plus refusée à cause du guide. Ce 429 est retenu même après un redémarrage. Les catalogues gardent leur copie en cache 10 minutes au lieu d'être rafraîchis. Le diagnostic l'indique (« Mode prudent ») sans envoyer lui-même d'appel de test. Aucun appel « guide par chaîne » non plus pendant les 2 premières minutes après le démarrage (`EPG_STARTUP_QUIET`, en secondes).
 
 ## Mise à jour de nuit (films, séries, épisodes)
@@ -149,7 +150,19 @@ Ajouter `XTREAM_URL_2`, `XTREAM_USERNAME_2`, `XTREAM_PASSWORD_2` (et `XTREAM_NAM
 
 Limite : le guide XMLTV (`xmltv.php`) vient du fournisseur principal ; les chaînes des autres abonnements sont complétées par l'API, chaîne par chaîne.
 
+**User agent par abonnement.** Certains fournisseurs n'acceptent qu'un lecteur précis (flux refusés sans raison apparente). Système → Abonnements → « User agent » (ou le champ facultatif à l'ajout) : utilisé pour l'API et les flux de cet abonnement, testé avant l'enregistrement. Pour les abonnements de la configuration : `XTREAM_USER_AGENT_2` … `_9` (le principal : `XTREAM_USER_AGENT`).
+
 Sans profils : Les catalogues sont fusionnés (une catégorie de même nom forme un seul groupe dans les lecteurs) ; chaque flux est relayé vers le bon fournisseur, avec sa limite de connexions et son fuseau. Les identifiants des fournisseurs 2 à 9 sont décalés (`k × 10¹¹ + id`) pour rester numériques et uniques.
+
+## Tuner HDHomeRun (Plex, Jellyfin, Emby)
+
+Le serveur se présente comme un tuner TV **HDHomeRun** : Plex, Jellyfin ou Emby voient une playlist comme une antenne, avec leur guide et leurs enregistrements. Un appareil = un tuner (sa playlist, ses numéros, ses droits) ; nombre de « tuners » = connexions autorisées par l'abonnement.
+
+1. Dans **Appareils**, crée un appareil (ex. « Plex ») lié à la playlist voulue. Sa fiche affiche l'adresse du **tuner** et du **guide XMLTV**.
+2. **Jellyfin / Emby** : ajoute un tuner « HDHomeRun » avec l'adresse `http://IP:7777/hdhr/<identifiant>/<mot de passe>`, puis le guide XMLTV `…/guide.xml`.
+3. **Plex** (Live TV & DVR) : si l'adresse complète n'est pas acceptée, mets `IP:7777` et indique dans la fiche de l'appareil l'**adresse IP du serveur Plex** : le tuner sans code reconnaît l'appareil à cette adresse (réseau local seulement). Guide : « XMLTV » avec l'adresse `…/guide.xml`.
+
+Chaque chaîne est lue par `/live/<identifiant>/<mot de passe>/<id>.ts` : limite de connexions, priorité et bascule automatique comme pour une TV.
 
 ## Adresses du port 7777
 
@@ -164,6 +177,7 @@ Sans profils : Les catalogues sont fusionnés (une catégorie de même nom forme
 | `/stream/<id>.ts` · `/hls/<id>.m3u8` | Direct (MPEG-TS / HLS) |
 | `/movie/<id>.<ext>` · `/series/<id>.<ext>` | Film / épisode (Range transmis : avance rapide) |
 | `/timeshift/<id>.ts?start=<epoch>&end=<epoch>` | Replay |
+| `/hdhr/<identifiant>/<mot de passe>/` · `/discover.json` | Tuner HDHomeRun (Plex, Jellyfin, Emby) |
 | `/health` | Sonde de santé |
 
 `?token=` : `ACCESS_TOKEN` ou code d'un appareil (exigé si `ACCESS_TOKEN` est défini ou si l'option « exiger un code » est active).
@@ -205,6 +219,8 @@ Sans profils : Les catalogues sont fusionnés (une catégorie de même nom forme
 | `SERIES_PER_SECOND` | `2` | Demandes d'épisodes (`get_series_info`) envoyées au fournisseur par seconde au maximum |
 | `NIGHTLY_REFRESH` | `3-6` | Fenêtre des mises à jour lourdes, en heure locale du conteneur (`TZ`) : catalogues films/séries et épisodes remis à jour la nuit, copies en cache servies en journée (vide = à toute heure) |
 | `XTREAM_USER_AGENT` | `XtreamM3ULocal/3.x` | User-Agent envoyé au fournisseur |
+| `XTREAM_USER_AGENT_2` … `_9` | vide | User-Agent propre à un abonnement de la configuration (sinon `XTREAM_USER_AGENT`) |
+| `ALLOWED_HOSTS` | vide | Noms de domaine acceptés pour ouvrir l'interface (et `mode=direct`) en plus des adresses IP et des noms locaux (`.local`, `.lan`, `.home.arpa`, `.ts.net`, nom sans point), ex. `tv.mondomaine.fr` ou `.mondomaine.fr` |
 | `PUID` / `PGID` | `99` / `100` | Propriétaire des fichiers de `/data` (nobody/users sur Unraid) |
 | `TZ` | `Europe/Paris` | Fuseau des journaux |
 
@@ -249,6 +265,7 @@ et dans l'environnement du conteneur : `REMOTE_ACCESS=true`, `PUBLIC_BASE_URL=ht
 - **Réseau local par défaut.** Ne redirige pas 7777/7778 vers Internet sans lire « Accès distant » ci-dessus ; 7778 (gestion) ne doit jamais être exposé. Sur un réseau partagé : `WEB_PASSWORD` (gestion) et l'option « exiger un code d'appareil » (lecteurs).
 - Les identifiants Xtream restent dans le conteneur : absents des playlists (hors `mode=direct`), des manifestes HLS, de l'API Web, des exports et sauvegardes, des journaux et du diagnostic.
 - `devices.json` contient les codes d'appareils (droits 0600). Protection CSRF de l'API, CSP stricte sans script inline, validation de toutes les entrées, écritures atomiques avec copie `.bak`.
+- **Protection DNS rebinding** : un site web piégé ouvert sur un ordinateur de la maison ne peut pas lire l'interface (codes d'appareils, sauvegarde) ni les liens `mode=direct`. Seuls les adresses IP, les noms locaux, `PUBLIC_BASE_URL`, `ALLOWED_HOSTS` et les reverse proxys de `TRUSTED_PROXIES` sont acceptés ; sinon « Nom d'hôte refusé » (ajoute ton nom dans `ALLOWED_HOSTS`).
 - Démarrage en root uniquement pour corriger les droits de `/data`, puis UID 99 / GID 100.
 - Pas de transcodage : chaque lecture utilise une connexion chez le fournisseur.
 

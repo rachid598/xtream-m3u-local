@@ -123,6 +123,24 @@ def _item_logos(value: object) -> dict[str, str]:
     return result
 
 
+XMLTV_ID_RE = re.compile(r"^[^\x00-\x1f<>&\"']{1,120}$")
+
+
+def _item_xmltv(value: object) -> dict[str, str]:
+    """Guide choisi ``{id_du_direct: identifiant de chaîne XMLTV}`` (guide du fournisseur ou guide externe)."""
+    if value is None:
+        return {}
+    if not isinstance(value, dict) or len(value) > MAX_ITEMS_CUSTOM:
+        raise InvalidPlaylist("Guides choisis : objet attendu")
+    result = {}
+    for key, xid in value.items():
+        xid = xid.strip() if isinstance(xid, str) else ""
+        if not isinstance(key, str) or not key.isdigit() or len(key) > 12 or not XMLTV_ID_RE.fullmatch(xid):
+            raise InvalidPlaylist("Guide choisi : identifiant de chaîne XMLTV invalide")
+        result[key] = xid
+    return result
+
+
 def _item_epg(value: object) -> dict[str, str]:
     """Guide emprunté ``{id_du_direct: id_de_la_chaîne_dont_on_prend_le_guide}``."""
     if value is None:
@@ -269,6 +287,7 @@ def validate_playlist(payload: object, *, slug: str | None = None) -> dict:
     result["item_numbers"] = _item_numbers(payload.get("item_numbers"))
     result["item_logos"] = _item_logos(payload.get("item_logos"))
     result["item_epg"] = _item_epg(payload.get("item_epg"))
+    result["item_xmltv"] = _item_xmltv(payload.get("item_xmltv"))
     result["custom_groups"] = _custom_groups(payload.get("custom_groups"))
     result["item_groups"] = _item_groups(payload.get("item_groups"), result["custom_groups"])
     favorites = _ids(payload.get("favorites"), pattern=ITEM_KEY_RE, label="favori")

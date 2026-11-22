@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import ipaddress
+import re
 import threading
 import time
 from collections import deque
@@ -119,3 +120,48 @@ class FailureGuard:
         now = time.monotonic()
         with self._lock:
             return [{"ip": ip, "seconds": int(until - now) + 1} for ip, until in self._blocked.items() if until > now]
+
+
+# ------------------------------------------------------------------ noms d'hôte
+# Protection contre le « DNS rebinding » : un site web piégé, ouvert sur un ordinateur de la maison, fait
+# pointer son propre nom vers l'adresse locale du serveur et lit ses réponses (codes d'appareils,
+# sauvegarde, liens « mode=direct » avec les identifiants du fournisseur). Le navigateur envoie alors ce
+# nom dans l'en-tête Host : seuls les noms d'un réseau local, les adresses IP et ALLOWED_HOSTS passent.
+LOCAL_SUFFIXES = (".local", ".lan", ".home", ".home.arpa", ".internal", ".localdomain", ".intranet", ".ts.net")
+
+
+def host_name(host_header: str) -> str:
+    """« Tower.local:7778 » → « tower.local » ; « [::1]:7778 » → « ::1 »."""
+    host = (host_header or "").strip().lower()
+    if host.startswith("["):
+        return host[1:].split("]", 1)[0]
+    if host.count(":") == 1:
+        host = host.split(":", 1)[0]
+    return host.rstrip(".")
+
+
+def host_allowed(host_header: str, allowed: tuple = (), *, via_proxy: bool = False) -> bool:
+    """Nom d'hôte acceptable pour une requête : IP, nom local, ``ALLOWED_HOSTS`` ou reverse proxy déclaré."""
+    if via_proxy:
+        return True  # reverse proxy de TRUSTED_PROXIES : c'est lui qui choisit le nom de domaine
+    host = host_name(host_header)
+    if not host:
+        return True  # HTTP/1.0 sans Host : pas un navigateur
+    if _ip(host) is not None or host == "localhost" or "." not in host:
+        return True
+    if host.endswith(LOCAL_SUFFIXES):
+        return True
+    return any(host == name or (name.startswith(".") and host.endswith(name)) for name in allowed)
+
+
+def parse_hosts(raw: str) -> tuple:
+    """``ALLOWED_HOSTS`` : « tv.exemple.fr, .mondomaine.fr » (un point devant = tous les sous-domaines)."""
+    names = []
+    for part in (raw or "").split(","):
+        name = part.strip().lower().rstrip(".")
+        if not name:
+            continue
+        if not re.fullmatch(r"\.?[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*", name):
+            raise ValueError(f"ALLOWED_HOSTS : nom invalide « {name} »")
+        names.append(name)
+    return tuple(names)

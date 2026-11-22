@@ -335,13 +335,14 @@ def select_items(api, saved: dict, kind: str, *, refresh: bool = False) -> tuple
     numbers = saved.get("item_numbers") or {} if kind == "live" else {}
     logos = saved.get("item_logos") or {}
     epg_from = saved.get("item_epg") or {} if kind == "live" else {}
-    if names or numbers or logos or epg_from:
+    xmltv_ids = saved.get("item_xmltv") or {} if kind == "live" else {}
+    if names or numbers or logos or epg_from or xmltv_ids:
         lookup = getattr(api, "lookup", None)
         customized = []
         for item, group in entries:
             key = prefix + item["stream_id"]
             sid = item["stream_id"]
-            if key in names or sid in numbers or key in logos or sid in epg_from:
+            if key in names or sid in numbers or key in logos or sid in epg_from or sid in xmltv_ids:
                 item = dict(item)
                 if key in names:
                     item["name"] = names[key]
@@ -357,6 +358,9 @@ def select_items(api, saved: dict, kind: str, *, refresh: bool = False) -> tuple
                     source = lookup("live", epg_from[sid]) if lookup else None
                     if source and source.get("epg_id"):
                         item["epg_id"] = source["epg_id"]
+                if sid in xmltv_ids:
+                    # Guide choisi à la main (suggestion validée) : identifiant XMLTV prioritaire.
+                    item["epg_id"] = xmltv_ids[sid]
             customized.append((item, group))
         entries = customized
     groups = {prefix + cid: name for cid, name in categories.items()}

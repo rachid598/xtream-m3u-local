@@ -193,3 +193,29 @@ class TailscaleSettingTests(StackTestCase):
         self.assertEqual(self.get(self.stack.web_base + "/api/status", REMOTE)[0], 403)  # Internet : inchangé
         self.send(self.stack.web_base + "/api/settings", "PUT", {"tailscale_local": False})
         self.assertEqual(self.get(self.stack.web_base + "/api/status", tailscale)[0], 403)
+
+
+class DnsRebindingTests(StackTestCase):
+    """Un site piégé qui fait pointer son nom vers le serveur ne lit ni l'interface ni les liens « direct »."""
+
+    def test_host_rules(self):
+        allowed = access.parse_hosts("tv.exemple.fr, .maison.fr")
+        for host in ("192.168.0.10:7778", "[::1]:7778", "localhost", "tower", "tower.local:7778", "nas.lan",
+                     "x.home.arpa", "box.tail1234.ts.net", "tv.exemple.fr", "a.maison.fr", ""):
+            self.assertTrue(access.host_allowed(host, allowed), host)
+        for host in ("evil.example.com", "tv.exemple.fr.evil.com", "maison.fr.evil.com", "exemple.fr"):
+            self.assertFalse(access.host_allowed(host, allowed), host)
+        self.assertTrue(access.host_allowed("evil.example.com", via_proxy=True))
+        with self.assertRaises(ValueError):
+            access.parse_hosts("pas un nom/")
+
+    def test_web_and_direct_mode(self):
+        evil = {"Host": "evil.example.com"}
+        status, body, _ = self.get(self.stack.web_base + "/api/devices", evil)
+        self.assertEqual(status, 403)
+        self.assertIn("Nom d'hôte refusé", body.decode())
+        self.assertEqual(self.get(self.stack.web_base + "/api/status")[0], 200)              # 127.0.0.1 : accepté
+        self.assertEqual(self.get(self.stack.proxy_base + "/playlist.m3u?mode=direct", evil)[0], 403)
+        self.assertEqual(self.get(self.stack.proxy_base + "/playlist.m3u", evil)[0], 200)    # liens sans secret
+        stack = self.make_stack(allowed_hosts=access.parse_hosts("evil.example.com"))
+        self.assertEqual(self.get(stack.web_base + "/api/status", evil)[0], 200)
