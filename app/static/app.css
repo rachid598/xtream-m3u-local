@@ -661,3 +661,12 @@ dialog.preview-dialog { width: min(920px, calc(100vw - 24px)); padding: 14px; }
 .hosts-box p { margin: 0; }
 .hosts-form { display: flex; gap: 8px; flex-wrap: wrap; }
 .hosts-form input { flex: 1 1 240px; min-width: 0; }
+.epg-groups > summary { cursor: pointer; font-size: 13px; font-weight: 600; }
+.epg-groups { margin-top: 10px; }
+.epg-groups > * + * { margin-top: 8px; }
+.epg-group-list { max-height: 480px; overflow: auto; }
+.epg-row .epg-pick { flex: 1 1 100%; display: flex; flex-direction: column; gap: 6px; }
+.epg-row .epg-pick input { width: 100%; }
+.epg-results { max-height: 240px; overflow: auto; }
+.epg-row .num.ok-text { color: var(--ok); }
+.epg-row .num.warn-text { color: var(--warn); }

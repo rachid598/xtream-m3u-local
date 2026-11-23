@@ -123,6 +123,9 @@ def apply_custom_groups(entries: list[tuple[dict, str]], saved: dict) -> list[tu
         return entries
     known = {g["id"] for g in groups}
     manual = saved.get("item_groups") or {}
+    # Guide : les chaînes de « Mes groupes » prennent d'abord les guides externes fiables (option
+    # ``group_epg_external``, activée par défaut), rapprochées par le nom propre du groupe (« TF1 »).
+    external_first = saved.get("group_epg_external", True)
     placed: list[tuple[int, int, int, tuple[dict, str]]] = []
     rest: list[tuple[dict, str]] = []
     priority = {g["id"]: i for i, g in enumerate(groups)}
@@ -132,6 +135,8 @@ def apply_custom_groups(entries: list[tuple[dict, str]], saved: dict) -> list[tu
             rest.append((item, group))
             continue
         if target in known:
+            if external_first:
+                item = {**item, "epg_prefer_external": True}
             placed.append((priority[target], 10_000, index, (item, CUSTOM_PREFIX + target)))
             continue
         core = match_name(item["name"])
@@ -141,6 +146,11 @@ def apply_custom_groups(entries: list[tuple[dict, str]], saved: dict) -> list[tu
                 number = g["_numbers"][rank]
                 if number is not None:
                     item = {**item, "num": str(number), "custom_num": True}
+                if external_first:
+                    # Nom propre du groupe (« TF1 ») seulement pour les listes exactes : un motif « beIN
+                    # Sports » d'un groupe par mots ne désigne pas une chaîne précise.
+                    item = {**item, "epg_prefer_external": True,
+                            **({"epg_name": g["_patterns"][rank]} if g.get("match") == "exact" else {})}
                 placed.append((priority[g["id"]], rank, index, (item, CUSTOM_PREFIX + g["id"])))
                 break
         else:
@@ -399,8 +409,11 @@ def select_items(api, saved: dict, kind: str, *, refresh: bool = False) -> tuple
                     if source and source.get("epg_id"):
                         item["epg_id"] = source["epg_id"]
                 if sid in xmltv_ids:
-                    # Guide choisi à la main (suggestion validée) : identifiant XMLTV prioritaire.
+                    # Guide choisi à la main (suggestion validée) : identifiant XMLTV prioritaire, quelle
+                    # que soit sa source (guide du fournisseur ou guide externe).
                     item["epg_id"] = xmltv_ids[sid]
+                    item["epg_manual"] = True
+                    item.pop("epg_prefer_external", None)
             customized.append((item, group))
         entries = customized
     groups = {prefix + cid: name for cid, name in categories.items()}

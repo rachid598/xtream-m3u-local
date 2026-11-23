@@ -353,6 +353,17 @@
         'LCP', 'Public Sénat', 'France 4', 'BFM TV', 'BFMTV', 'CNews', 'CStar', 'C Star', 'Gulli', 'TF1 Séries Films',
         'L\'Équipe', 'La chaîne L\'Équipe', '6ter', 'RMC Story', 'RMC Découverte', 'Chérie 25', 'LCI', 'franceinfo',
         'France Info', 'T18', 'Novo19', 'Novo 19'] },
+    { name: 'Maroc', match: 'exact', hint: 'Chaînes marocaines dans l\'ordre de la numérotation SNRT : Al Aoula, 2M, Arryadia, Athaqafia, Al Maghribia, Assadissa, Tamazight, Laâyoune, Medi 1 TV, Chada TV…',
+      patterns: ['1: Al Aoula', 'Al Aoula HD', 'Al Aoula Inter', 'Al Aoula International', 'TVM',
+        '2: 2M', '2M Maroc', '2M Monde', '2M TV', '2M HD',
+        '3: Arryadia', 'Arryadia HD', 'Arriadia', 'Arryadia TNT',
+        '4: Athaqafia', 'Assaqafia', 'Attakafia', 'Arrabia',
+        '5: Al Maghribia', 'Al Maghribia HD', 'Maghribia',
+        '6: Assadissa', 'Mohammed VI', 'Assadissa Mohammed VI',
+        '7: Tamazight', 'Tamazight TV', 'Tamazighte',
+        '8: Laayoune', 'Laayoune TV', 'Al Aoula Laayoune', 'Laâyoune TV',
+        '9: Medi 1 TV', 'Medi1 TV', 'Medi 1 TV Maghreb', 'Medi1 TV Maghreb', 'Medi 1 TV Afrique', 'Medi 1 TV Europe',
+        '10: Chada TV', 'Chada', '11: Télé Maroc', 'Tele Maroc', 'M24', 'Medi 1 News'] },
     { name: 'Chaînes Canal+', match: 'words', hint: 'Seulement les chaînes dont le nom contient Canal+',
       patterns: ['Canal+', 'Canal plus'] },
     { name: 'Sport', match: 'words', hint: 'beIN, RMC Sport, Eurosport, Canal+ Sport…',
@@ -523,6 +534,7 @@
     data.failover = $('opt-failover').checked;
     data.failover_any_category = $('opt-failover-any').checked;
     data.uhd = $('opt-uhd').value;
+    data.group_epg_external = $('opt-group-epg').checked;
     data.hq_logos = $('opt-hq-logos').checked;
     data.provider = multiProfile() ? state.profile : '';
     data.mix = multiProfile() && $('opt-provider').value === 'mix';
@@ -792,6 +804,76 @@
       list.append(row);
     }
     if (lastMissing.length > 300) list.append(h('li', { class: 'empty', text: `… et ${lastMissing.length - 300} autres` }));
+  }
+
+  /** Guide de chaque chaîne de « Mes groupes » : source actuelle, changement manuel (recherche dans tous les guides). */
+  async function loadGroupGuides() {
+    if (!state.editing) { toast('Enregistre d\'abord la playlist', 'error'); return; }
+    const button = $('epg-groups-load');
+    button.disabled = true;
+    button.textContent = 'Recherche des guides…';
+    try {
+      const data = await request(`/api/epg/groups?slug=${encodeURIComponent(state.editing)}`);
+      renderGroupGuides(data);
+    } catch (error) {
+      toast(error.message, 'error');
+    } finally {
+      button.disabled = false;
+      button.textContent = 'Actualiser la liste';
+    }
+  }
+
+  function renderGroupGuides(data) {
+    const list = $('epg-groups');
+    if (!data.channels.length) {
+      list.replaceChildren(h('li', { class: 'empty', text: 'Aucune chaîne dans « Mes groupes » (Organisation → ajoute OTT, TNT, Maroc…).' }));
+      return;
+    }
+    $('epg-groups-hint').textContent = data.external_guides
+      ? `${data.channels.filter((c) => c.source.startsWith('external')).length} / ${data.channels.length} chaînes avec un guide externe. « Changer » pour choisir à la main, puis enregistre la playlist.`
+      : 'Aucun guide externe ajouté (Système → Guides externes) : les chaînes utilisent le guide du fournisseur.';
+    list.replaceChildren(...data.channels.map((c) => {
+      const chosen = state.itemXmltv[c.stream_id];
+      const where = chosen && !c.manual ? `choisi : ${chosen} (à enregistrer)`
+        : `${c.source_label}${c.guide_name ? ` · ${c.guide_name}` : ''}${c.id ? ` (${c.id})` : ''}${c.manual ? ' · choisi à la main' : ''}`;
+      const cls = c.source === 'none' ? 'warn-text' : c.source.startsWith('external') ? 'ok-text' : 'muted';
+      const picker = h('div', { class: 'epg-pick', hidden: true });
+      const row = h('li', { class: 'epg-row' },
+        h('span', { class: 'epg-name' }, h('span', { text: `${c.group} · ${c.name}` }), h('span', { class: `num ${cls}`, text: where })),
+        h('span', { class: 'epg-choices' },
+          h('button', { type: 'button', class: 'btn small', text: 'Changer', onclick: () => openGuidePicker(c, picker) }),
+          (c.manual || chosen) ? h('button', { type: 'button', class: 'btn small ghost', text: 'Automatique',
+            onclick: () => { delete state.itemXmltv[c.stream_id]; refresh({ channels: false }); toast('Guide automatique : enregistre la playlist'); } }) : null),
+        picker);
+      return row;
+    }));
+  }
+
+  function openGuidePicker(c, box) {
+    if (!box.hidden) { box.hidden = true; box.replaceChildren(); return; }
+    const input = h('input', { type: 'search', placeholder: 'Nom de la chaîne dans le guide (ex. TF1, 2M)', value: String(c.name).replace(/^[A-Z]{2,4}\s*[:|]\s*/i, '') });
+    const results = h('ul', { class: 'sum-list epg-results' });
+    const search = debounce(async () => {
+      const q = input.value.trim();
+      if (q.length < 2) { results.replaceChildren(); return; }
+      try {
+        const data = await request(`/api/epg/search?q=${encodeURIComponent(q)}`);
+        results.replaceChildren(...data.results.map((r) => h('li', null,
+          h('span', null, h('strong', { text: r.name }), h('span', { class: 'muted small', text: ` · ${r.source_label} · ${r.id} · ${r.programmes} programmes` })),
+          h('button', { type: 'button', class: 'btn small', text: 'Choisir', onclick: () => {
+            state.itemXmltv[c.stream_id] = r.id;
+            refresh({ channels: false });
+            box.hidden = true;
+            toast(`Guide « ${r.name} » choisi pour ${c.name} : enregistre la playlist`);
+          } }))));
+        if (!data.results.length) results.append(h('li', { class: 'empty', text: 'Aucune chaîne de ce nom dans les guides.' }));
+      } catch (error) { results.replaceChildren(h('li', { class: 'empty', text: error.message })); }
+    }, 250);
+    input.addEventListener('input', search);
+    box.replaceChildren(input, results);
+    box.hidden = false;
+    input.focus();
+    search();
   }
 
   async function suggestGuides() {
@@ -1808,6 +1890,8 @@
     $('opt-failover').checked = Boolean(p && p.failover);
     $('opt-failover-any').checked = Boolean(p && p.failover_any_category);
     $('opt-uhd').value = (p && p.uhd) || 'backup';
+    $('opt-group-epg').checked = !p || p.group_epg_external !== false;
+    $('epg-groups').replaceChildren();
     $('opt-hq-logos').checked = !p || p.hq_logos !== false;
     $('opt-separators').checked = Boolean(p && p.hide_separators);
     $('opt-fav-name').value = (p && p.favorites_name) || '★ Favoris';
@@ -2195,6 +2279,26 @@
     $('hosts-form').hidden = !(settingsData && settingsData.editable);
   }
 
+  function renderGuides() {
+    const fixed = (settingsData && settingsData.epg_env_sources) || [];
+    const mine = (settingsData && settingsData.epg_sources) || [];
+    const list = $('guides-list');
+    list.replaceChildren(
+      ...fixed.map((url) => h('li', null, h('span', null, h('code', { text: url }), h('span', { class: 'muted small', text: ' · configuration du conteneur (EPG_EXTRA_URLS)' })))),
+      ...mine.map((url) => h('li', null, h('span', null, h('code', { text: url })),
+        h('button', { type: 'button', class: 'btn small', text: 'Retirer', onclick: () => saveGuides(mine.filter((x) => x !== url)) }))));
+    if (!fixed.length && !mine.length) list.append(h('li', { class: 'empty', text: 'Aucun guide externe : seul le guide du fournisseur est utilisé.' }));
+    $('guides-form').hidden = !(settingsData && settingsData.editable);
+  }
+
+  async function saveGuides(urls) {
+    try {
+      settingsData = { ...settingsData, ...(await request('/api/settings', 'PUT', { epg_sources: urls })) };
+      renderGuides();
+      toast('Guides externes enregistrés : ils seront téléchargés à la prochaine mise à jour du guide');
+    } catch (error) { toast(error.message, 'error'); }
+  }
+
   async function saveHosts(hosts) {
     try {
       settingsData = { ...settingsData, ...(await request('/api/settings', 'PUT', { public_hosts: hosts })) };
@@ -2209,6 +2313,7 @@
     try { data = await request('/api/settings'); } catch (_) { return; }
     settingsData = data;
     renderHosts();
+    renderGuides();
     $('tailscale-local').checked = data.tailscale_local;
     $('tailscale-local').disabled = !data.editable;
     $('remote-hint').textContent = `Cette page est ouverte depuis ${data.client_ip}${data.client_tailscale ? ' (Tailscale)' : ''}.`
@@ -2804,6 +2909,15 @@
   });
   $('epg-suggest').addEventListener('click', suggestGuides);
   $('tunnel-form').addEventListener('submit', connectTunnel);
+  $('guides-form').addEventListener('submit', (event) => {
+    event.preventDefault();
+    const url = $('guides-input').value.trim();
+    if (!/^https?:\/\/\S{4,}$/.test(url)) { toast('Adresse attendue : https://…', 'error'); return; }
+    $('guides-input').value = '';
+    saveGuides([...new Set([...((settingsData && settingsData.epg_sources) || []), url])]);
+  });
+  $('epg-groups-load').addEventListener('click', loadGroupGuides);
+  $('opt-group-epg').addEventListener('change', () => refresh({ channels: false }));
   $('hosts-form').addEventListener('submit', (event) => {
     event.preventDefault();
     const host = $('hosts-input').value.trim().toLowerCase().replace(/^https?:\/\//, '').replace(/\/.*$/, '');

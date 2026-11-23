@@ -33,6 +33,18 @@ def _hosts(value) -> list[str]:
     return result[:10]
 
 
+def _urls(value) -> list[str]:
+    """Guides XMLTV externes ajoutés dans l'interface : adresses http(s), sans doublon, 8 au plus."""
+    if not isinstance(value, list):
+        return []
+    result = []
+    for raw in value:
+        url = str(raw or "").strip()
+        if re.fullmatch(r"https?://[^\s<>\"']{4,500}", url) and url not in result:
+            result.append(url)
+    return result[:8]
+
+
 def _indices(value) -> list[int]:
     """Liste de numéros d'abonnement valides (1 à 9), triés, sans doublon."""
     if not isinstance(value, list):
@@ -51,10 +63,11 @@ class Settings:
             try:
                 stamp = self.path.stat().st_mtime
             except OSError:
-                return {**DEFAULTS, "mixable": [], "public_hosts": []}
+                return {**DEFAULTS, "mixable": [], "public_hosts": [], "epg_sources": []}
             if self._cache and self._cache[0] == stamp:
                 return {**self._cache[1], "mixable": list(self._cache[1]["mixable"]),
-                        "public_hosts": list(self._cache[1]["public_hosts"])}
+                        "public_hosts": list(self._cache[1]["public_hosts"]),
+                        "epg_sources": list(self._cache[1]["epg_sources"])}
             try:
                 data = json.loads(self.path.read_text(encoding="utf-8"))
             except (OSError, ValueError):
@@ -65,6 +78,7 @@ class Settings:
             values["mixable"] = _indices(data["mixable"]) if "mixable" in data else (
                 list(INDICES) if data.get("allow_mix") else [])
             values["public_hosts"] = _hosts(data.get("public_hosts"))
+            values["epg_sources"] = _urls(data.get("epg_sources"))
             self._cache = (stamp, values)
             return dict(values)
 
@@ -74,6 +88,8 @@ class Settings:
             values["mixable"] = _indices(changes["mixable"])
         if "public_hosts" in changes:
             values["public_hosts"] = _hosts(changes["public_hosts"])
+        if "epg_sources" in changes:
+            values["epg_sources"] = _urls(changes["epg_sources"])
         with self._lock:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             tmp = self.path.with_suffix(".tmp")
@@ -101,6 +117,11 @@ def mixable() -> set[str] | None:
     if _SETTINGS is None:
         return None
     return {str(i) for i in _SETTINGS.get()["mixable"]}
+
+
+def epg_sources() -> list[str]:
+    """Guides XMLTV externes ajoutés dans l'interface (en plus de ``EPG_EXTRA_URLS``)."""
+    return list(_SETTINGS.get()["epg_sources"]) if _SETTINGS is not None else []
 
 
 def public_hosts() -> list[str]:

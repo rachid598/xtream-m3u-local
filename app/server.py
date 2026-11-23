@@ -2142,8 +2142,19 @@ def make_epg(config: Config, api: XtreamAPI) -> EpgCache:
     epg.mode = config.epg_source
     epg.api_max = config.epg_api_max_channels
     # Guides externes (gratuits, publics) : essayés avant les appels API chaîne par chaîne.
-    epg.extras = [EpgCache((lambda u=url: u), str(Path(config.data_dir) / "epg-extra" / hashlib.sha256(url.encode()).hexdigest()[:10]),
-                           max_age=config.epg_cache_hours * 3600) for url in config.epg_extra_urls]
+    # EPG_EXTRA_URLS + guides ajoutés dans l'interface (Guide → Guides externes), pris en compte à chaud.
+    caches: dict[str, EpgCache] = {}
+
+    def extra_for(url: str) -> EpgCache:
+        if url not in caches:
+            caches[url] = EpgCache((lambda u=url: u), str(Path(config.data_dir) / "epg-extra"
+                                                          / hashlib.sha256(url.encode()).hexdigest()[:10]),
+                                   max_age=config.epg_cache_hours * 3600)
+            caches[url].label = url
+        return caches[url]
+
+    epg._extras_fn = lambda: [extra_for(url) for url in
+                              dict.fromkeys(list(config.epg_extra_urls) + settings.epg_sources())]
     if config.epg_source != "xmltv":
         # Débit limité (2 appels par seconde) et journal résumé : des milliers d'appels d'un coup
         # déclenchaient le « 429 trop de requêtes » du fournisseur, et le flux vidéo était refusé avec.

@@ -2,6 +2,14 @@
 
 Format inspiré de « Keep a Changelog ». Les versions suivent le versionnage sémantique.
 
+## [3.28.0] — 2026-11-23
+
+### Ajouté
+- **Guides externes dans l'interface** (Système → Guides externes) : adresses XMLTV ajoutées ou retirées sans redémarrer, en plus de `EPG_EXTRA_URLS` (affichées à part). Exemples à tester proposés (xmltvfr.fr, epgshare01), le diagnostic vérifie chaque guide.
+- **Guide de « Mes groupes » depuis les guides externes d'abord** (option de playlist, cochée par défaut) : rapprochement par le nom propre du groupe, repli sur le guide du fournisseur. Un identifiant repris d'un guide externe n'est plus pris chez le fournisseur (pas de programmes en double).
+- **Rapprochement manuel** : Playlist → Guide → « Guide de mes groupes » liste chaque chaîne avec sa source (guide externe n, fournisseur, API, aucun) ; « Changer » cherche dans tous les guides (`GET /api/epg/search?q=`), « Automatique » annule le choix. `GET /api/epg/groups?slug=`.
+- **Groupe préfabriqué « Maroc »**, numéroté comme la SNRT : 1 Al Aoula, 2 2M, 3 Arryadia, 4 Athaqafia, 5 Al Maghribia, 6 Assadissa, 7 Tamazight, 8 Laâyoune, 9 Medi 1 TV, 10 Chada TV, 11 Télé Maroc (avec les variantes de noms courantes).
+
 ## [3.27.0] — 2026-11-23
 
 ### Ajouté

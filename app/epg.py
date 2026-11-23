@@ -344,7 +344,16 @@ class EpgCache:
     # ------------------------------------------------- guide d'une playlist
     mode = "auto"   # remplacé par EPG_SOURCE (voir make_epg)
     api_cache = None  # KeyedCache des programmes par chaîne (get_simple_data_table)
-    extras: list = []  # guides XMLTV externes (EPG_EXTRA_URLS), essayés avant l'API
+    _extras: list = []   # guides XMLTV externes (EPG_EXTRA_URLS), essayés avant l'API
+    _extras_fn = None    # ou fonction qui les donne (guides ajoutés dans l'interface, pris en compte à chaud)
+
+    @property
+    def extras(self) -> list:
+        return list(self._extras_fn()) if self._extras_fn is not None else list(self._extras)
+
+    @extras.setter
+    def extras(self, value) -> None:
+        self._extras = list(value)
     api_max = 0        # chaînes au plus complétées par l'API pour une playlist (0 = sans limite)
 
     def playlist_guide(self, key: str, channels: list[dict], *, mode: str | None = None, api=None,
@@ -368,14 +377,20 @@ class EpgCache:
                 if mode == "xmltv" or api is None:
                     raise
         index = self.index() if source else {}
-        covered = {c["stream_id"] for c in channels if c.get("epg_id") and index.get(c["epg_id"].strip().lower(), 0) > 0}
+        in_provider = {c["stream_id"] for c in channels
+                       if c.get("epg_id") and index.get(c["epg_id"].strip().lower(), 0) > 0}
+        # Chaînes de « Mes groupes » (OTT, TNT, Maroc…) : guides externes d'abord, guide du fournisseur ensuite.
+        prefer = {c["stream_id"] for c in channels if c.get("epg_prefer_external")}
+        covered = in_provider - prefer
+        sources: dict[str, dict] = {sid: {"source": "provider", "id": ""} for sid in covered}
         # Guides externes : par identifiant XMLTV, puis par nom de chaîne (« FR: TF1 FHD » = « TF1 »).
         external: list[tuple["EpgCache", dict[str, list[str]]]] = []
         from_extra: set[str] = set()
-        if self.extras:
+        extras = self.extras
+        if extras:
             from .builder import match_name
             remaining = [c for c in channels if c["stream_id"] not in covered]
-            for extra in self.extras:
+            for position, extra in enumerate(extras, start=1):
                 if not remaining:
                     break
                 try:
@@ -387,18 +402,35 @@ class EpgCache:
                 left = []
                 for c in remaining:
                     eid = (c.get("epg_id") or "").strip().lower()
-                    if not (eid and counts.get(eid, 0) > 0):
-                        eid = by_name.get(squash_name(match_name(c["name"])), "")
+                    if not (eid and counts.get(eid, 0) > 0) and not c.get("epg_manual"):
+                        # Nom propre du groupe (« TF1 ») d'abord, puis le nom de la chaîne chez le fournisseur.
+                        eid = (by_name.get(squash_name(c["epg_name"]), "") if c.get("epg_name") else "") \
+                            or by_name.get(squash_name(match_name(c["name"])), "")
                     if eid and counts.get(eid, 0) > 0:
                         ours = xml_channel_id(c)
                         if ours not in mapping.setdefault(eid, []):
                             mapping[eid].append(ours)
                         from_extra.add(c["stream_id"])
+                        sources[c["stream_id"]] = {"source": f"external:{position}", "id": eid}
                     else:
                         left.append(c)
                 remaining = left
                 if mapping:
                     external.append((extra, mapping))
+        # Pas trouvées dans les guides externes : guide du fournisseur s'il en a un.
+        for sid in (in_provider & prefer) - from_extra:
+            covered.add(sid)
+            sources[sid] = {"source": "provider", "id": ""}
+        # Un identifiant repris d'un guide externe n'est plus pris chez le fournisseur (sinon programmes en
+        # double pour une autre chaîne de la playlist qui porte le même identifiant).
+        taken = {ours.lower(): (extras.index(extra) + 1, eid) for extra, mapping in external
+                 for eid, ours_list in mapping.items() for ours in ours_list}
+        for c in channels:
+            ours = xml_channel_id(c).lower()
+            if c["stream_id"] in covered and ours in taken:
+                covered.discard(c["stream_id"])
+                from_extra.add(c["stream_id"])
+                sources[c["stream_id"]] = {"source": f"external:{taken[ours][0]}", "id": taken[ours][1]}
         targets = [] if mode == "xmltv" or api is None else [
             c for c in channels if c["stream_id"] not in covered and c["stream_id"] not in from_extra]
         if api_ids is None and self.api_max:
@@ -436,6 +468,11 @@ class EpgCache:
                 listings[c["stream_id"]] = items
         pending = api.pending_count(list(dict.fromkeys(to_fetch))) if to_fetch else 0
         from_api = {c["stream_id"] for c in targets if listings.get(c["stream_id"])}
+        by_sid = {c["stream_id"]: c for c in channels}
+        for sid in covered:
+            sources[sid] = {"source": "provider", "id": (by_sid[sid].get("epg_id") or "").strip().lower()}
+        for sid in from_api:
+            sources[sid] = {"source": "api", "id": ""}
         wanted = {c["epg_id"].strip().lower() for c in channels if c["stream_id"] in covered}
         stats = {
             "mode": mode,
@@ -444,6 +481,7 @@ class EpgCache:
             "external": len(from_extra),
             "api": len(from_api),
             "pending": pending,
+            "sources": sources,   # d'où vient le guide de chaque chaîne (fournisseur, guide externe n, API)
             # Séparateurs (« ##### FR | GÉNÉRALISTES ##### ») : pas des chaînes, jamais « sans programme ».
             "missing": [{"stream_id": c["stream_id"], "name": c["name"], "epg_id": c.get("epg_id") or ""}
                         for c in channels if c["stream_id"] not in covered and c["stream_id"] not in from_api

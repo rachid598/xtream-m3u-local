@@ -225,3 +225,90 @@ class SuggestApiTests(StackTestCase):
         self.assertIsInstance(data["suggestions"], list)
         self.assertEqual(self.get(self.stack.web_base + "/api/epg/suggest?slug=../x")[0], 400)
         self.assertEqual(self.get(self.stack.web_base + "/api/epg/suggest?slug=absente")[0], 404)
+
+
+class GroupExternalFirstTests(unittest.TestCase):
+    """« Mes groupes » : guide externe d'abord (rapproché par le nom propre du groupe), sinon le fournisseur."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        root = Path(self.tmp.name)
+        # Le fournisseur a TF1 (mauvais programmes) ; le guide externe a TF1, M6 et France 2.
+        (root / "provider.xml").write_text(PROVIDER_XML, encoding="utf-8")
+        (root / "extra.xml").write_text(EXTRA_XML.replace(
+            '<channel id="M6.fr">', '<channel id="TF1.ext"><display-name>TF1</display-name></channel>\n<channel id="M6.fr">').replace(
+            '</tv>', '<programme start="20261119200000 +0000" stop="20261119210000 +0000" channel="TF1.ext"><title>Journal externe</title></programme>\n</tv>'),
+            encoding="utf-8")
+        self.root = root
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def guide(self):
+        epg = EpgCache(lambda: (self.root / "provider.xml").as_uri(), str(self.root / "data"))
+        epg.mode = "xmltv"
+        epg.extras = [EpgCache(lambda: (self.root / "extra.xml").as_uri(), str(self.root / "x"))]
+        return epg
+
+    def test_external_first_then_provider_and_manual_wins(self):
+        tf1 = {**channel(1, "FR| TF1 FHD ᴿᴬᵂ", "TF1.fr"), "epg_prefer_external": True, "epg_name": "tf1"}
+        other = channel(5, "Chaîne du fournisseur", "TF1.fr")                    # hors groupe : fournisseur
+        alone = {**channel(6, "FR: Inconnue", "TF1.fr"), "epg_prefer_external": True}  # pas dans l'externe
+        path, stats = self.guide().playlist_guide("p", [tf1, other, alone])
+        self.assertEqual(stats["sources"]["1"], {"source": "external:1", "id": "tf1.ext"})
+        # Même identifiant « TF1.fr » que TF1 : repris du guide externe aussi (pas de programmes en double).
+        self.assertEqual(stats["sources"]["5"], {"source": "external:1", "id": "tf1.ext"})
+        self.assertEqual(stats["sources"]["6"]["source"], "external:1")
+        schedule = read_schedule(path)
+        self.assertEqual([p[2] for p in schedule["tf1.fr"]], ["Journal externe"])   # une seule fois, l'externe
+        # Pas de chaîne de groupe : le fournisseur reste la source.
+        _, stats = self.guide().playlist_guide("r", [other])
+        self.assertEqual(stats["sources"]["5"]["source"], "provider")
+        # Choix manuel (identifiant du fournisseur) : jamais remplacé par le guide externe.
+        manual = {**channel(1, "FR| TF1 FHD", "TF1.fr"), "epg_manual": True}
+        _, stats = self.guide().playlist_guide("q", [manual])
+        self.assertEqual(stats["sources"]["1"]["source"], "provider")
+
+    def test_builder_tags_group_channels(self):
+        from app.builder import select_items
+        from app.custom import validate_playlist
+
+        class Api:
+            def catalog(self, refresh=False, kind="live"):
+                return [channel(1, "FR| TF1 FHD"), channel(2, "FR: Sport 1")], {"1": "Généralistes"}
+
+        base = {"slug": "s", "name": "S", "category_ids": ["1"],
+                "custom_groups": [{"id": "tnt", "name": "TNT", "match": "exact", "patterns": ["1: TF1"]}]}
+        entries, _ = select_items(Api(), validate_playlist(base), "live")
+        tf1 = next(i for i, _ in entries if i["stream_id"] == "1")
+        self.assertEqual((tf1.get("epg_prefer_external"), tf1.get("epg_name")), (True, "tf1"))
+        self.assertNotIn("epg_prefer_external", next(i for i, _ in entries if i["stream_id"] == "2"))
+        entries, _ = select_items(Api(), validate_playlist({**base, "group_epg_external": False}), "live")
+        self.assertNotIn("epg_prefer_external", next(i for i, _ in entries if i["stream_id"] == "1"))
+        entries, _ = select_items(Api(), validate_playlist({**base, "item_xmltv": {"1": "TF1.ext"}}), "live")
+        tf1 = next(i for i, _ in entries if i["stream_id"] == "1")
+        self.assertEqual((tf1["epg_id"], tf1.get("epg_manual"), tf1.get("epg_prefer_external")), ("TF1.ext", True, None))
+
+
+class GroupGuideApiTests(StackTestCase):
+    def test_groups_and_search(self):
+        import json
+        from app import settings
+        settings.install(settings.Settings(self.tmp.name))
+        self.addCleanup(settings.install, None)
+        root = Path(self.tmp.name)
+        (root / "ext.xml").write_text(EXTRA_XML, encoding="utf-8")
+        status, data = self.send(self.stack.web_base + "/api/settings", "PUT", {"epg_sources": [(root / "ext.xml").as_uri().replace("file://", "http://x.invalid")]})
+        self.assertEqual(status, 200)
+        self.assertEqual(len(data["epg_sources"]), 1)
+        self.stack.epg.extras = [EpgCache(lambda: (root / "ext.xml").as_uri(), str(root / "ext"))]
+        self.stack.epg._extras_fn = None
+        self.create({"slug": "salon", "name": "Salon", "category_ids": ["1", "2"],
+                     "custom_groups": [{"id": "g", "name": "Infos", "match": "exact", "patterns": ["France Info"]}]})
+        status, body, _ = self.get(self.stack.web_base + "/api/epg/groups?slug=salon")
+        self.assertEqual(status, 200, body[:200])
+        rows = json.loads(body)["channels"]
+        self.assertTrue(rows and rows[0]["group"] == "Infos")
+        found = json.loads(self.get(self.stack.web_base + "/api/epg/search?q=m6")[1])["results"]
+        self.assertEqual((found[0]["id"], found[0]["name"], found[0]["source"]), ("m6.fr", "M6", "external:1"))
+        self.assertEqual(self.get(self.stack.web_base + "/api/epg/search?q=a")[0], 400)

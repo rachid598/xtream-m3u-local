@@ -289,6 +289,8 @@ def validate_playlist(payload: object, *, slug: str | None = None) -> dict:
     if uhd not in ("backup", "normal", "never"):
         raise InvalidPlaylist("Versions 4K : backup, normal ou never")
     result["uhd"] = uhd
+    # Guide de « Mes groupes » : guides externes d'abord (défaut), sinon celui du fournisseur.
+    result["group_epg_external"] = bool(payload.get("group_epg_external", True))
     result["rules"] = _rules(payload.get("rules"))
     result["item_names"] = _item_names(payload.get("item_names"))
     result["item_numbers"] = _item_numbers(payload.get("item_numbers"))

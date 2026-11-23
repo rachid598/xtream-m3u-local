@@ -232,6 +232,10 @@ class WebHandler(BaseHTTPRequestHandler):
             return self.json(200, self.tunnel_status())
         if path == "/api/epg/suggest":
             return self.epg_suggest(qs.get("slug", [""])[0])
+        if path == "/api/epg/groups":
+            return self.epg_groups(qs.get("slug", [""])[0])
+        if path == "/api/epg/search":
+            return self.epg_search(qs.get("q", [""])[0])
         if path == "/api/now":
             return self.now_on_tv(qs)
         series_match = SERIES_API.fullmatch(path)
@@ -250,7 +254,7 @@ class WebHandler(BaseHTTPRequestHandler):
                                            settings.local_networks(self.config))
         tailscale = any(access._in(access._ip(ip), [n]) for n in settings.TAILSCALE)
         return {**values, "editable": store is not None, "client_ip": ip, "client_tailscale": tailscale,
-                "remote_access": self.config.remote_access}
+                "remote_access": self.config.remote_access, "epg_env_sources": list(self.config.epg_extra_urls)}
 
     # ---------------------------------------------------------- abonnements
     def providers_editable(self) -> bool:
@@ -758,6 +762,7 @@ class WebHandler(BaseHTTPRequestHandler):
                 mine = {c["stream_id"] for c, group in ordered
                         if group.startswith(CUSTOM_PREFIX) or c["stream_id"] in favorites}
                 stats["mine"] = {"channels": len(mine), "covered": len(mine - missing)}
+                stats.pop("sources", None)   # détail par chaîne : /api/epg/groups
                 data["playlist"] = stats
             except (UpstreamError, EpgUnavailable) as exc:
                 data["error"] = str(exc)
@@ -804,6 +809,76 @@ class WebHandler(BaseHTTPRequestHandler):
             return self.json(500, {"error": "Impossible d'écrire dans /data/cloudflared"})
         return self.json(200, self.tunnel_status())
 
+    def epg_guides(self) -> list[tuple[str, str, object]]:
+        """Guides disponibles : ``[(clé, libellé, EpgCache)]`` (fournisseur, puis guides externes)."""
+        guides = []
+        if self.config.epg_source != "api":
+            guides.append(("provider", "Guide du fournisseur", self.epg))
+        for n, extra in enumerate(self.epg.extras, start=1):
+            host = urlsplit(getattr(extra, "label", "") or "").netloc or f"guide {n}"
+            guides.append((f"external:{n}", f"Guide externe {n} ({host})", extra))
+        return guides
+
+    def epg_groups(self, slug: str) -> None:
+        """Guide de chaque chaîne de « Mes groupes » : d'où il vient, rapprochement manuel possible."""
+        if self.epg is None or not self.config.enable_epg:
+            return self.json(409, {"error": "EPG désactivé (ENABLE_EPG=false)"})
+        if not SLUG_RE.fullmatch(slug or ""):
+            return self.json(400, {"error": "Playlist invalide"})
+        try:
+            saved = self.store.get(slug)
+        except RuntimeError:
+            return self.json(500, {"error": "Sauvegarde illisible"})
+        if saved is None:
+            return self.json(404, {"error": "Playlist introuvable"})
+        try:
+            ordered = live_channels_in_order(self.api, saved, with_groups=True)
+            _, stats = self.epg.playlist_guide(slug, [c for c, _ in ordered], budget=0)
+        except (UpstreamError, EpgUnavailable) as exc:
+            return self.json(502, {"error": str(exc)})
+        guides = {key: (label, cache) for key, label, cache in self.epg_guides()}
+        names = {g["id"]: g.get("name") or g["id"] for g in saved.get("custom_groups") or []}
+        manual = saved.get("item_xmltv") or {}
+        rows = []
+        for channel, group in ordered:
+            if not group.startswith(CUSTOM_PREFIX):
+                continue
+            found = stats["sources"].get(channel["stream_id"], {"source": "none", "id": ""})
+            label, cache = guides.get(found["source"], ("", None))
+            xid = found["id"] or (channel.get("epg_id") or "").lower()
+            rows.append({
+                "stream_id": channel["stream_id"], "name": channel["name"],
+                "group": names.get(group[len(CUSTOM_PREFIX):], group[len(CUSTOM_PREFIX):]),
+                "source": found["source"], "source_label": label or {"api": "API du fournisseur",
+                                                                     "none": "Aucun programme"}.get(found["source"], ""),
+                "id": xid, "guide_name": (cache.labels().get(xid, "") if cache is not None and xid else ""),
+                "manual": channel["stream_id"] in manual,
+            })
+        return self.json(200, {"external_guides": len(self.epg.extras), "channels": rows,
+                               "group_epg_external": saved.get("group_epg_external", True)})
+
+    def epg_search(self, query: str) -> None:
+        """Chaînes des guides (fournisseur et externes) dont le nom contient ``q`` : choix manuel du guide."""
+        from .builder import match_name
+        from .epg import squash_name
+        if self.epg is None or not self.config.enable_epg:
+            return self.json(409, {"error": "EPG désactivé (ENABLE_EPG=false)"})
+        wanted = squash_name(match_name(query or ""))
+        if len(wanted) < 2:
+            return self.json(400, {"error": "Tape au moins 2 lettres"})
+        results = []
+        for key, label, cache in self.epg_guides():
+            try:
+                labels, counts = cache.labels(), cache.index()
+            except Exception:
+                continue
+            for cid, name in labels.items():
+                if wanted in squash_name(match_name(name)) or wanted in cid:
+                    results.append({"id": cid, "name": name, "source": key, "source_label": label,
+                                    "programmes": counts.get(cid, 0)})
+        results.sort(key=lambda r: (r["programmes"] == 0, len(r["name"]), r["name"].lower()))
+        return self.json(200, {"results": results[:40]})
+
     def epg_suggest(self, slug: str) -> None:
         """Chaînes sans programme d'une playlist et identifiants XMLTV de noms proches (à valider dans l'éditeur)."""
         from .epg import suggest_guides
@@ -822,10 +897,7 @@ class WebHandler(BaseHTTPRequestHandler):
             _, stats = self.epg.playlist_guide(slug, [c for c, _ in ordered], budget=0)
         except (UpstreamError, EpgUnavailable) as exc:
             return self.json(502, {"error": str(exc)})
-        sources = []
-        if self.config.epg_source != "api":
-            sources.append(("guide du fournisseur", self.epg))
-        sources += [(f"guide externe {n}", extra) for n, extra in enumerate(getattr(self.epg, "extras", []) or [], start=1)]
+        sources = [(label, cache) for _, label, cache in self.epg_guides()]
         suggestions = suggest_guides(sources, stats["missing"])
         return self.json(200, {"missing": len(stats["missing"]), "suggestions": suggestions})
 

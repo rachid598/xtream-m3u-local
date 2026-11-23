@@ -365,6 +365,13 @@
             <button type="button" class="btn small" id="epg-suggest">Proposer des guides</button>
             <ul id="epg-missing" class="sum-list"></ul>
           </details>
+          <details class="epg-groups" id="epg-groups-box">
+            <summary>Guide de mes groupes (OTT, TNT, Maroc…)</summary>
+            <label class="check-row"><input type="checkbox" id="opt-group-epg"> <span><strong>Guides externes d'abord</strong> pour les chaînes de « Mes groupes » : rapprochées par le nom propre du groupe (« TF1 »), le guide du fournisseur ne sert que s'ils n'ont pas la chaîne. Ajoute tes guides fiables dans Système → Guides externes.</span></label>
+            <p class="muted small" id="epg-groups-hint">Pour chaque chaîne : d'où vient son guide. « Changer » pour choisir à la main dans tous les guides, puis enregistre la playlist.</p>
+            <button type="button" class="btn small" id="epg-groups-load">Afficher le guide de chaque chaîne</button>
+            <ul id="epg-groups" class="sum-list epg-group-list"></ul>
+          </details>
           <div class="btn-row">
             <button type="button" class="btn small" id="epg-refresh">Actualiser le guide</button>
             <a class="btn small ghost" id="epg-open" target="_blank" rel="noopener noreferrer">Ouvrir le XML</a>
@@ -532,6 +539,20 @@
         </div>
         <p class="hint" id="tunnel-hint"></p>
       </div>
+    </section>
+    <section class="card" id="guides-card">
+      <div class="card-head">
+        <div>
+          <h2>Guides externes</h2>
+          <p class="muted small">Guides des programmes XMLTV publics et fiables (.xml, .xml.gz ou .zip), utilisés avant les appels au fournisseur, et en premier pour « Mes groupes » (OTT, TNT, Maroc…). Le diagnostic indique pour chacun s'il se télécharge et combien de chaînes de tes playlists il couvre.</p>
+        </div>
+      </div>
+      <ul class="sum-list" id="guides-list"></ul>
+      <form class="hosts-form" id="guides-form" autocomplete="off">
+        <input id="guides-input" type="url" maxlength="500" placeholder="https://…/guide.xml.gz" spellcheck="false" aria-label="Adresse d'un guide XMLTV">
+        <button type="submit" class="btn small">Ajouter</button>
+      </form>
+      <p class="hint">À tester : <code>https://xmltvfr.fr/xmltv/xmltv.zip</code> (France), <code>https://epgshare01.online/epgshare01/epg_ripper_FR1.xml.gz</code> (France), <code>https://epgshare01.online/epgshare01/epg_ripper_MA1.xml.gz</code> (Maroc, si disponible). Ces sites ne dépendent pas de ce projet : vérifie avec le diagnostic.</p>
     </section>
     <section class="card" id="providers-card">
       <div class="card-head">
