@@ -210,6 +210,42 @@ class CustomGroupTests(unittest.TestCase):
         self.assertEqual(saved["custom_groups"], [{"id": "a", "name": "TNT", "match": "words", "patterns": ["tf1"]}])
 
 
+class RegionalGroupTests(unittest.TestCase):
+    def test_regions_aliases_and_catalogue_preview(self):
+        from app.web import catalog_payload
+
+        categories = {"1": "BEIN SPORTS | OTT", "2": "FR| FRANCE SPORT ⱽᴵᴾ", "3": "AR| BEIN SPORTS F",
+                      "4": "ARABIC SPORTS | OTT", "5": "FR| OQEE ARABIC", "6": "MBC GROUPE | OTT"}
+        channels = [ch(1, "|BEIN FR| BEIN SPORTS 1 HD", "1"), ch(2, "|BEIN AR| BEIN SPORTS HD 1", "1"),
+                    ch(3, "VIP: BEIN SPORTS 1 ᴿᴬᵂ", "2"), ch(4, "F: beIN SP⚽RTS 1 ᴴᴰ", "3"),
+                    ch(5, "AT: BEIN SPORTS 1", "4"), ch(6, "|FR| MAJID ꜰʜᴅ", "5"),
+                    ch(7, "MBC Masr 1ᴴᴰ", "6"), ch(8, "F: beIN SP⚽RTS 1 FRENCH ᴴᴰ", "3")]
+        payload = catalog_payload(channels, categories)
+        self.assertEqual([c.get("regional") for c in payload["channels"]],
+                         [("fr", "bein sports 1"), ("ar", "bein sports 1"), ("fr", "bein sports 1"),
+                          ("ar", "bein sports 1"), None, ("ar", "majid tv"), ("ar", "mbc masr"), None])
+
+    def test_group_order_and_failover_keep_bein_editions_separate(self):
+        categories = {"1": "FR| SPORT", "2": "AR| BEIN SPORTS F", "3": "BEIN SPORTS | OTT"}
+        api = StubAPI([ch(1, "FR: beIN SPORTS 1 HD", "1"), ch(2, "F: beIN SP⚽RTS 1 FHD", "2"),
+                       ch(3, "|BEIN FR| beIN SPORT 1 SD", "3"), ch(4, "|BEIN AR| beIN SPORTS 1 HD", "3"),
+                       ch(5, "FR: Canal+ Foot HD", "1")], categories)
+        groups = [{"id": "fr", "name": "Sport FR", "region": "fr", "match": "exact",
+                   "patterns": ["beIN Sports 1", "Canal+ Foot"]},
+                  {"id": "ar", "name": "Sport AR", "region": "ar", "match": "exact", "patterns": ["beIN Sports 1"]},
+                  {"id": "nilesat", "name": "Nilesat", "region": "ar", "match": "exact", "patterns": ["beIN Sports 1"]}]
+        data = {"slug": "s", "name": "S", "category_ids": ["1", "2"], "custom_groups": groups,
+                "dedupe": True, "failover": True, "failover_any_category": True}
+        saved = validate_playlist({**data, "group_order": ["g:ar", "g:fr", "g:nilesat"]})
+        entries, labels = select_items(api, saved, "live")
+        ordered = order_entries(entries, labels, saved["group_order"])
+        self.assertEqual([(item["stream_id"], group) for item, group in ordered], [("2", "g:ar"), ("1", "g:fr"), ("5", "g:fr")])
+        self.assertEqual([item.get("alternates") for item, _ in ordered[:2]], [["4"], ["3"]])
+        self.assertFalse(ordered[0][0]["epg_match_name"])
+        changed = validate_playlist({**data, "group_order": ["g:nilesat", "g:fr", "g:ar"]})
+        self.assertEqual(select_items(api, changed, "live")[0][0][1], "g:nilesat")
+
+
 class CustomGroupIntegrationTests(StackTestCase):
     def test_m3u_and_xtream(self):
         self.create({"slug": "salon", "name": "Salon", "category_ids": ["1", "10"],

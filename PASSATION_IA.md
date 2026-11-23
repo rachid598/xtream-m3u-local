@@ -1,7 +1,12 @@
 # Passation — Xtream M3U Local
 
-> **État au 23 novembre 2026 — version 3.28.1.** Document à transmettre tel quel à l'IA suivante avec le dépôt.
+> **État au 23 novembre 2026 — version 3.29.0.** Document à transmettre tel quel à l'IA suivante avec le dépôt.
 > Aucun mot de passe, token ni URL fournisseur réelle ne doit être copié ici ni commité sur GitHub.
+
+### Modèles de groupes en 3.29.0
+
+- Les boutons **Nilesat**, **Sport FR** et **Sport AR** sont des suggestions dans **Organisation → Mes groupes**. Le clic ajoute le groupe et une version de chaque chaîne disponible hors sélection, en gardant les exclusions déjà enregistrées. Les flèches restent le moyen de régler la priorité entre groupes. Une chaîne commune va au premier groupe qui la reconnaît.
+- Le champ facultatif `region` des groupes vaut `fr` ou `ar`. Le catalogue Web fournit la paire `regional` utilisée dans l'aperçu. Le serveur calcule la même paire pour le M3U, Xtream, les doublons et les variantes de secours. Les éditions beIN France et MENA sont distinguées par les noms et catégories du catalogue.
 
 ### Guide TV en 3.28.1
 

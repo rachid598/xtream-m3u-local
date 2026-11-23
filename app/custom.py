@@ -192,6 +192,7 @@ def _rules(value: object) -> list[dict]:
 
 GROUP_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,39}$")
 GROUP_MATCHES = ("words", "exact")
+GROUP_REGIONS = ("fr", "ar")
 MAX_CUSTOM_GROUPS = 50
 MAX_PATTERNS = 300
 
@@ -220,7 +221,13 @@ def _custom_groups(value: object) -> list[dict]:
         if not isinstance(patterns, list) or len(patterns) > MAX_PATTERNS:
             raise InvalidPlaylist(f"Groupe personnalisé : {MAX_PATTERNS} noms de chaînes maximum")
         cleaned = [p for p in (_text(p, "Nom de chaîne du groupe") for p in patterns) if p]
-        result.append({"id": gid, "name": name, "match": match, "patterns": list(dict.fromkeys(cleaned))})
+        item = {"id": gid, "name": name, "match": match, "patterns": list(dict.fromkeys(cleaned))}
+        region = group.get("region")
+        if region not in (None, "", *GROUP_REGIONS):
+            raise InvalidPlaylist("Région du groupe personnalisé invalide")
+        if region:
+            item["region"] = region
+        result.append(item)
     return result
 
 
