@@ -1,6 +1,6 @@
 # Passation — Xtream M3U Local
 
-> **État au 23 novembre 2026 — version 3.29.0.** Document à transmettre tel quel à l'IA suivante avec le dépôt.
+> **État au 23 novembre 2026 — version 3.30.0.** Document à transmettre tel quel à l'IA suivante avec le dépôt.
 > Aucun mot de passe, token ni URL fournisseur réelle ne doit être copié ici ni commité sur GitHub.
 
 ### Modèles de groupes en 3.29.0

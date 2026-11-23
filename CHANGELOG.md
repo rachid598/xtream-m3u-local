@@ -2,6 +2,15 @@
 
 Format inspiré de « Keep a Changelog ». Les versions suivent le versionnage sémantique.
 
+## [3.30.0] — 2026-11-23
+
+### Ajouté
+- **Groupe préfabriqué « Belgique »** : chaînes belges francophones (La Une, Tipik, La Trois, RTL TVI, Club RTL, Plug RTL, LN24, AB3, BX1, chaînes locales…) puis néerlandophones (VRT 1/Eén, Canvas, Ketnet, VTM 1 à 4, Play4 à Play7, Q2, Kanaal Z…).
+- **Groupe préfabriqué « Francophonie »** : chaînes francophones hors de France (TV5Monde, Belgique, Suisse romande RTS, Monaco, Québec : TVA, Radio-Canada, Noovo, RDS…, Afrique francophone : RTI, RTS Sénégal, CRTV, Africa 24…).
+
+### Remarque
+- Une chaîne ne va que dans **un seul** groupe : le premier de la liste « Mes groupes » qui la contient. Exemple réel : beIN Sports 1, 2 et 3 restent dans « OTT » s'il passe avant « Sport FR ».
+
 ## [3.29.0] — 2026-11-23
 
 - **Nilesat, Sport FR et Sport AR** sont proposés dans « Mes groupes ». Un clic ajoute le groupe et les chaînes correspondantes disponibles dans le catalogue de la playlist en cours. L’ordre des groupes reste réglable avec les flèches.
