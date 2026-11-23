@@ -35,7 +35,8 @@ from .providers import UnknownProvider
 from .hls import MAX_MANIFEST_BYTES, SEGMENT_MIME, HlsRegistry, rewrite_manifest, segment_ext
 from .streams import EvictedRecently, LimitReached, StreamManager
 from .custom import CATEGORY_RE, UNCATEGORIZED, PlaylistStore, uses
-from .epg import EPG_MODES, EpgCache, EpgUnavailable, normalize_listings, xml_channel_id
+from .epg import (DEFAULT_EPG_GUIDES, EPG_MODES, GENERIC_EPG_CHANNELS, EpgCache, EpgUnavailable,
+                  normalize_listings, xml_channel_id)
 from .xtream_emu import EMPTY_AUTH, XtreamEmulator
 from .vod import KeyedCache, SeriesCache, episode_name, mime_for, normalize_movie, normalize_series
 
@@ -338,7 +339,7 @@ class Config:
     def guide_ids(self) -> bool:
         """Les chaînes sans identifiant EPG reçoivent ``xtream-<id>`` : le guide de la playlist peut les compléter
         (API du fournisseur ou guide externe)."""
-        return self.enable_epg and (self.epg_source != "xmltv" or bool(self.epg_extra_urls))
+        return self.enable_epg and (self.epg_source != "xmltv" or bool(self.epg_extra_urls or settings.epg_sources()))
 
     @property
     def credentials(self) -> list[tuple[str, str]]:
@@ -1923,19 +1924,19 @@ class Handler(BaseHTTPRequestHandler):
     def full_guide(self, *, refresh: bool = False, budget: float = 15) -> Path:
         """Guide de toutes les chaînes du compte.
 
-        Mode ``xmltv`` (ou catalogue indisponible) : XMLTV fournisseur tel quel. Sinon : XMLTV limité aux
-        chaînes du compte, complété par l'API pour les chaînes des playlists personnalisées
-        (au plus ``EPG_API_MAX_CHANNELS``) afin de ne pas lancer des milliers d'appels.
+        Mode ``xmltv`` sans guide externe (ou catalogue indisponible) : XMLTV fournisseur tel quel.
+        Sinon, guide limité aux chaînes du compte. En mode auto/API, le complément chaîne par chaîne
+        reste limité aux chaînes des playlists personnalisées (au plus ``EPG_API_MAX_CHANNELS``).
         """
-        if self.config.epg_source == "xmltv":
+        xmltv_only = self.config.epg_source == "xmltv"
+        if xmltv_only and not self.epg.extras:
             return self.epg.ensure(refresh=refresh)
         try:
             channels, _ = self.api.catalog()
         except UpstreamError:
             return self.epg.ensure(refresh=refresh)
-        path, _ = self.epg.playlist_guide("_all", channels, budget=budget, refresh=refresh,
-                                          api_ids=playlists_live_ids(self.api, self.store,
-                                                                     self.config.epg_api_max_channels))
+        api_ids = None if xmltv_only else playlists_live_ids(self.api, self.store, self.config.epg_api_max_channels)
+        path, _ = self.epg.playlist_guide("_all", channels, budget=budget, refresh=refresh, api_ids=api_ids)
         return path
 
     def handle_request(self, *, head_only: bool) -> None:
@@ -2149,7 +2150,9 @@ def make_epg(config: Config, api: XtreamAPI) -> EpgCache:
         if url not in caches:
             caches[url] = EpgCache((lambda u=url: u), str(Path(config.data_dir) / "epg-extra"
                                                           / hashlib.sha256(url.encode()).hexdigest()[:10]),
-                                   max_age=config.epg_cache_hours * 3600)
+                                   max_age=config.epg_cache_hours * 3600,
+                                   automatic_channels=DEFAULT_EPG_GUIDES.get(url),
+                                   automatic_exclusions=GENERIC_EPG_CHANNELS.get(url, ()))
             caches[url].label = url
         return caches[url]
 
@@ -2342,7 +2345,7 @@ def main() -> None:
     from .web import make_web_server
     providers = provider_store.ProviderStore(config.data_dir)
     provider_store.install(providers)
-    settings.install(settings.Settings(config.data_dir))  # réglages de l'interface (ex. Tailscale = réseau local)
+    settings.install(settings.Settings(config.data_dir, default_epg_sources=tuple(DEFAULT_EPG_GUIDES)))
     # Tunnel Cloudflare de l'interface (Système → Accès à distance) : redémarré s'il était activé.
     tunnel.install(tunnel.Tunnel(config.data_dir, config.port))
     tunnel.current().start()

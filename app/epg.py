@@ -27,6 +27,7 @@ import time
 import xml.etree.ElementTree as ET
 import zipfile
 from datetime import datetime, timezone
+from functools import lru_cache
 from pathlib import Path
 from typing import Callable
 from urllib.error import HTTPError, URLError
@@ -38,6 +39,41 @@ LOG = logging.getLogger("xtream-m3u-local.epg")
 MAX_EPG_BYTES = 1024 * 1024 * 1024  # 1 Gio
 RETRY_AFTER_FAILURE = 900  # 15 min sans nouvelle tentative après un échec
 EPG_MODES = ("auto", "xmltv", "api")
+EPG_LOOKAHEAD = 24 * 3600
+EPGSHARE_FR = "https://epgshare01.online/epgshare01/epg_ripper_FR1.xml.gz"
+# Pour le Maroc, les noms ne coïncident pas toujours et certaines entrées sont des blocs génériques.
+# On limite le rapprochement automatique aux grilles vérifiées. Les choix manuels restent possibles.
+DEFAULT_EPG_GUIDES = {
+    "https://xmltvfr.fr/xmltv/xmltv_fr.xml.gz": None,
+    EPGSHARE_FR: None,
+    "https://www.open-epg.com/files/morocco.xml.gz": {
+        "alaoula": "alaoulaar.ma",
+        "almaghribia": "almaghribiaar.ma",
+        "maghribia": "almaghribiaar.ma",
+        "tamazight": "tamazightar.ma",
+        "tamazighttv": "tamazightar.ma",
+        "tamazighte": "tamazightar.ma",
+    },
+    "https://raw.githubusercontent.com/iimnm/arabic-epg/output/guide.xml.gz": {
+        "2mmonde": "2mmonde.ma@sd",
+        "chadatv": "chadatv.ma@sd",
+        "chada": "chadatv.ma@sd",
+    },
+}
+GENERIC_EPG_CHANNELS = {
+    EPGSHARE_FR: ("al.aoula.fr", "al.maghribia.fr", "arryadia.fr", "assadissa.fr", "medi1tv.fr", "télé.maroc.fr"),
+}
+
+
+def _coverage_periods(periods: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    """Fusionne les créneaux contigus pour garder un index compact, même pour un guide complet."""
+    merged: list[tuple[int, int]] = []
+    for start, stop in sorted(periods):
+        if merged and start <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], stop))
+        else:
+            merged.append((start, stop))
+    return merged
 
 
 def _decode(value: object) -> str:
@@ -114,17 +150,21 @@ class EpgUnavailable(Exception):
 
 class EpgCache:
     def __init__(self, url_factory: Callable[[], str], data_dir: str, *, max_age: int = 12 * 3600,
-                 user_agent: str = "XtreamM3ULocal"):
+                 user_agent: str = "XtreamM3ULocal", automatic_channels: dict[str, str] | None = None,
+                 automatic_exclusions: tuple[str, ...] = ()):
         self._url_factory = url_factory
         self.directory = Path(data_dir) / "epg"
         self.source = self.directory / "xmltv.xml"
         self.max_age = max(60, max_age)
         self.user_agent = user_agent
+        self.automatic_channels = automatic_channels
+        self.automatic_exclusions = automatic_exclusions
         self._download_lock = threading.Lock()
         self._filter_lock = threading.Lock()
+        self._index_lock = threading.Lock()
         self._failed_at = 0.0
         self.last_error: str | None = None
-        self._index: tuple[str, dict[str, int]] | None = None
+        self._index: tuple[str, dict[str, int], dict[str, list[tuple[int, int]]]] | None = None
 
     # ------------------------------------------------------------------ source
     def _age(self) -> float | None:
@@ -253,42 +293,81 @@ class EpgCache:
 
     def index(self) -> dict[str, int]:
         """``{identifiant_chaîne_minuscule: nombre_de_programmes}`` du XMLTV en cache ({} si absent)."""
+        with self._index_lock:
+            return self._index_data()[0]
+
+    def upcoming_ids(self, now: float | None = None) -> set[str]:
+        """Chaînes avec au moins un programme en cours ou dans les prochaines 24 h."""
+        now = time.time() if now is None else now
+        with self._index_lock:
+            _, coverage = self._index_data()
+        return {cid for cid, periods in coverage.items()
+                if any(start < now + EPG_LOOKAHEAD and stop > now for start, stop in periods)}
+
+    def _index_data(self) -> tuple[dict[str, int], dict[str, list[tuple[int, int]]]]:
         key = self._source_key()
         if key is None:
-            return {}
+            return {}, {}
         if self._index and self._index[0] == key:
-            return self._index[1]
+            return self._index[1], self._index[2]
         index_file = self.directory / "index.json"
         try:
             data = json.loads(index_file.read_text(encoding="utf-8"))
-            if data.get("source") == key and isinstance(data.get("channels"), dict):
-                self._index = (key, data["channels"])
-                return self._index[1]
+            if (isinstance(data, dict) and data.get("source") == key
+                    and isinstance(data.get("channels"), dict) and isinstance(data.get("coverage"), dict)):
+                self._index = (key, data["channels"], data["coverage"])
+                return data["channels"], data["coverage"]
         except (OSError, ValueError):
             pass
         counts: dict[str, int] = {}
+        periods: dict[str, list[tuple[int, int]]] = {}
+        parse_time = lru_cache(maxsize=8192)(parse_xmltv_time)
         try:
-            for _, elem in ET.iterparse(self.source, events=("end",)):
+            events = ET.iterparse(self.source, events=("start", "end"))
+            _, root = next(events)
+            for event, elem in events:
+                if event != "end":
+                    continue
                 if elem.tag == "channel":
-                    counts.setdefault(elem.get("id", "").strip().lower(), 0)
-                    elem.clear()
+                    cid = elem.get("id", "").strip().lower()
+                    if cid:
+                        counts.setdefault(cid, 0)
+                    root.clear()
                 elif elem.tag == "programme":
                     cid = elem.get("channel", "").strip().lower()
-                    counts[cid] = counts.get(cid, 0) + 1
-                    elem.clear()
+                    if cid:
+                        counts[cid] = counts.get(cid, 0) + 1
+                        start = parse_time(elem.get("start"))
+                        if start is not None:
+                            stop = parse_time(elem.get("stop")) or start + 1800
+                            if stop > start:
+                                periods.setdefault(cid, []).append((start, stop))
+                    root.clear()
         except (ET.ParseError, OSError):
             LOG.warning("EPG : XMLTV en cache illisible, index vide")
-            return {}
-        counts.pop("", None)
-        self._index = (key, counts)
+            return {}, {}
+        coverage = {cid: _coverage_periods(slots) for cid, slots in periods.items()}
+        self._index = (key, counts, coverage)
         try:
-            index_file.write_text(json.dumps({"source": key, "channels": counts}), encoding="utf-8")
+            index_file.write_text(json.dumps({"source": key, "channels": counts, "coverage": coverage}), encoding="utf-8")
         except OSError:
             pass
-        return counts
+        return counts, coverage
 
-    def names(self) -> dict[str, str]:
-        """``{nom de chaîne normalisé: identifiant}`` du XMLTV en cache (rapprochement par nom, guides externes)."""
+    def names(self, available: set[str] | None = None) -> dict[str, str]:
+        """Premier identifiant par nom normalisé, parmi les chaînes admissibles si elles sont précisées."""
+        return {name: cid for name, ids in self._name_candidates().items()
+                if (cid := next((i for i in ids if available is None or i in available), None)) is not None}
+
+    def automatic_matches(self, available: set[str]) -> tuple[set[str], dict[str, str]]:
+        """Identifiants et noms éligibles au rapprochement automatique dans ce guide."""
+        available = available.difference(self.automatic_exclusions)
+        if self.automatic_channels is None:
+            return available, self.names(available)
+        names = {name: cid for name, cid in self.automatic_channels.items() if cid in available}
+        return set(names.values()), names
+
+    def _name_candidates(self) -> dict[str, list[str]]:
         key = self._source_key()
         if key is None:
             return {}
@@ -296,7 +375,7 @@ class EpgCache:
         if cached and cached[0] == key:
             return cached[1]
         from .builder import match_name
-        result: dict[str, str] = {}
+        result: dict[str, list[str]] = {}
         labels: dict[str, str] = {}
         try:
             for _, elem in ET.iterparse(self.source, events=("end",)):
@@ -306,8 +385,10 @@ class EpgCache:
                         core = squash_name(match_name(name.text or ""))
                         if cid and name.text and cid not in labels:
                             labels[cid] = name.text.strip()[:80]
-                        if cid and core and core not in result:
-                            result[core] = cid
+                        if cid and core:
+                            ids = result.setdefault(core, [])
+                            if cid not in ids:
+                                ids.append(cid)
                     elem.clear()
                 elif elem.tag == "programme":
                     elem.clear()
@@ -319,7 +400,7 @@ class EpgCache:
 
     def labels(self) -> dict[str, str]:
         """``{identifiant: nom affiché}`` des chaînes du XMLTV en cache (suggestions de guide)."""
-        self.names()
+        self._name_candidates()
         cached = getattr(self, "_labels", None)
         return cached[1] if cached and cached[0] == self._source_key() else {}
 
@@ -369,16 +450,17 @@ class EpgCache:
         from .builder import is_separator
         mode = mode or self.mode
         api = api if api is not None else self.api_cache
+        now = time.time()
         source = None
+        source_error = None
         if mode in ("auto", "xmltv"):
             try:
                 source = self.ensure(refresh=refresh)
-            except EpgUnavailable:
-                if mode == "xmltv" or api is None:
-                    raise
-        index = self.index() if source else {}
+            except EpgUnavailable as exc:
+                source_error = exc
+        available = self.upcoming_ids(now) if source else set()
         in_provider = {c["stream_id"] for c in channels
-                       if c.get("epg_id") and index.get(c["epg_id"].strip().lower(), 0) > 0}
+                       if (c.get("epg_id") or "").strip().lower() in available}
         # Chaînes de « Mes groupes » (OTT, TNT, Maroc…) : guides externes d'abord, guide du fournisseur ensuite.
         prefer = {c["stream_id"] for c in channels if c.get("epg_prefer_external")}
         covered = in_provider - prefer
@@ -397,16 +479,18 @@ class EpgCache:
                     extra.ensure(refresh=refresh)
                 except EpgUnavailable:
                     continue
-                counts, by_name = extra.index(), extra.names()
+                available = extra.upcoming_ids(now)
+                auto_ids, by_name = extra.automatic_matches(available)
                 mapping: dict[str, list[str]] = {}
                 left = []
                 for c in remaining:
                     eid = (c.get("epg_id") or "").strip().lower()
-                    if not (eid and counts.get(eid, 0) > 0) and not c.get("epg_manual"):
+                    manual = c.get("epg_manual")
+                    if eid not in auto_ids and not manual:
                         # Nom propre du groupe (« TF1 ») d'abord, puis le nom de la chaîne chez le fournisseur.
                         eid = (by_name.get(squash_name(c["epg_name"]), "") if c.get("epg_name") else "") \
                             or by_name.get(squash_name(match_name(c["name"])), "")
-                    if eid and counts.get(eid, 0) > 0:
+                    if eid in (available if manual else auto_ids):
                         ours = xml_channel_id(c)
                         if ours not in mapping.setdefault(eid, []):
                             mapping[eid].append(ours)
@@ -417,6 +501,8 @@ class EpgCache:
                 remaining = left
                 if mapping:
                     external.append((extra, mapping))
+        if source_error is not None and not from_extra and (mode == "xmltv" or api is None):
+            raise source_error
         # Pas trouvées dans les guides externes : guide du fournisseur s'il en a un.
         for sid in (in_provider & prefer) - from_extra:
             covered.add(sid)
@@ -437,7 +523,7 @@ class EpgCache:
             targets = targets[:self.api_max]  # ordre de la playlist : groupes perso et favoris d'abord
         if api_ids is not None:
             targets = [c for c in targets if c["stream_id"] in api_ids]
-            if source is None and not targets:
+            if source is None and not targets and not from_extra:
                 raise EpgUnavailable("Guide XMLTV du fournisseur indisponible : enregistre une playlist personnalisée "
                                      "pour obtenir un guide complété par l'API, puis réessaie")
         # Chaque chaîne interroge d'abord sa propre version, puis — si le fournisseur n'a aucun programme
@@ -464,7 +550,7 @@ class EpgCache:
         for c in targets:
             sid = source_of.get(c["stream_id"])
             items = fetched.get(sid) if sid in fetched else (api.known(sid) if sid and hasattr(api, "known") else None)
-            if items:
+            if items and any(p["start"] < now + EPG_LOOKAHEAD and p["stop"] > now for p in items):
                 listings[c["stream_id"]] = items
         pending = api.pending_count(list(dict.fromkeys(to_fetch))) if to_fetch else 0
         from_api = {c["stream_id"] for c in targets if listings.get(c["stream_id"])}
@@ -554,7 +640,8 @@ def suggest_guides(sources: list[tuple[str, "EpgCache"]], missing: list[dict], *
     pool: dict[str, list[tuple[str, str, str, int]]] = {}   # nom comparable → [(id, nom, source, programmes)]
     for label, cache in sources:
         try:
-            names, labels, counts = cache.names(), cache.labels(), cache.index()
+            _, names = cache.automatic_matches(cache.upcoming_ids())
+            labels, counts = cache.labels(), cache.index()
         except Exception:  # guide illisible : simplement ignoré
             continue
         for core, cid in names.items():

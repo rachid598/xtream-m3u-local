@@ -10,7 +10,7 @@ from pathlib import Path
 
 from app.epg import write_filtered_xmltv
 
-from .fake_xtream import FakeXtream
+from .fake_xtream import EPG_END, EPG_NEXT_END, EPG_START, FakeXtream
 from .helpers import StackTestCase
 
 
@@ -102,8 +102,8 @@ class ApiEpgTests(StackTestCase):
         from .fake_xtream import SIMPLE_EPG
         items = normalize_listings(SIMPLE_EPG["43"])
         self.assertEqual([(i["title"], i["start"], i["stop"]) for i in items], [
-            ("Concert <live> & co", 1794762000, 1794765600),
-            ("pas-du-base64 !", 1794765600, 1794771000),   # texte brut, dates "start"/"end"
+            ("Concert <live> & co", EPG_START, EPG_END),
+            ("pas-du-base64 !", EPG_END, EPG_NEXT_END),   # texte brut, dates "start"/"end"
         ])
         self.assertEqual(items[0]["desc"], "Musique")
         self.assertEqual(normalize_listings({"error": "x"}), [])
@@ -260,7 +260,7 @@ class BorrowedGuideTests(unittest.TestCase):
     def test_alternate_versions_fill_the_guide(self):
         import tempfile
         from app.epg import EpgCache
-        programme = [{"title": "Le 20h", "start": 1794762000, "stop": 1794765600, "desc": ""}]
+        programme = [{"title": "Le 20h", "start": EPG_START, "stop": EPG_END, "desc": ""}]
         api = self.FakeApiCache({"1": [], "2": programme}, cached=["1"])
         with tempfile.TemporaryDirectory() as tmp:
             epg = EpgCache(lambda: None, tmp)
@@ -288,7 +288,7 @@ class MyGroupsGuideTests(_Stack):
 
 
 class NowOnTvTests(_Stack):
-    AT = 1794762000 + 60   # 15/11/2026 18 h 01 (Paris) : « Journal » sur France Info
+    AT = EPG_START + 60   # « Journal » est en cours sur France Info
 
     def test_now_next_and_search(self):
         self.create({"slug": "salon", "name": "Salon", "category_ids": ["1"], "favorites": ["44"]})
@@ -297,7 +297,7 @@ class NowOnTvTests(_Stack):
         self.assertEqual(data["channels"][0]["id"], "44")            # favori en premier
         self.assertTrue(data["channels"][0]["mine"])
         self.assertEqual(by_id["42"]["now"]["title"], "Journal")
-        self.assertEqual(by_id["42"]["now"]["start"], 1794762000)
+        self.assertEqual(by_id["42"]["now"]["start"], EPG_START)
         found = json.loads(self.get(self.stack.web_base + f"/api/now?slug=salon&at={self.AT - 3600}&q=journal")[1])
         self.assertEqual([(r["id"], r["title"]) for r in found["results"]], [("42", "Journal")])
         self.assertEqual(self.get(self.stack.web_base + "/api/now?slug=../x")[0], 400)

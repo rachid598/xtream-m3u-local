@@ -16,6 +16,7 @@ from . import access
 TAILSCALE = access.parse_networks("100.64.0.0/10, fd7a:115c:a1e0::/48")
 DEFAULTS = {"tailscale_local": False}
 INDICES = range(1, 10)   # numéros d'abonnement
+RETIRED_EPG_SOURCE = "https://epgshare01.online/epgshare01/epg_ripper_MA1.xml.gz"
 
 
 HOST_RE = re.compile(r"^(?=.{4,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$")
@@ -53,8 +54,9 @@ def _indices(value) -> list[int]:
 
 
 class Settings:
-    def __init__(self, data_dir: str) -> None:
+    def __init__(self, data_dir: str, *, default_epg_sources: tuple[str, ...] = ()) -> None:
         self.path = Path(data_dir) / "settings.json"
+        self._default_epg_sources = default_epg_sources
         self._lock = threading.Lock()
         self._cache: tuple[float, dict] | None = None
 
@@ -63,7 +65,7 @@ class Settings:
             try:
                 stamp = self.path.stat().st_mtime
             except OSError:
-                return {**DEFAULTS, "mixable": [], "public_hosts": [], "epg_sources": []}
+                return {**DEFAULTS, "mixable": [], "public_hosts": [], "epg_sources": list(self._default_epg_sources)}
             if self._cache and self._cache[0] == stamp:
                 return {**self._cache[1], "mixable": list(self._cache[1]["mixable"]),
                         "public_hosts": list(self._cache[1]["public_hosts"]),
@@ -78,7 +80,10 @@ class Settings:
             values["mixable"] = _indices(data["mixable"]) if "mixable" in data else (
                 list(INDICES) if data.get("allow_mix") else [])
             values["public_hosts"] = _hosts(data.get("public_hosts"))
-            values["epg_sources"] = _urls(data.get("epg_sources"))
+            sources = _urls(data.get("epg_sources"))
+            if self._default_epg_sources and not data.get("epg_sources_initialized"):
+                sources = _urls([url for url in sources if url != RETIRED_EPG_SOURCE] + list(self._default_epg_sources))
+            values["epg_sources"] = sources
             self._cache = (stamp, values)
             return dict(values)
 
@@ -93,7 +98,8 @@ class Settings:
         with self._lock:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             tmp = self.path.with_suffix(".tmp")
-            tmp.write_text(json.dumps(values, indent=1), encoding="utf-8")
+            stored = {**values, "epg_sources_initialized": True} if self._default_epg_sources else values
+            tmp.write_text(json.dumps(stored, indent=1), encoding="utf-8")
             os.replace(tmp, self.path)
             self._cache = None
         return values

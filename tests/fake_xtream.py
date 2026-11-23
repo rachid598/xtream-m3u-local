@@ -8,6 +8,8 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 
+from app.epg import xmltv_time
+
 USERNAME = "user"
 PASSWORD = "pw"
 
@@ -86,27 +88,31 @@ def _b64(text: str) -> str:
 
 
 # get_simple_data_table : titres/descriptions en base64, horodatages UTC.
+EPG_START = int(time.time()) - 120
+EPG_END = EPG_START + 3600
+EPG_NEXT_END = EPG_END + 5400
 SIMPLE_EPG = {
     "42": {"epg_listings": [
-        {"id": "1", "epg_id": "1", "title": _b64("Journal API"), "lang": "fr", "start": "2026-11-15 17:00:00",
-         "end": "2026-11-15 18:00:00", "description": _b64("Infos"), "channel_id": "franceinfo.fr",
-         "start_timestamp": "1794762000", "stop_timestamp": "1794765600"}]},
+        {"id": "1", "epg_id": "1", "title": _b64("Journal API"), "lang": "fr",
+         "description": _b64("Infos"), "channel_id": "franceinfo.fr",
+         "start_timestamp": str(EPG_START), "stop_timestamp": str(EPG_END)}]},
     "43": {"epg_listings": [
         {"id": "2", "title": _b64("Concert <live> & co"), "description": _b64("Musique"),
-         "start_timestamp": "1794762000", "stop_timestamp": "1794765600"},
-        {"id": "3", "title": _b64("Sans fin"), "start_timestamp": "1794765600", "stop_timestamp": "0"},
-        {"id": "4", "title": "pas-du-base64 !", "start": "2026-11-15 18:00:00", "end": "2026-11-15 19:30:00"}]},
+         "start_timestamp": str(EPG_START), "stop_timestamp": str(EPG_END)},
+        {"id": "3", "title": _b64("Sans fin"), "start_timestamp": str(EPG_END), "stop_timestamp": "0"},
+        {"id": "4", "title": "pas-du-base64 !", "start": time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(EPG_END)),
+         "end": time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(EPG_NEXT_END))}]},
 }
 
-XMLTV = """<?xml version="1.0" encoding="UTF-8"?>
+XMLTV = f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE tv SYSTEM "xmltv.dtd">
 <tv generator-info-name="fake">
   <channel id="franceinfo.fr"><display-name>France Info</display-name></channel>
   <channel id="sport1.fr"><display-name>Sport 1</display-name></channel>
   <channel id="other.fr"><display-name>Autre &amp; co</display-name></channel>
-  <programme start="20261115180000 +0100" stop="20261115190000 +0100" channel="franceinfo.fr"><title>Journal</title></programme>
-  <programme start="20261115180000 +0100" stop="20261115190000 +0100" channel="sport1.fr"><title>Match</title></programme>
-  <programme start="20261115180000 +0100" stop="20261115190000 +0100" channel="other.fr"><title>Autre</title></programme>
+  <programme start="{xmltv_time(EPG_START)}" stop="{xmltv_time(EPG_END)}" channel="franceinfo.fr"><title>Journal</title></programme>
+  <programme start="{xmltv_time(EPG_START)}" stop="{xmltv_time(EPG_END)}" channel="sport1.fr"><title>Match</title></programme>
+  <programme start="{xmltv_time(EPG_START)}" stop="{xmltv_time(EPG_END)}" channel="other.fr"><title>Autre</title></programme>
 </tv>
 """
 
