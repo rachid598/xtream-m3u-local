@@ -388,3 +388,31 @@ class FailoverAnyCategoryTests(unittest.TestCase):
         index_b = _core_index(items_b)
         self.assertIsNot(index_a1, index_b)             # recalculé : pas de collision par contenu
         self.assertEqual(index_a1, index_b)              # mais le résultat est bien le même
+
+
+class MultiGroupTests(StackTestCase):
+    """Option « une chaîne dans plusieurs groupes » : beIN dans OTT et dans Sport FR, même flux."""
+
+    def test_channel_in_several_groups(self):
+        groups = [{"id": "ott", "name": "OTT", "match": "exact", "patterns": ["France Info", "Sport 1"]},
+                  {"id": "sport", "name": "Sport FR", "match": "exact", "patterns": ["Sport 1"]}]
+        base = {"slug": "salon", "name": "Salon", "category_ids": ["1", "2"], "custom_groups": groups}
+        self.create(base)
+        m3u = self.get(self.stack.proxy_base + "/p/salon.m3u")[1].decode()
+        self.assertEqual(m3u.count(",Sport 1"), 1)                                  # premier groupe seulement
+        self.assertIn('group-title="OTT",Sport 1', m3u)
+        self.send(self.stack.web_base + "/api/playlists/salon", "PUT", {**base, "multi_groups": True})
+        m3u = self.get(self.stack.proxy_base + "/p/salon.m3u")[1].decode()
+        self.assertIn('group-title="OTT",Sport 1', m3u)
+        self.assertIn('group-title="Sport FR",Sport 1', m3u)                        # aussi dans Sport FR
+        self.assertEqual(m3u.count("/stream/44.ts"), 2)                              # même flux
+        self.assertNotIn('group-title="Sport FR",France Info', m3u)
+        # Mode Xtream (TiviMate) : la chaîne est listée dans les deux catégories.
+        import json
+        from urllib.parse import urlencode
+        device = self.send(self.stack.web_base + "/api/devices", "POST", {"name": "TV", "playlist": "salon"})[1]
+        q = {"username": device["username"], "password": device["password"]}
+        cats = {c["category_name"]: c["category_id"] for c in json.loads(self.get(
+            self.stack.proxy_base + "/player_api.php?" + urlencode({**q, "action": "get_live_categories"}))[1])}
+        live = json.loads(self.get(self.stack.proxy_base + "/player_api.php?" + urlencode({**q, "action": "get_live_streams"}))[1])
+        self.assertEqual(sorted(c["category_id"] for c in live if c["stream_id"] == 44), sorted([cats["OTT"], cats["Sport FR"]]))

@@ -420,15 +420,13 @@
         'VRT 1', 'Een', 'Eén', 'VRT Canvas', 'Canvas', 'Ketnet', 'VTM', 'VTM 2', 'VTM2', 'VTM 3', 'VTM3', 'VTM 4', 'VTM4',
         'VTM Gold', 'VTM Kids', 'Play4', 'Play 4', 'Play5', 'Play 5', 'Play6', 'Play 6', 'Play7', 'Play 7', 'Play Crime',
         'Vier', 'Vijf', 'Zes', 'Q2', 'CAZ', 'Kanaal Z', 'Eclips', 'Njam', 'Studio 100 TV', 'Bruzz', 'ATV', 'Sporza'] },
-    { name: 'Francophonie', match: 'exact', hint: 'Chaînes francophones hors de France : TV5Monde, Belgique, Suisse romande, Monaco, Québec, Afrique francophone',
-      patterns: ['TV5Monde', 'TV5 Monde', 'TV5Monde Europe', 'TV5Monde FBS', 'TV5Monde Afrique', 'TV5 Québec Canada', 'Unis TV',
+    { name: 'Francophonie', match: 'exact', hint: 'Chaînes francophones hors de France : TV5Monde, Belgique, Suisse romande, Monaco, Québec',
+      patterns: ['TV5Monde', 'TV5 Monde', 'TV5Monde Europe', 'TV5Monde FBS', 'TV5 Québec Canada', 'Unis TV',
         'La Une', 'Tipik', 'La Trois', 'RTL TVI', 'Club RTL', 'Plug RTL', 'LN24', 'AB3', 'BX1',
         'RTS 1', 'RTS Un', 'RTS 2', 'RTS Deux', 'Léman Bleu', 'La Télé', 'Canal 9', 'Canal Alpha',
         'TV Monaco', 'Monaco Info',
         'ICI Radio-Canada Télé', 'Radio-Canada', 'ICI RDI', 'RDI', 'TVA', 'Noovo', 'Télé-Québec', 'LCN', 'TVA Sports',
-        'RDS', 'RDS 2', 'Canal Vie', 'Canal D', 'Z Télé', 'Séries+', 'Historia', 'Évasion', 'Prise 2',
-        'RTI 1', 'RTI 2', 'NCI', 'A+ Ivoire', 'RTS Sénégal', '2STV', 'TFM', 'ORTM', 'RTB', 'CRTV', 'Canal 2 International',
-        'Équinoxe TV', 'ORTB', 'RTNC', 'Télé Congo', 'Gabon 1ère', 'Africa 24', 'Africanews', 'Vox Africa', 'Trace Africa', 'Nollywood TV'] },
+        'RDS', 'RDS 2', 'Canal Vie', 'Canal D', 'Z Télé', 'Séries+', 'Historia', 'Évasion', 'Prise 2'] },
     { name: 'Chaînes Canal+', match: 'words', hint: 'Seulement les chaînes dont le nom contient Canal+',
       patterns: ['Canal+', 'Canal plus'] },
     { name: 'Sport', match: 'words', hint: 'beIN, RMC Sport, Eurosport, Canal+ Sport…',
@@ -468,9 +466,17 @@
   }
 
   /** Chaînes retenues rangées dans un groupe perso : Map id → id du groupe. */
+  /** Groupes supplémentaires d'une chaîne (option « une chaîne dans plusieurs groupes ») : id → [groupes]. */
+  function groupExtras() {
+    groupAssignment();
+    return state.groupExtras || new Map();
+  }
+
   function groupAssignment() {
     if (state.groupCache) return state.groupCache;
     const result = new Map();
+    const extras = new Map();
+    const multi = $('opt-multi-groups').checked;
     const groups = orderedCustomGroups();
     if (groups.length) {
       const known = new Set(groups.map((g) => g.id));
@@ -483,11 +489,14 @@
         const manual = state.itemGroups[c.stream_id];
         if (manual === '-') continue;
         if (manual && known.has(manual)) { result.set(c.stream_id, manual); continue; }
-        const group = groups.find((g) => g._patterns.length && groupMatches(c, g));
-        if (group) result.set(c.stream_id, group.id);
+        const matching = multi ? groups.filter((g) => g._patterns.length && groupMatches(c, g))
+          : [groups.find((g) => g._patterns.length && groupMatches(c, g))].filter(Boolean);
+        if (matching.length) result.set(c.stream_id, matching[0].id);
+        if (matching.length > 1) extras.set(c.stream_id, matching.slice(1).map((g) => g.id));
       }
     }
     state.groupCache = result;
+    state.groupExtras = extras;
     return result;
   }
   const customName = (id) => (state.customGroups.find((g) => g.id === id) || {}).name || id;
@@ -605,6 +614,7 @@
     data.failover_any_category = $('opt-failover-any').checked;
     data.uhd = $('opt-uhd').value;
     data.group_epg_external = $('opt-group-epg').checked;
+    data.multi_groups = $('opt-multi-groups').checked;
     data.hq_logos = $('opt-hq-logos').checked;
     data.provider = multiProfile() ? state.profile : '';
     data.mix = multiProfile() && $('opt-provider').value === 'mix';
@@ -1565,7 +1575,9 @@
     const members = new Map();
     const byId = state.cat.live.channelById;
     const groups = new Map(orderedCustomGroups().filter((g) => g.region).map((g) => [g.id, g]));
-    for (const [sid, gid] of groupAssignment()) {
+    const pairs = [...groupAssignment()];
+    for (const [sid, more] of groupExtras()) for (const gid of more) pairs.push([sid, gid]);
+    for (const [sid, gid] of pairs) {
       if (!members.has(gid)) members.set(gid, []);
       const c = byId.get(sid);
       if (c && !hiddenDuplicates().has(sid)) {
@@ -1988,6 +2000,7 @@
     $('opt-failover-any').checked = Boolean(p && p.failover_any_category);
     $('opt-uhd').value = (p && p.uhd) || 'backup';
     $('opt-group-epg').checked = !p || p.group_epg_external !== false;
+    $('opt-multi-groups').checked = Boolean(p && p.multi_groups);
     $('epg-groups').replaceChildren();
     $('opt-hq-logos').checked = !p || p.hq_logos !== false;
     $('opt-separators').checked = Boolean(p && p.hide_separators);
@@ -3015,6 +3028,7 @@
   });
   $('epg-groups-load').addEventListener('click', loadGroupGuides);
   $('opt-group-epg').addEventListener('change', () => refresh({ channels: false }));
+  $('opt-multi-groups').addEventListener('change', () => { state.groupCache = null; state.hiddenCache = null; refresh(); });
   $('hosts-form').addEventListener('submit', (event) => {
     event.preventDefault();
     const host = $('hosts-input').value.trim().toLowerCase().replace(/^https?:\/\//, '').replace(/\/.*$/, '');

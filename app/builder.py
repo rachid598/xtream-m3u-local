@@ -228,6 +228,7 @@ def apply_custom_groups(entries: list[tuple[dict, str]], saved: dict,
     # Guide : les chaînes de « Mes groupes » prennent d'abord les guides externes fiables (option
     # ``group_epg_external``, activée par défaut), rapprochées par le nom propre du groupe (« TF1 »).
     external_first = saved.get("group_epg_external", True)
+    multi = bool(saved.get("multi_groups"))
     placed: list[tuple[int, int, int, tuple[dict, str]]] = []
     rest: list[tuple[dict, str]] = []
     priority = {g["id"]: i for i, g in enumerate(groups)}
@@ -243,12 +244,15 @@ def apply_custom_groups(entries: list[tuple[dict, str]], saved: dict,
             continue
         core = match_name(item["name"])
         region, regional_core = regional_group_key(item["name"], categories.get(item["category_id"], "")) if has_regional else ("", "")
+        original = item
+        found = False
         for g in groups:
             scope = g.get("region")
-            if scope and (scope != region or is_separator(item["name"])):
+            if scope and (scope != region or is_separator(original["name"])):
                 continue
             rank = group_matches(regional_core if scope else core, g) if g["_patterns"] else None
             if rank is not None:
+                item = original
                 if scope:
                     item = {**item, "_regional_group": (region, regional_core)}
                 number = g["_numbers"][rank]
@@ -263,9 +267,13 @@ def apply_custom_groups(entries: list[tuple[dict, str]], saved: dict,
                     item = {**item, "epg_prefer_external": True,
                             **({"epg_name": g["_patterns"][rank]} if g.get("match") == "exact" else {})}
                 placed.append((priority[g["id"]], rank, index, (item, CUSTOM_PREFIX + g["id"])))
-                break
-        else:
-            rest.append((item, group))
+                found = True
+                if not multi:
+                    break
+                # Option « une chaîne dans plusieurs groupes » : elle est aussi rangée dans les groupes
+                # suivants qui la contiennent (même flux, même guide, aucune connexion de plus).
+        if not found:
+            rest.append((original, group))
     placed.sort(key=lambda e: e[:3])
     return [entry for *_, entry in placed] + rest
 

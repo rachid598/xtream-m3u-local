@@ -2,6 +2,14 @@
 
 Format inspiré de « Keep a Changelog ». Les versions suivent le versionnage sémantique.
 
+## [3.31.0] — 2026-11-23
+
+### Ajouté
+- **Une chaîne peut être dans plusieurs groupes** (Organisation, option de playlist `multi_groups`, décochée par défaut) : beIN Sports 1 à la fois dans « OTT » et « Sport FR », La Une dans « Belgique » et « Francophonie »… Même flux, même guide, aucune connexion en plus ; listée dans chaque catégorie en mode Xtream. Sans l'option, une chaîne va dans le premier groupe qui la contient (comportement d'avant).
+
+### Modifié
+- Groupe préfabriqué « Francophonie » sans les chaînes africaines : TV5Monde, Belgique, Suisse romande, Monaco, Québec.
+
 ## [3.30.0] — 2026-11-23
 
 ### Ajouté
