@@ -73,6 +73,105 @@ def match_name(name: str) -> str:
     return " ".join(_TAGS.sub(" ", " ".join(tokens)).split())
 
 
+_REGION_PREFIX = re.compile(r"^\W*(?:(bein)\s+)?([a-z0-9]{1,4})\s*[:|\-\]●•»◉]+\s*")
+_REGIONAL_QUALITY = re.compile(r"ᴴᴰ|ꜰʜᴅ|ʜᴅ|ᴿᴬᵂ")
+_ARAB_COUNTRIES = frozenset("ar ma dz tn ly mr eg sa ksa ae uae qa kw om bh iq jo lb sy ps sd ye".split())
+_OTHER_COUNTRIES = frozenset("af at au br ca ch cz de dk es fi gb gr hr hu in it jp kr nl no nz pl pt ro ru se sk tr uk us".split())
+_ARAB_CATEGORY = re.compile(
+    r"^\W*(?:ar[| :\-]|arabic\b|maghreb\b|maroc\b|algerie\b|tunisie\b|egypt\b|mbc groupe\b|thmanyah\b|starzplay ad sport\b|"
+    r"alwan sport\b|bein sports (?:fhd|h265)\b|(?:ma|dz|tn|eg|iq|qa|ksa|uae)\s*[|:])"
+)
+_FR_CATEGORY = re.compile(r"^\W*(?:fr\s*[|:]|france\b)")
+_REGIONAL_ALIASES = {
+    "l equipe 21": "l equipe", "la chaine l equipe": "l equipe",
+    "arriadia": "arryadia", "arriyadia": "arryadia", "arryadia live": "arryadia",
+    "arryadia tv maroc": "arryadia", "arryadia tnt local": "arryadia tnt",
+    "al aula": "al aoula", "al aoula inter": "al aoula", "tvm": "al aoula",
+    "al laayoune": "laayoune tv", "laayoune": "laayoune tv", "tamazight tv": "tamazight",
+    "medi1tv": "medi 1 tv", "mbc egypt": "mbc masr",
+    "mbc egypt 2": "mbc masr 2", "مصر mbc": "mbc masr", "mbc مصر": "mbc masr",
+    "mbc مصر 2": "mbc masr 2", "القناة الأولى": "al aoula", "الرياضية": "arryadia",
+    "alqass": "alkass", "sportenfrance": "sport en france", "automoto tv": "automoto la chaine",
+    "golf plus": "golf+", "equidia": "equidia live", "infosport": "infosport+",
+    "on time sports": "on sport", "on time sports 1": "on sport", "on sports": "on sport",
+    "on sports plus": "on sport plus", "zamalek sport": "zamalek sports",
+    "al ahly": "al ahly tv", "oman tv sport": "oman sports",
+    "kuwait sport": "kuwait sports", "sharjah sport": "sharjah sports",
+    "mbc masr 1": "mbc masr", "mbc drama masr": "mbc masr drama", "rotana khalijiah": "rotana khalijia",
+    "yah ala": "osntv yahala", "yahala": "osntv yahala", "osn yahala": "osntv yahala",
+    "yahala bil arabi": "osntv yahala bil arabi", "osn yahala bil arabi": "osntv yahala bil arabi",
+    "yahala aflam": "osntv yahala aflam", "osn yahala aflam": "osntv yahala aflam",
+    "on e": "on", "on e tv": "on", "cbc tv": "cbc", "cbc drama tv": "cbc drama", "cbc sofra tv": "cbc sofra",
+    "al masryia": "al masriya", "al aoula laayoune": "laayoune tv", "al aoula layoune": "laayoune tv",
+    "medi 1 maghreb tv": "medi 1 tv maghreb", "medi 1 arabic tv": "medi 1 tv",
+    "a3 algerie": "a3", "algerie 4 tamazight": "tv4 tamazight", "algerie 5 quran": "tv5 coran",
+    "tunisia nat 1": "wataniya 1", "tunisia nat 2": "wataniya 2", "attessia tv": "attessia",
+    "abu dhabi": "abu dhabi tv", "abu dhabi al emarat": "al emarat",
+    "qatar": "qatar tv", "al rayyan tv": "al rayyan", "oman tv general": "oman tv",
+    "jordan": "jordan tv", "jordan satellite channel": "jordan tv", "sharjah sports 2 e a u": "sharjah sports 2",
+    "bbc world news arabic": "bbc arabic", "trt news arabic": "trt arabi",
+    "abu dhabi natioanl geo": "national geographic abu dhabi", "bein nat geo": "national geographic abu dhabi",
+    "bein nat geographic": "national geographic abu dhabi", "majid": "majid tv", "majid kids tv": "majid tv",
+    "bein jeem": "jeem tv", "bein baraem": "baraem", "saudi quran": "saudi quran tv",
+    "saudi sunnah": "saudi sunnah tv",
+    "mbc wanasah": "wanasah", "al ahrar": "libya al ahrar", "libya al ahrar tv": "libya al ahrar",
+    "al wasat tv wtv": "al wasat", "elmouritania": "el mouritania", "sbc saudia": "sbc",
+    "kuwait 1": "kuwait tv 1", "kuwait 2": "kuwait tv 2", "sunnah tv": "saudi sunnah tv",
+    "saudia sunnah": "saudi sunnah tv",
+}
+
+
+def regional_group_key(name: str, category: str) -> tuple[str, str]:
+    """Région et nom comparables pour Sport FR, Sport AR et Nilesat.
+
+    Une catégorie du fournisseur peut mélanger plusieurs pays. Les marqueurs de la chaîne
+    (p. ex. « |BEIN FR| » et « |BEIN AR| ») et la langue explicite de beIN passent avant elle.
+    """
+    text = normalize(_REGIONAL_QUALITY.sub(" HD ", name))
+    label = normalize(category)
+    prefix = _REGION_PREFIX.match(text)
+    code = prefix[2] if prefix else ""
+    if prefix:
+        text = text[prefix.end():]
+    text = re.sub(r"sp\s*⚽\s*rts", "sports", text)
+    text = re.sub(r"\bh[ .]?26[45]\b|\b8k\b", " ", text)
+    text = re.sub(r"(?<=\d)(?=(?:f?hd|sd)\b)", " ", text)
+    core = match_name(text)
+    if re.search(r"^be\s*in\s*(?:sports?|max)\b", core):
+        if re.search(r"\b(?:english|en)\b", core):
+            return "", ""
+        if re.search(r"\b(?:fr|france|french)\b", core):
+            if code != "fr" and _ARAB_CATEGORY.match(label):
+                return "", ""
+            code = "fr"
+            core = re.sub(r"\b(?:fr|france|french)\b", "", core).strip()
+        core = re.sub(r"^be\s*in\s*(?:sports?\s+)?", "bein sports ", core)
+        core = re.sub(r"^(bein sports) (\d+) (?:extra|xtra)$", r"\1 xtra \2", core).strip()
+        core = core.replace(" sports extra ", " sports xtra ")
+    if code in _OTHER_COUNTRIES or re.search(r"^(?:ma\| malta|bh\| bosnia|tn\| taiwan)", label):
+        return "", ""
+    if (prefix and prefix[1] and code == "fr") or (code == "fr" and "oqee arabic" not in label):
+        region = "fr"
+    elif code in _ARAB_COUNTRIES or _ARAB_CATEGORY.match(label) or "oqee arabic" in label:
+        region = "ar"
+    else:
+        region = "fr" if _FR_CATEGORY.match(label) and "africa" not in label else ""
+    if not region:
+        return "", ""
+
+    core = re.sub(r"\bcanal\+\s*(?=foot|sport|live)", "canal+ ", core)
+    core = re.sub(r"\bligue\s*1\s*\+\s*", "ligue 1+ ", core).strip()
+    core = re.sub(r"^al\s*kass\s*", "alkass ", core).strip()
+    core = re.sub(r"^(?:thmanayh|thmanyah|thamania)\s*(?:sports?\s*)?", "thmanyah ", core).strip()
+    core = re.sub(r"^(?:ad|abu dhabi) sports?\s+", "ad sports ", core)
+    core = re.sub(r"^adsp (\d+) premium$", r"ad sports premium \1", core)
+    core = re.sub(r"^gobx\s+(?=mbc\b)", "", core)
+    core = re.sub(r"^mbc\s*(?=\d)", "mbc ", core)
+    if label.startswith("ar| osn"):
+        core = re.sub(r" f$", "", core)
+    return region, _REGIONAL_ALIASES.get(core, core)
+
+
 _NUMBERED = re.compile(r"^\s*(\d{1,5})\s*[:=]\s*(.+)$")
 
 
@@ -110,7 +209,8 @@ def ordered_custom_groups(saved: dict) -> list[dict]:
     return result
 
 
-def apply_custom_groups(entries: list[tuple[dict, str]], saved: dict) -> list[tuple[dict, str]]:
+def apply_custom_groups(entries: list[tuple[dict, str]], saved: dict,
+                        categories: dict[str, str] | None = None) -> list[tuple[dict, str]]:
     """Range les chaînes retenues dans les groupes personnalisés (« TNT », « Canal+ »…).
 
     Une chaîne rangée à la main (``item_groups``) va dans ce groupe ; sinon dans le premier groupe
@@ -122,6 +222,8 @@ def apply_custom_groups(entries: list[tuple[dict, str]], saved: dict) -> list[tu
     if not groups:
         return entries
     known = {g["id"] for g in groups}
+    has_regional = any(g.get("region") for g in groups)
+    categories = categories or {}
     manual = saved.get("item_groups") or {}
     # Guide : les chaînes de « Mes groupes » prennent d'abord les guides externes fiables (option
     # ``group_epg_external``, activée par défaut), rapprochées par le nom propre du groupe (« TF1 »).
@@ -140,13 +242,22 @@ def apply_custom_groups(entries: list[tuple[dict, str]], saved: dict) -> list[tu
             placed.append((priority[target], 10_000, index, (item, CUSTOM_PREFIX + target)))
             continue
         core = match_name(item["name"])
+        region, regional_core = regional_group_key(item["name"], categories.get(item["category_id"], "")) if has_regional else ("", "")
         for g in groups:
-            rank = group_matches(core, g) if g["_patterns"] else None
+            scope = g.get("region")
+            if scope and (scope != region or is_separator(item["name"])):
+                continue
+            rank = group_matches(regional_core if scope else core, g) if g["_patterns"] else None
             if rank is not None:
+                if scope:
+                    item = {**item, "_regional_group": (region, regional_core)}
                 number = g["_numbers"][rank]
                 if number is not None:
                     item = {**item, "num": str(number), "custom_num": True}
-                if external_first:
+                if region == "ar" and regional_core.startswith("bein sports ") and scope:
+                    # Le guide beIN France peut porter le même nom que la chaîne MENA.
+                    item = {**item, "epg_match_name": False}
+                elif external_first:
                     # Nom propre du groupe (« TF1 ») seulement pour les listes exactes : un motif « beIN
                     # Sports » d'un groupe par mots ne désigne pas une chaîne précise.
                     item = {**item, "epg_prefer_external": True,
@@ -213,10 +324,10 @@ def dedupe(entries: list[tuple[dict, str]], uhd: str = "backup") -> list[tuple[d
     utilisées par la bascule automatique (option ``failover``). Les versions 4K suivent ``uhd``
     (voir :func:`version_rank`).
     """
-    versions: dict[tuple[str, str], list[tuple[float, int]]] = {}
+    versions: dict[tuple[str, str | tuple[str, str]], list[tuple[float, int]]] = {}
     for index, (item, group) in enumerate(entries):
         # Même nom comparable que les groupes perso : « VIP: TF1 ᴴᴰ », « FR: TF1 », « AF: TF1 » → « tf1 ».
-        key = (group, match_name(item["name"]) or base_name(item["name"]))
+        key = (group, item.get("_regional_group") or match_name(item["name"]) or base_name(item["name"]))
         versions.setdefault(key, []).append((version_rank(item["name"], uhd), index))
     keep: dict[int, list[int]] = {}
     for found in versions.values():
@@ -270,7 +381,8 @@ def _core_index(items: list[dict]) -> dict[str, list[tuple[float, str]]]:
 
 
 def extend_alternates_from_catalog(entries: list[tuple[dict, str]], items: list[dict], uhd: str = "backup",
-                                   excluded: set | frozenset = frozenset()) -> list[tuple[dict, str]]:
+                                   excluded: set | frozenset = frozenset(),
+                                   categories: dict[str, str] | None = None) -> list[tuple[dict, str]]:
     """Complète les versions de secours avec tout le catalogue, même les catégories non cochées.
 
     Option de playlist ``failover_any_category`` : les chaînes trouvées restent invisibles (aucune
@@ -278,13 +390,25 @@ def extend_alternates_from_catalog(entries: list[tuple[dict, str]], items: list[
     si toutes les versions sélectionnées de la chaîne sont indisponibles. Nécessite ``dedupe`` et ``failover``.
     """
     index = _core_index(items)
+    keys = {item["_regional_group"] for item, _ in entries if "_regional_group" in item}
+    regional_index: dict[tuple[str, str], list[tuple[float, str]]] = {}
+    if keys:
+        categories = categories or {}
+        for item in items:
+            key = regional_group_key(item["name"], categories.get(item["category_id"], ""))
+            if key in keys and not is_separator(item["name"]):
+                regional_index.setdefault(key, []).append((quality(item["name"]), item["stream_id"]))
+        for versions in regional_index.values():
+            versions.sort(key=lambda v: -v[0])
     result = []
     for item, group in entries:
         existing = list(item.get("alternates") or [])
         core = match_name(item["name"]) or base_name(item["name"])
         seen = {item["stream_id"], *existing}
         # Chaînes exclues de la playlist : jamais reprises comme secours. Versions 4K : selon ``uhd``.
-        candidates = [(q, sid) for q, sid in index.get(core, []) if sid not in seen and sid not in excluded
+        key = item.get("_regional_group")
+        source = regional_index.get(key, []) if key else index.get(core, [])
+        candidates = [(q, sid) for q, sid in source if sid not in seen and sid not in excluded
                       and not (uhd == "never" and q == UHD_QUALITY)]
         if uhd == "backup":
             candidates.sort(key=lambda v: -(0.5 if v[0] == UHD_QUALITY else v[0]))
@@ -372,13 +496,13 @@ def select_items(api, saved: dict, kind: str, *, refresh: bool = False) -> tuple
     if kind == "live" and saved.get("hide_separators"):
         entries = [entry for entry in entries if not is_separator(entry[0]["name"])]
     if kind == "live":
-        entries = apply_custom_groups(entries, saved)
+        entries = apply_custom_groups(entries, saved, categories)
     if kind == "live" and saved.get("dedupe"):
         uhd = saved.get("uhd") if saved.get("uhd") in UHD_MODES else "backup"
         entries = dedupe(entries, uhd)
         if saved.get("failover") and saved.get("failover_any_category"):
             entries = extend_alternates_from_catalog(entries, items, uhd,
-                                                     set(saved.get(SELECTION_FIELDS["live"][2]) or ()))
+                                                     set(saved.get(SELECTION_FIELDS["live"][2]) or ()), categories)
     if kind == "live" and saved.get("hq_logos", True):
         entries = apply_hq_logos(entries, categories)
     names = saved.get("item_names") or {}

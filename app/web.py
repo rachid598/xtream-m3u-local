@@ -21,7 +21,7 @@ import time
 from .builder import display_logo, select_items
 from .custom import SLUG_RE, filter_kind, uses
 from .epg import EpgUnavailable, read_schedule, xml_channel_id
-from .builder import CUSTOM_PREFIX, normalize
+from .builder import CUSTOM_PREFIX, normalize, regional_group_key
 from .server import KINDS, Config, UpstreamError, XtreamAPI, live_channels_in_order, redact, redact_raw
 from .devices import DeviceStore, InvalidDevice
 from .streams import StreamManager
@@ -1087,6 +1087,10 @@ def catalog_payload(channels: list[dict], categories: dict[str, str], api: Xtrea
         }
         if multi:
             entry["profile"] = api.provider_of(c["stream_id"])
+        if kind == "live":
+            regional = regional_group_key(c["name"], categories.get(c["category_id"], ""))
+            if regional[0]:
+                entry["regional"] = regional
         hq = library.match(c["name"], categories.get(c["category_id"], "")) if library else None
         if hq:
             entry["logo_hq"] = f"/logo/{hq}.png"

@@ -303,6 +303,49 @@
   }
   const NUMBERED = /^\s*(\d{1,5})\s*[:=]\s*(.+)$/;  // « 4: Canal+ » = numéro de chaîne (comme sur le décodeur)
   const LIVES = Array.from({ length: 19 }, (_, i) => `Canal+ Live ${i + 1}`);
+  const numbered = (label, first, last) => Array.from({ length: last - first + 1 }, (_, i) => `${label} ${i + first}`);
+  const SPORT_FR = [
+    ...numbered('beIN Sports', 1, 3), 'Canal+ Foot', 'Ligue 1+ 1', 'Canal+ Sport', 'Canal+ Sport 360',
+    'Eurosport 1', 'Eurosport 2', 'RMC Sport 1', 'L’Équipe', 'L’Équipe Live Foot', 'Sport en France',
+    'RMC Sport 2', 'RMC Sport Access', 'RMC After Foot TV', 'Infosport+', 'Automoto La Chaîne',
+    'Golf+', 'Golf Channel', 'Journal du Golf TV', 'Equidia Live',
+    ...numbered('beIN Sports Max', 4, 10), ...numbered('Ligue 1+', 2, 10), ...LIVES,
+    ...numbered('Eurosport 360', 1, 32), ...numbered('RMC Sport Live', 1, 17), ...numbered('DAZN', 1, 2),
+  ];
+  const SPORT_AR = [
+    ...numbered('beIN Sports', 1, 9), 'Arryadia', 'Arryadia TNT', ...numbered('Alkass', 1, 8),
+    ...numbered('Thmanyah', 1, 3), ...numbered('AD Sports Premium', 1, 2), ...numbered('AD Sports', 1, 2),
+    'ON Sport', 'ON Sport Plus', 'ON Sport Max', ...numbered('Dubai Sports', 1, 3), 'Yas Sports',
+    'Al Ahly TV', 'Zamalek Sports', 'Nile Sport', 'Iraqia Sport', 'Alrabiaa Sport One', 'Alrabiaa Sport Two',
+    'Kuwait Sports', 'Kuwait Sports Plus', ...numbered('Bahrain Sport', 1, 2), 'Oman Sports',
+    'Jordan Sport', ...numbered('Libya Sport', 1, 2), 'Sharjah Sports', 'Sharjah Sports 2', 'Neelain Sport',
+    ...numbered('KSA Sport', 1, 4), ...numbered('Dubai Racing', 1, 3), 'beIN Sports News', 'beIN Sports Global',
+    ...numbered('beIN Sports Xtra', 1, 5), 'beIN Sports AFC', ...numbered('beIN Sports AFC', 1, 4),
+    ...numbered('Shahid Sports Event', 1, 3),
+  ];
+  const NILESAT = [
+    ...numbered('MBC', 1, 5), 'MBC Action', 'MBC Max', 'MBC Bollywood', 'MBC Drama',
+    'MBC Masr', 'MBC Masr 2', 'MBC Masr Drama', 'MBC Iraq', 'Wanasah',
+    'Rotana Cinema EGY', 'Rotana Cinema KSA', 'Rotana Classic', 'Rotana Drama', 'Rotana Khalijia',
+    'Rotana Comedy', 'Rotana Music', 'Rotana Clip', 'OSNtv Yahala', 'OSNtv Yahala Bil Arabi', 'OSNtv Yahala Aflam',
+    'DMC', 'DMC Drama', 'ON', 'ON Drama', 'CBC', 'CBC Drama', 'CBC Sofra', 'Al Hayat',
+    'Al Hayat Mosalsalat', 'Al Nahar', 'Al Nahar Drama', 'Sada El Balad', 'Nile Drama', 'Al Masriya',
+    'Al Aoula', '2M Maroc', '2M Monde', '2M', 'Athaqafia', 'Al Maghribia', 'Assadissa', 'Tamazight',
+    'Laayoune TV', 'Medi 1 TV', 'Medi 1 TV Maghreb', 'Medi 1 TV Afrique', 'Chada TV', 'Télé Maroc',
+    'Programme National', 'Canal Algérie', 'A3', 'TV4 Tamazight', 'TV5 Coran', 'Echourouk TV', 'Echourouk News',
+    'Ennahar TV', 'Samira TV', 'Algérie 6', 'Algérie 7', 'Algérie 8', 'Algérie 9 El Barlamaniya',
+    'Wataniya 1', 'Wataniya 2', 'El Hiwar Ettounsi', 'Nessma', 'Hannibal TV',
+    'Attessia', 'Libya Al Ahrar', 'Libya Al Wataniya', 'Al Wasat', 'El Mouritania',
+    'Saudi TV', 'SBC', 'Abu Dhabi TV', 'Al Emarat', 'Dubai TV', 'Sama Dubai', 'Sharjah TV',
+    'Kuwait TV 1', 'Kuwait TV 2', 'Bahrain TV', 'Qatar TV', 'Qatar 2', 'Al Rayyan', 'Oman TV',
+    'LBCI', 'LBC Sat', 'LBC International', 'MTV Lebanon', 'Al Jadeed', 'Télé Liban', 'Roya TV', 'Jordan TV',
+    'Palestine TV', 'Falastini TV', 'Syria TV', 'Al Iraqiya', 'Al Sharqiya', 'Al Sumaria', 'Yemen TV', 'Aden TV', 'Sudan TV',
+    'Al Jazeera', 'Al Jazeera Mubasher', 'Al Jazeera Documentary', 'Al Arabiya', 'Al Hadath',
+    'Al Araby TV', 'Al Araby 2', 'Asharq News', 'Sky News Arabia', 'Al Qahera News', 'BBC Arabic',
+    'France 24 Arabic', 'TRT Arabi', 'National Geographic Abu Dhabi',
+    'Spacetoon', 'Cartoon Network Arabic', 'Majid TV', 'Jeem TV', 'Baraem', 'Toyor Al Janah',
+    'Saudi Quran TV', 'Saudi Sunnah TV', 'Iqraa', 'Al Resalah', 'Zad TV', ...SPORT_AR,
+  ];
   // Liste « OTT » d'un fournisseur (catégorie « FRANCE HD | OTT »), dans son ordre, sans les séparateurs.
   const OTT = `TF1, France 2, France 3, France 4, France 5, M6, Arte, RTS Un, RTS Deux,
     Canal+, Canal+ Foot, Canal+ Sport, Canal+ Sport 360, Canal+ Box Office, Canal+ Grand Ecran, Canal+ Cinema(s), Canal+ Cinema, Canal+ Docs, Canal+ Kids,
@@ -364,6 +407,12 @@
         '8: Laayoune', 'Laayoune TV', 'Al Aoula Laayoune', 'Laâyoune TV',
         '9: Medi 1 TV', 'Medi1 TV', 'Medi 1 TV Maghreb', 'Medi1 TV Maghreb', 'Medi 1 TV Afrique', 'Medi 1 TV Europe',
         '10: Chada TV', 'Chada', '11: Télé Maroc', 'Tele Maroc', 'M24', 'Medi 1 News'] },
+    { name: 'Nilesat', match: 'exact', region: 'ar', hint: 'Chaînes du monde arabe disponibles dans le catalogue, avec MBC et Rotana en tête',
+      patterns: NILESAT },
+    { name: 'Sport FR', match: 'exact', region: 'fr', hint: 'Sport francophone, avec beIN Sports 1, 2 et 3 en tête',
+      patterns: SPORT_FR },
+    { name: 'Sport AR', match: 'exact', region: 'ar', hint: 'Sport arabophone, avec beIN Sports MENA en tête',
+      patterns: SPORT_AR },
     { name: 'Chaînes Canal+', match: 'words', hint: 'Seulement les chaînes dont le nom contient Canal+',
       patterns: ['Canal+', 'Canal plus'] },
     { name: 'Sport', match: 'words', hint: 'beIN, RMC Sport, Eurosport, Canal+ Sport…',
@@ -393,7 +442,10 @@
       });
   }
 
-  function groupMatches(core, group) {
+  function groupMatches(c, group) {
+    if (group.region && (c.regional?.[0] !== group.region || isSeparator(c.name))) return false;
+    if (c._core === undefined) c._core = matchName(c.name);
+    const core = group.region ? c.regional[1] : c._core;
     if (group.match === 'exact') return group._exact.has(core);
     const padded = ` ${core} `;
     return group._patterns.some((p) => padded.includes(` ${p} `));
@@ -415,8 +467,7 @@
         const manual = state.itemGroups[c.stream_id];
         if (manual === '-') continue;
         if (manual && known.has(manual)) { result.set(c.stream_id, manual); continue; }
-        if (c._core === undefined) c._core = matchName(c.name);
-        const group = groups.find((g) => g._patterns.length && groupMatches(c._core, g));
+        const group = groups.find((g) => g._patterns.length && groupMatches(c, g));
         if (group) result.set(c.stream_id, group.id);
       }
     }
@@ -459,6 +510,7 @@
     if (state.hiddenCache) return state.hiddenCache;
     const sel = state.sel.live;
     const best = new Map();
+    const regions = new Map(state.customGroups.filter((g) => g.region).map((g) => [g.id, g.region]));
     const kept = [];
     for (const c of state.cat.live.channels) {
       if (sel.excluded.has(c.stream_id)) continue;
@@ -468,7 +520,9 @@
       if (!dedupe) { best.set(`id\u0000${c.stream_id}`, [{ q: 0, id: c.stream_id, i: kept.length }]); kept.push(c.stream_id); continue; }
       const custom = groupAssignment().get(c.stream_id);
       if (c._core === undefined) c._core = matchName(c.name);
-      const key = `${custom ? CG + custom : group}\u0000${c._core || baseName(c.name)}`;
+      const regional = regions.get(custom);
+      const core = regional && regional === c.regional?.[0] ? c.regional[1] : c._core;
+      const key = `${custom ? CG + custom : group}\u0000${core || baseName(c.name)}`;
       // Versions 4K selon l'option (même règle que builder.version_rank) : en dernier secours par défaut.
       const raw = qualityOf(c.name);
       const q = raw === 4 && $('opt-uhd').value !== 'normal' ? 0.5 : raw;
@@ -551,6 +605,7 @@
     data.item_epg = sortedObject(state.itemEpg);
     data.item_xmltv = sortedObject(state.itemXmltv);
     data.custom_groups = state.customGroups.map((g) => ({ id: g.id, name: String(g.name || '').trim() || g.id, match: g.match,
+      ...(g.region ? { region: g.region } : {}),
       patterns: [...new Set((g.patterns || []).map((p) => String(p).trim()).filter(Boolean))] }));
     const known = new Set(state.customGroups.map((g) => g.id));
     data.item_groups = sortedObject(Object.fromEntries(Object.entries(state.itemGroups).filter(([, v]) => v === '-' || known.has(v))));
@@ -1431,11 +1486,32 @@
     state.groupOrder = [...ids.map((id) => CG + id), ...state.groupOrder.filter((k) => !k.startsWith(CG))];
   }
 
+  /** Ajoute une version par chaîne du modèle, avec priorité aux chaînes déjà retenues. */
+  function includeRegionalChannels(group) {
+    const sel = state.sel.live;
+    const uhd = $('opt-uhd').value;
+    const candidates = new Map();
+    for (const c of state.cat.live.channels) {
+      if (sel.excluded.has(c.stream_id) || !groupMatches(c, group)) continue;
+      const selected = sel.included.has(c.stream_id) || c.category_ids.some((cid) => catOn('live', cid));
+      const quality = qualityOf(c.name);
+      const score = quality === 4 && uhd !== 'normal' ? 0.5 : quality;
+      const key = c.regional[1];
+      const current = candidates.get(key);
+      if (!current || (selected && !current.selected) || (selected === current.selected && score > current.score)) {
+        candidates.set(key, { id: c.stream_id, selected, score });
+      }
+    }
+    for (const c of candidates.values()) if (!c.selected) sel.included.add(c.id);
+  }
+
   async function createGroup(preset = null) {
     let name = preset ? preset.name : await ask({ title: 'Nouveau groupe', text: 'Il sera placé en premier dans la playlist. Tu pourras le remplir avec des noms de chaînes ou en rangeant des chaînes avec 📁.',
       okLabel: 'Créer', input: { label: 'Nom du groupe (ex. TNT, Mes chaînes, Canal+)', value: '' } });
     name = String(name || '').trim().slice(0, 100);
     if (!name) return null;
+    const draft = state.customGroups;
+    if (preset?.region && (!(await ensureCatalog('live')) || draft !== state.customGroups)) return null;
     const existing = state.customGroups.find((g) => norm(g.name) === norm(name));
     if (existing) { toast(`Le groupe « ${existing.name} » existe déjà.`, 'warn'); return existing; }
     if (state.customGroups.length >= 50) { toast('50 groupes maximum.', 'warn'); return null; }
@@ -1443,8 +1519,10 @@
     let id = base;
     for (let n = 2; state.customGroups.some((g) => g.id === id); n += 1) id = `${base}-${n}`;
     const group = { id, name, match: preset ? preset.match : 'words', patterns: preset ? [...preset.patterns] : [] };
+    if (preset?.region) group.region = preset.region;
     state.customGroups.push(group);
     setCustomOrder([id, ...orderedCustomGroups().map((g) => g.id).filter((g) => g !== id)]);
+    if (group.region) includeRegionalChannels(orderedCustomGroups().find((g) => g.id === id));
     refresh();
     toast(`Groupe « ${name} » ajouté en tête de la playlist.`);
     return group;
@@ -1470,15 +1548,18 @@
   function groupMembers() {
     const members = new Map();
     const byId = state.cat.live.channelById;
+    const groups = new Map(orderedCustomGroups().filter((g) => g.region).map((g) => [g.id, g]));
     for (const [sid, gid] of groupAssignment()) {
       if (!members.has(gid)) members.set(gid, []);
       const c = byId.get(sid);
       if (c && !hiddenDuplicates().has(sid)) {
         const n = backupsOf(sid).length;
-        members.get(gid).push(displayName(c, 'live') + (n ? ` (+${n})` : ''));
+        const group = groups.get(gid);
+        const rank = group && c.regional?.[0] === group.region ? group._exact.get(c.regional[1]) : null;
+        members.get(gid).push({ rank: rank ?? Number.MAX_SAFE_INTEGER, name: displayName(c, 'live') + (n ? ` (+${n})` : '') });
       }
     }
-    return members;
+    return new Map([...members].map(([id, entries]) => [id, entries.sort((a, b) => a.rank - b.rank).map((c) => c.name)]));
   }
 
   /** Secours disponibles pour les chaînes d'un groupe perso (parmi les catégories cochées). */
@@ -1494,7 +1575,7 @@
 
   function previewText(names) {
     if (!state.cat.live.catalogLoaded) return 'Chargement du catalogue…';
-    if (!names || !names.length) return 'Aucune chaîne retenue pour l\'instant (coche d\'abord les catégories FR, puis ajoute des noms ou range des chaînes avec 📁).';
+    if (!names || !names.length) return 'Aucune chaîne retenue. Sélectionne une catégorie ou range une chaîne avec 📁.';
     return `${plural(names.length, 'chaîne', 'chaînes')} : ${names.slice(0, 8).join(', ')}${names.length > 8 ? '…' : ''}`;
   }
 

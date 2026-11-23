@@ -486,7 +486,7 @@ class EpgCache:
                 for c in remaining:
                     eid = (c.get("epg_id") or "").strip().lower()
                     manual = c.get("epg_manual")
-                    if eid not in auto_ids and not manual:
+                    if eid not in auto_ids and not manual and c.get("epg_match_name", True):
                         # Nom propre du groupe (« TF1 ») d'abord, puis le nom de la chaîne chez le fournisseur.
                         eid = (by_name.get(squash_name(c["epg_name"]), "") if c.get("epg_name") else "") \
                             or by_name.get(squash_name(match_name(c["name"])), "")

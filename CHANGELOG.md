@@ -2,6 +2,11 @@
 
 Format inspiré de « Keep a Changelog ». Les versions suivent le versionnage sémantique.
 
+## [3.29.0] — 2026-11-23
+
+- **Nilesat, Sport FR et Sport AR** sont proposés dans « Mes groupes ». Un clic ajoute le groupe et les chaînes correspondantes disponibles dans le catalogue de la playlist en cours. L’ordre des groupes reste réglable avec les flèches.
+- Les modèles Sport commencent par beIN. Les noms et catégories du fournisseur distinguent France et MENA, y compris pour les doublons et les versions de secours.
+
 ## [3.28.1] — 2026-11-23
 
 ### Guide TV
