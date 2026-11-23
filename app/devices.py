@@ -170,9 +170,19 @@ class DeviceStore:
         """Adresses affichées pour l'appareil : réseau local (« lan ») ou adresse publique (« external »)."""
         if value in (None, ""):
             return "lan"
-        if value not in ("lan", "external"):
-            raise InvalidDevice("Liens : lan ou external")
-        return value
+        if value in ("lan", "external"):
+            return value
+        # Adresse publique précise (ex. https://tv2.mondomaine.fr) : tunnel ou reverse proxy.
+        if isinstance(value, str) and re.fullmatch(r"https://[a-z0-9.-]{4,253}", value):
+            return value
+        raise InvalidDevice("Liens : lan, external ou une adresse https://…")
+
+    @classmethod
+    def _safe_links(cls, value: object) -> str:
+        try:
+            return cls._check_links(value)
+        except InvalidDevice:
+            return "lan"
 
     @staticmethod
     def _check_ip(ip: object) -> str:
@@ -279,7 +289,7 @@ class DeviceStore:
                             "playlist": self._check_playlist(raw.get("playlist")),
                             "priority": self._check_priority(raw.get("priority")),
                             "ip": self._check_ip(raw.get("ip")),
-                            "links": self._check_links(raw.get("links")) if raw.get("links") in ("lan", "external") else "lan",
+                            "links": self._safe_links(raw.get("links")),
                             "created_at": created})
         if dry_run:
             return

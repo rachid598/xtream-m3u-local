@@ -258,6 +258,15 @@ Dans **Appareils**, choisis pour chaque appareil **Liens : réseau local** (à l
 
 Seul le port des lecteurs (7777) est publié, en https, avec un **code d'appareil obligatoire** (pas besoin de `REMOTE_ACCESS`, ni d'ouvrir un port sur ta box) ; l'interface de gestion reste à la maison. Dans TiviMate hors de chez toi : serveur `https://tv.mondomaine.fr`, identifiant et mot de passe de l'appareil. Le compte et les clés du tunnel sont gardés dans `/data/cloudflared` (droits 0700), jamais affichés. « Supprimer le tunnel » le supprime aussi chez Cloudflare ; l'enregistrement DNS reste à effacer dans Cloudflare. **Attention :** les conditions du service gratuit de Cloudflare interdisent de faire passer surtout de la vidéo ; un usage intensif peut être coupé ou faire suspendre le compte. Pour un usage régulier, préfère Tailscale.
 
+**Avec Nginx Proxy Manager et ton domaine** (la vidéo passe directement par ta box, sans Cloudflare au milieu) :
+
+1. DNS : `tv2.mondomaine.fr` → adresse IP publique de ta box ; chez Cloudflare, en **« DNS only »** (nuage gris), sinon la vidéo repasse par Cloudflare. Sur la box : ports 443 (et 80 pour le certificat) vers Nginx Proxy Manager.
+2. Nginx Proxy Manager → Proxy Host : `tv2.mondomaine.fr`, scheme `http`, IP du serveur Unraid, port **7777** (jamais 7778) ; SSL Let's Encrypt, **Force SSL**, HTTP/2. Onglet Advanced : `proxy_buffering off;`, `proxy_request_buffering off;`, `proxy_read_timeout 3600s;`.
+3. Conteneur : `REMOTE_ACCESS=true` et `TRUSTED_PROXIES=` l'adresse de Nginx Proxy Manager vue par le serveur (IP de l'Unraid, ou réseau Docker comme `172.17.0.0/16`). Laisse `PUBLIC_BASE_URL` vide : chaque accès (maison, tunnel, proxy) reçoit alors ses propres liens, en https derrière le proxy.
+4. Système → Accès à distance → **Adresses publiques** : ajoute `tv2.mondomaine.fr`. Dans Appareils, « Liens » propose alors chaque adresse publique (tunnel ou proxy).
+
+Le diagnostic (« Accès distant ») dit ce que le serveur a réellement vu : proxy non déclaré (avec l'adresse à mettre dans `TRUSTED_PROXIES`), adresse arrivée en http au lieu d'https, adresse déclarée pas encore visitée.
+
 **Avec un nom de domaine et Traefik** (ou Nginx Proxy Manager) : n'expose **que le port 7777**, en HTTPS, et seulement les chemins des lecteurs. Exemple d'étiquettes Docker pour Traefik :
 
 ```yaml

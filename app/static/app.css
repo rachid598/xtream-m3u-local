@@ -656,3 +656,8 @@ dialog.preview-dialog { width: min(920px, calc(100vw - 24px)); padding: 14px; }
 .pass-eye { border: 1px solid var(--border); background: var(--bg-soft); border-radius: var(--radius-sm); padding: 8px 10px; cursor: pointer; line-height: 1; }
 .prov-creds { font-size: 13px; overflow-wrap: anywhere; }
 .prov-creds code { user-select: all; }
+.hosts-box { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 8px; }
+.hosts-box h3 { margin: 0; font-size: 15px; }
+.hosts-box p { margin: 0; }
+.hosts-form { display: flex; gap: 8px; flex-wrap: wrap; }
+.hosts-form input { flex: 1 1 240px; min-width: 0; }

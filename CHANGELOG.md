@@ -2,6 +2,13 @@
 
 Format inspiré de « Keep a Changelog ». Les versions suivent le versionnage sémantique.
 
+## [3.27.0] — 2026-11-23
+
+### Ajouté
+- **Adresses publiques de reverse proxy** (Système → Accès à distance) : Nginx Proxy Manager, Traefik… (ex. `tv2.mondomaine.fr`), en plus du tunnel Cloudflare. Dans Appareils, « Liens » propose chaque adresse publique ; la fiche affiche les adresses de celle choisie (`links` = `lan` ou une adresse `https://…`). `/api/status.public_addresses`.
+- **Diagnostic « Accès distant » basé sur ce qui a été vu** : requêtes arrivées par un reverse proxy non déclaré (adresse à mettre dans `TRUSTED_PROXIES`, et `REMOTE_ACCESS=true` si fermé), adresse arrivée en http (« active Force SSL »), adresses déclarées vues en https ou pas encore visitées, tunnel. Plus d'alerte « PUBLIC_BASE_URL n'est pas en https » quand il est simplement vide (conseillé avec plusieurs accès).
+- README : configuration pas à pas de Nginx Proxy Manager (DNS « DNS only », Force SSL, tampon désactivé pour la vidéo, `TRUSTED_PROXIES`).
+
 ## [3.26.0] — 2026-11-22
 
 ### Ajouté

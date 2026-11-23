@@ -498,6 +498,15 @@
       </div>
       <label class="check-row"><input type="checkbox" id="tailscale-local"> <span><strong>Tailscale = mon réseau local</strong> : tes appareils connectés à Tailscale (téléphone, ordinateur, TV chez quelqu'un d'autre) ont le même accès que chez toi, interface Web comprise, sans code supplémentaire. À n'activer que si ton réseau Tailscale ne contient que tes propres appareils.</span></label>
       <p class="hint" id="remote-hint"></p>
+      <div class="hosts-box">
+        <h3>Adresses publiques (reverse proxy)</h3>
+        <p class="muted small">Nginx Proxy Manager, Traefik… : le nom de domaine qui renvoie vers le port 7777 en https (ex. tv2.mondomaine.fr). Il est proposé dans « Liens » de chaque appareil. Le tunnel Cloudflare s'ajoute tout seul.</p>
+        <ul class="sum-list" id="hosts-list"></ul>
+        <form class="hosts-form" id="hosts-form" autocomplete="off">
+          <input id="hosts-input" type="text" maxlength="253" placeholder="tv2.mondomaine.fr" inputmode="url" spellcheck="false" aria-label="Adresse publique à ajouter">
+          <button type="submit" class="btn small">Ajouter</button>
+        </form>
+      </div>
       <div class="tunnel-box" id="tunnel-box" hidden>
         <h3>Tunnel Cloudflare <span class="pill" id="tunnel-pill"><span class="dot" aria-hidden="true"></span><span id="tunnel-pill-text">Non configuré</span></span></h3>
         <p class="muted small">Ton domaine Cloudflare donne accès aux lecteurs (port 7777) depuis l'extérieur, en https, sans ouvrir de port sur ta box. Chaque TV utilise son code d'appareil ; l'interface de gestion reste à la maison.</p>

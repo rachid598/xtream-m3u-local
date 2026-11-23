@@ -149,6 +149,8 @@ class RemoteDiagnosticTests(unittest.TestCase):
             def list(self):
                 return self.items
 
+        access.forget_observed()
+        self.addCleanup(access.forget_observed)
         base = Config("http://x.invalid", "u", "p")
         self.assertEqual(remote_check(base, None)["status"], "ok")
         opened = replace(base, remote_access=True)
@@ -159,6 +161,24 @@ class RemoteDiagnosticTests(unittest.TestCase):
         self.assertIn("https", warn["detail"])
         good = replace(opened, public_base_url="https://tv.example.org", trusted_proxies=PROXY)
         self.assertEqual(remote_check(good, Devices([{"playlist": "salon"}]))["status"], "ok")
+        # Nginx Proxy Manager non déclaré : le diagnostic donne l'adresse à mettre dans TRUSTED_PROXIES.
+        npm = {"Host": "tv2.example.org", "X-Forwarded-For": "203.0.113.7", "X-Forwarded-Proto": "https"}
+        access.observe("172.17.0.5", npm, ())
+        check = remote_check(replace(opened, trusted_proxies=()), Devices([{"playlist": "salon"}]))
+        self.assertEqual(check["status"], "warn")
+        self.assertIn("TRUSTED_PROXIES=172.17.0.5", check["detail"])
+        closed = remote_check(base, None)
+        self.assertIn("REMOTE_ACCESS=true", closed["detail"])
+        # Déclaré : vu en https → OK ; vu en http → conseil « Force SSL ».
+        access.forget_observed()
+        trusted = access.parse_networks("172.17.0.0/16")
+        access.observe("172.17.0.5", npm, trusted)
+        ok = remote_check(replace(opened, trusted_proxies=trusted), Devices([{"playlist": "salon"}]))
+        self.assertEqual(ok["status"], "ok", ok["detail"])
+        self.assertIn("https://tv2.example.org (reverse proxy, vu en https)", ok["detail"])
+        access.observe("172.17.0.5", {**npm, "X-Forwarded-Proto": "http"}, trusted)
+        self.assertIn("Force SSL", remote_check(replace(opened, trusted_proxies=trusted),
+                                                Devices([{"playlist": "salon"}]))["detail"])
 
 
 if __name__ == "__main__":

@@ -1972,12 +1972,15 @@
     return `http://${host}:${port}`;
   }
 
-  /** Adresse publique (tunnel Cloudflare ou PUBLIC_BASE_URL), vide si aucune. */
-  const externalBase = () => ((state.status && state.status.external_base) || '').replace(/\/$/, '');
+  /** Adresses publiques : tunnel Cloudflare, reverse proxy déclarés, sinon PUBLIC_BASE_URL. */
+  const publicAddresses = () => ((state.status && state.status.public_addresses) || []).map((a) => a.url.replace(/\/$/, ''));
+  const externalBase = () => publicAddresses()[0] || '';
+  /** Adresse affichée pour un appareil « externe » : l'adresse choisie si elle existe encore, sinon la première. */
+  const deviceExternal = (d) => (d.links && d.links.startsWith('https://') && publicAddresses().includes(d.links) ? d.links : externalBase());
 
   function deviceCard(d) {
-    const external = d.links === 'external';
-    const server = external ? (externalBase() || lanBase()) : lanBase();
+    const external = d.links === 'external' || String(d.links || '').startsWith('https://');
+    const server = external ? (deviceExternal(d) || lanBase()) : lanBase();
     const qs = new URLSearchParams({ username: d.username, password: d.password });
     const m3u = d.playlist ? `${server}/p/${d.playlist}.m3u?token=${encodeURIComponent(d.password)}`
       : `${server}/get.php?${qs}&type=m3u_plus&output=ts`;
@@ -2015,7 +2018,7 @@
         h('div', { class: 'field' }, h('label', { text: 'Priorité (limite de connexions)' }), prioritySelect(d)),
         h('div', { class: 'field' }, h('label', { text: 'Adresse IP de la TV (facultatif)' }), ipInput(d)),
         h('div', { class: 'field' }, h('label', { text: 'Liens' }), linksSelect(d))),
-      external && !externalBase() ? h('p', { class: 'hint warn-text', text: 'Aucune adresse publique : active le tunnel Cloudflare (Système → Accès à distance) ou définis PUBLIC_BASE_URL. Liens du réseau local affichés en attendant.' }) : null,
+      external && !externalBase() ? h('p', { class: 'hint warn-text', text: 'Aucune adresse publique : active le tunnel Cloudflare ou ajoute ton adresse de reverse proxy (Système → Accès à distance). Liens du réseau local affichés en attendant.' }) : null,
       h('div', { class: 'device-grid' },
         h('div', { class: 'device-mode' },
           h('h4', { text: '📺 Mode « Playlist M3U » (VLC, TiviMate, Android TV…)' }),
@@ -2032,9 +2035,12 @@
   }
 
   function linksSelect(d) {
+    const current = d.links === 'external' ? externalBase() : d.links;
+    const addresses = publicAddresses();
     const select = h('select', { 'aria-label': `Liens de ${d.name}` },
-      h('option', { value: 'lan', text: 'Réseau local : à la maison', selected: d.links !== 'external' }),
-      h('option', { value: 'external', text: 'Externe : hors de la maison', selected: d.links === 'external' }));
+      h('option', { value: 'lan', text: 'Réseau local : à la maison', selected: !current || current === 'lan' }),
+      ...addresses.map((url) => h('option', { value: url, text: `Externe : ${url.replace('https://', '')}`, selected: url === current })),
+      addresses.length ? null : h('option', { value: 'external', text: 'Externe : hors de la maison', selected: d.links === 'external' }));
     select.addEventListener('change', async () => {
       try { await request(`/api/devices/${d.id}`, 'PUT', { links: select.value }); toast('Liens de l\'appareil modifiés'); loadDevices(); }
       catch (error) { toast(error.message, 'error'); loadDevices(); }
@@ -2067,6 +2073,13 @@
   async function loadDevices() {
     try { devicesData = await request('/api/devices'); } catch (error) { showError(error.message); return; }
     renderDevicePlaylistSelect($('device-playlist'), $('device-playlist').value);
+    // Liens du nouvel appareil : réseau local ou une des adresses publiques (tunnel, reverse proxy).
+    const links = $('device-links');
+    const previous = links.value;
+    links.replaceChildren(h('option', { value: 'lan', text: 'Réseau local : à la maison' }),
+      ...(publicAddresses().length ? publicAddresses().map((url) => h('option', { value: url, text: `Externe : ${url.replace('https://', '')}` }))
+        : [h('option', { value: 'external', text: 'Externe : hors de la maison' })]));
+    if ([...links.options].some((o) => o.value === previous)) links.value = previous;
     $('require-token').checked = devicesData.require_token;
     $('require-token-hint').textContent = devicesData.access_token_env
       ? 'ACCESS_TOKEN est défini dans la configuration : un code est toujours exigé (ACCESS_TOKEN ou code d\'appareil).'
@@ -2171,9 +2184,31 @@
     loadTunnel();
   }
 
+  let settingsData = null;
+
+  function renderHosts() {
+    const hosts = (settingsData && settingsData.public_hosts) || [];
+    const list = $('hosts-list');
+    list.replaceChildren(...hosts.map((host) => h('li', null, h('span', null, h('code', { text: `https://${host}` })),
+      h('button', { type: 'button', class: 'btn small', text: 'Retirer', onclick: () => saveHosts(hosts.filter((x) => x !== host)) }))));
+    if (!hosts.length) list.append(h('li', { class: 'empty', text: 'Aucune adresse de reverse proxy.' }));
+    $('hosts-form').hidden = !(settingsData && settingsData.editable);
+  }
+
+  async function saveHosts(hosts) {
+    try {
+      settingsData = { ...settingsData, ...(await request('/api/settings', 'PUT', { public_hosts: hosts })) };
+      renderHosts();
+      state.status = await request('/api/status');   // adresses proposées aux appareils
+      toast('Adresses publiques enregistrées');
+    } catch (error) { toast(error.message, 'error'); }
+  }
+
   async function loadSettings() {
     let data;
     try { data = await request('/api/settings'); } catch (_) { return; }
+    settingsData = data;
+    renderHosts();
     $('tailscale-local').checked = data.tailscale_local;
     $('tailscale-local').disabled = !data.editable;
     $('remote-hint').textContent = `Cette page est ouverte depuis ${data.client_ip}${data.client_tailscale ? ' (Tailscale)' : ''}.`
@@ -2769,6 +2804,13 @@
   });
   $('epg-suggest').addEventListener('click', suggestGuides);
   $('tunnel-form').addEventListener('submit', connectTunnel);
+  $('hosts-form').addEventListener('submit', (event) => {
+    event.preventDefault();
+    const host = $('hosts-input').value.trim().toLowerCase().replace(/^https?:\/\//, '').replace(/\/.*$/, '');
+    if (!/^([a-z0-9-]+\.)+[a-z]{2,}$/.test(host)) { toast('Adresse attendue : ex. tv2.mondomaine.fr', 'error'); return; }
+    $('hosts-input').value = '';
+    saveHosts([...new Set([...((settingsData && settingsData.public_hosts) || []), host])]);
+  });
   $('tunnel-toggle').addEventListener('click', async () => {
     const stopping = $('tunnel-toggle').textContent === 'Arrêter';
     try { renderTunnel(await request(`/api/tunnel/${stopping ? 'stop' : 'start'}`, 'POST')); loadTunnel({ poll: !stopping }); }

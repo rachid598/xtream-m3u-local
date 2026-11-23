@@ -140,3 +140,41 @@ class DeviceLiveTests(StackTestCase):
         self.assertTrue(streams)
         self.assertEqual((streams[0]["device_id"], streams[0]["device"]), (device["id"], "Chambre"))
         self.assertIn("channel", streams[0])
+
+
+class PublicHostsTests(StackTestCase):
+    """Adresses publiques de reverse proxy (Nginx Proxy Manager) proposées aux appareils, en plus du tunnel."""
+
+    def test_hosts_and_device_choice(self):
+        from app import settings
+        settings.install(settings.Settings(self.tmp.name))
+        self.addCleanup(settings.install, None)
+        status, data = self.send(self.stack.web_base + "/api/settings", "PUT",
+                                 {"public_hosts": ["https://TV2.mondomaine.fr/", "pas un nom", "tv2.mondomaine.fr"]})
+        self.assertEqual(data["public_hosts"], ["tv2.mondomaine.fr"])
+        info = json.loads(self.get(self.stack.web_base + "/api/status")[1])
+        self.assertEqual(info["public_addresses"], [{"url": "https://tv2.mondomaine.fr", "source": "proxy"}])
+        current = tunnel.Tunnel(self.tmp.name, 7777, binary=FAKE)
+        current._save_state({"tunnel_id": "6ff42ae2-765d-4adf-8112-31c55c1551ef", "hostname": "tv.mondomaine.fr",
+                             "enabled": True})
+        tunnel.install(current)
+        self.addCleanup(tunnel.install, None)
+        info = json.loads(self.get(self.stack.web_base + "/api/status")[1])
+        self.assertEqual([a["url"] for a in info["public_addresses"]],
+                         ["https://tv.mondomaine.fr", "https://tv2.mondomaine.fr"])
+        status, device = self.send(self.stack.web_base + "/api/devices", "POST",
+                                   {"name": "TV maman", "links": "https://tv2.mondomaine.fr"})
+        self.assertEqual((status, device["links"]), (201, "https://tv2.mondomaine.fr"))
+        self.assertEqual(self.send(self.stack.web_base + "/api/devices", "POST",
+                                   {"name": "X", "links": "http://tv2.mondomaine.fr"})[0], 400)
+
+    def test_links_follow_the_proxy(self):
+        """Derrière Nginx Proxy Manager déclaré : vraie adresse du visiteur et liens en https du domaine."""
+        from app.access import parse_networks
+        stack = self.make_stack(remote_access=True, trusted_proxies=parse_networks("127.0.0.1/32"))
+        self.create({"slug": "salon", "name": "Salon", "category_ids": ["1"]})
+        device = self.send(self.stack.web_base + "/api/devices", "POST", {"name": "TV", "playlist": "salon"})[1]
+        via = {"Host": "tv2.mondomaine.fr", "X-Forwarded-For": "203.0.113.9", "X-Forwarded-Proto": "https"}
+        status, body, _ = self.get(f"{stack.proxy_base}/p/salon.m3u?token={device['password']}", via)
+        self.assertEqual(status, 200)
+        self.assertIn("https://tv2.mondomaine.fr/stream/42.ts", body.decode())

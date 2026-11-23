@@ -165,3 +165,40 @@ def parse_hosts(raw: str) -> tuple:
             raise ValueError(f"ALLOWED_HOSTS : nom invalide « {name} »")
         names.append(name)
     return tuple(names)
+
+
+# ------------------------------------------------------------ reverse proxy observé
+# Diagnostic « Accès distant » : ce que le serveur a réellement vu passer par un reverse proxy (Nginx Proxy
+# Manager, Traefik, tunnel), pour dire si TRUSTED_PROXIES est bon et si les liens partent en https.
+_SEEN_LOCK = threading.Lock()
+_SEEN: dict[str, dict] = {"trusted": {}, "untrusted": {}}
+SEEN_MAX = 20
+
+
+def observe(peer: str, headers, proxies: tuple) -> None:
+    """Mémorise une requête arrivée avec des en-têtes de reverse proxy (aucun secret : adresses et nom d'hôte)."""
+    if not any(headers.get(h) for h in FORWARD_HEADERS):
+        return
+    host = (headers.get("Host") or "").split(":")[0].lower()[:120]
+    proto = (headers.get("X-Forwarded-Proto") or "").strip().lower()[:10]
+    trusted = bool(proxies) and _in(_ip(peer), proxies)
+    with _SEEN_LOCK:
+        bucket = _SEEN["trusted" if trusted else "untrusted"]
+        key = host if trusted else peer
+        bucket[key] = {"peer": peer, "host": host, "proto": proto, "at": time.time()}
+        while len(bucket) > SEEN_MAX:
+            bucket.pop(next(iter(bucket)))
+
+
+def observed(max_age: float = 7 * 86400) -> dict:
+    """Requêtes de reverse proxy vues récemment : ``{"trusted": [...], "untrusted": [...]}``."""
+    now = time.time()
+    with _SEEN_LOCK:
+        return {kind: [dict(v) for v in bucket.values() if now - v["at"] <= max_age]
+                for kind, bucket in _SEEN.items()}
+
+
+def forget_observed() -> None:
+    with _SEEN_LOCK:
+        for bucket in _SEEN.values():
+            bucket.clear()

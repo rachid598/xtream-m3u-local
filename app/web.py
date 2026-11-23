@@ -569,8 +569,10 @@ class WebHandler(BaseHTTPRequestHandler):
             "version": __version__,
             "playlist_port": self.config.port,
             "public_base_url": self.config.public_base_url,
-            # Adresse publique pour les appareils « externes » : tunnel Cloudflare, sinon PUBLIC_BASE_URL.
-            "external_base": f"https://{tunnel.hostname()}" if tunnel.hostname() else self.config.public_base_url,
+            # Adresses publiques pour les appareils « externes » : tunnel Cloudflare, reverse proxy déclarés
+            # (Système → Accès à distance), sinon PUBLIC_BASE_URL. La première sert par défaut.
+            "public_addresses": public_addresses(self.config),
+            "external_base": (public_addresses(self.config) or [{"url": ""}])[0]["url"],
             "epg_enabled": self.config.enable_epg,
             "token_required": bool(self.config.access_token) or bool(self.devices and self.devices.require_token),
             "web_auth": bool(self.config.web_password),
@@ -951,6 +953,19 @@ class WebHandler(BaseHTTPRequestHandler):
             return self.json(404, {"error": "Playlist introuvable"})
         except RuntimeError:
             return self.json(500, {"error": "Impossible de modifier /data"})
+
+
+def public_addresses(config) -> list[dict]:
+    """Adresses publiques du port des lecteurs : ``[{"url", "source"}]`` (tunnel, reverse proxy, PUBLIC_BASE_URL)."""
+    result = []
+    if tunnel.hostname():
+        result.append({"url": f"https://{tunnel.hostname()}", "source": "tunnel"})
+    for host in settings.public_hosts():
+        if not any(r["url"] == f"https://{host}" for r in result):
+            result.append({"url": f"https://{host}", "source": "proxy"})
+    if not result and config.public_base_url:
+        result.append({"url": config.public_base_url.rstrip("/"), "source": "config"})
+    return result
 
 
 def profiles(api, config) -> list[dict]:

@@ -363,11 +363,24 @@ def run(api, epg, series, streams, store, config, devices=None, profile: str | N
 
 
 def remote_check(config, devices) -> dict:
-    """Accès hors du réseau local : fermé, ou ouvert avec les protections attendues."""
+    """Accès hors du réseau local : fermé, ou ouvert avec les protections attendues.
+
+    S'appuie aussi sur ce que le serveur a réellement vu passer par un reverse proxy (Nginx Proxy Manager,
+    Traefik, tunnel) : proxy non déclaré dans TRUSTED_PROXIES, connexion arrivée en http au lieu d'https.
+    """
+    from . import access, settings, tunnel
     label = "Accès distant"
     web = (" L'interface Web est joignable hors du réseau local (WEB_REMOTE=true, mot de passe obligatoire)."
            if config.web_remote else " L'interface Web reste réservée au réseau local.")
-    if not config.remote_access:
+    seen = access.observed()
+    untrusted = sorted({o["peer"] for o in seen["untrusted"]})
+    proxy_hint = (f"des requêtes arrivent par un reverse proxy non déclaré ({', '.join(untrusted[:3])}) : ajoute "
+                  f"TRUSTED_PROXIES={untrusted[0]} (ou le réseau Docker du proxy, ex. 172.17.0.0/16)") if untrusted else ""
+    tunnel_on = tunnel.active()
+    if not config.remote_access and not tunnel_on:
+        if untrusted:
+            return _result("remote", label, "warn", "Fermé (REMOTE_ACCESS=false) alors que " + proxy_hint
+                           + " et REMOTE_ACCESS=true pour ouvrir l'accès avec code d'appareil." + web)
         return _result("remote", label, "warn" if config.web_remote else "ok",
                        "Fermé : seules les connexions du réseau local sont acceptées sur le port des lecteurs "
                        "(REMOTE_ACCESS=false)." + web)
@@ -377,23 +390,38 @@ def remote_check(config, devices) -> dict:
         listed = []
     if not listed:
         return _result("remote", label, "error",
-                       "Ouvert (REMOTE_ACCESS=true) mais aucun appareil : personne ne peut se connecter "
-                       "de l'extérieur. Crée un appareil (onglet Appareils) pour chaque personne.")
+                       "Ouvert mais aucun appareil : personne ne peut se connecter de l'extérieur. "
+                       "Crée un appareil (onglet Appareils) pour chaque personne.")
     problems = []
     open_devices = [d for d in listed if not d.get("playlist")]
     if open_devices:
         problems.append(f"{len(open_devices)} appareil(s) sans playlist : accès à tout le catalogue à distance "
                         "(lie chaque appareil à une playlist)")
-    if not config.public_base_url.startswith("https://"):
+    if config.public_base_url and not config.public_base_url.startswith("https://"):
         problems.append("PUBLIC_BASE_URL n'est pas en https:// : codes et identifiants circulent en clair")
-    if not config.trusted_proxies:
-        problems.append("TRUSTED_PROXIES vide : derrière un reverse proxy, toutes les connexions semblent venir "
-                        "de lui (blocage des essais et lectures par appareil faussés)")
+    if proxy_hint:
+        problems.append(proxy_hint)
+    trusted = [o for o in seen["trusted"] if o["host"] and o["host"] != tunnel.hostname()]
+    plain = sorted({o["host"] for o in trusted if o["proto"] != "https"})
+    if plain:
+        problems.append(f"{', '.join(plain)} arrive en http : active SSL et « Force SSL » dans le reverse proxy")
+    good = sorted({o["host"] for o in trusted if o["proto"] == "https"})
+    declared = settings.public_hosts()
+    missing = [h for h in declared if h not in good and h not in plain]
+    if config.remote_access and not tunnel_on and not config.trusted_proxies and not untrusted:
+        problems.append("TRUSTED_PROXIES vide : derrière un reverse proxy, indique son adresse (vraie adresse "
+                        "des visiteurs, liens en https)")
     if config.web_remote:
         problems.append("interface Web exposée (WEB_REMOTE=true)")
+    routes = []
+    if tunnel_on:
+        routes.append(f"tunnel Cloudflare https://{tunnel.hostname()}")
+    routes += [f"https://{h} (reverse proxy, vu en https)" for h in good]
+    routes += [f"https://{h} (déclarée, pas encore de visite vue)" for h in missing]
     base = (f"Ouvert avec code obligatoire : {len(listed)} appareil(s), "
             f"{len(listed) - len(open_devices)} limité(s) à leur playlist ; mode direct et playlist complète refusés "
-            "à distance ; adresse bloquée 15 min après 10 codes faux.")
+            "à distance ; aucun indice sans bon code ; adresse bloquée 15 min après 10 codes faux."
+            + (f" Accès : {', '.join(routes)}." if routes else ""))
     if problems:
         return _result("remote", label, "warn", base + " À vérifier : " + " ; ".join(problems) + ".")
     return _result("remote", label, "ok", base + web)

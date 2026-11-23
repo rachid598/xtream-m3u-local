@@ -1946,6 +1946,7 @@ class Handler(BaseHTTPRequestHandler):
         self.request_device = None
         self.client_ip, self.remote = access.client_address(self.client_address[0], self.headers,
                                                             self.config.proxies(), settings.local_networks(self.config))
+        access.observe(self.client_address[0], self.headers, self.config.proxies())
         if path == "/health" and not self.remote:
             return self.response(HTTPStatus.OK, b"OK\n", "text/plain; charset=utf-8", head_only=head_only)
         if self.remote:
