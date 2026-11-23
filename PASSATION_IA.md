@@ -1,14 +1,15 @@
 # Passation — Xtream M3U Local
 
-> **État au 20 novembre 2026 — version 3.28.0.** Document à transmettre tel quel à l'IA suivante avec le dépôt.
+> **État au 23 novembre 2026 — version 3.28.1.** Document à transmettre tel quel à l'IA suivante avec le dépôt.
 > Aucun mot de passe, token ni URL fournisseur réelle ne doit être copié ici ni commité sur GitHub.
 
-### Correctif Guide TV en préparation
+### Guide TV en 3.28.1
 
 - La 3.28.0 pouvait compter les programmes périmés comme une couverture valide. Le correctif indexe les horaires XMLTV et essaie la source suivante si la chaîne n'a aucun programme en cours ou à venir sous 24 h. Le cache reconstruit son index à partir du XML existant lors de la première lecture.
 - En mode `EPG_SOURCE=xmltv`, les guides externes configurés prennent le relais d'un guide principal indisponible, y compris pour les appareils Xtream. Une adresse ajoutée dans **Système → Guides externes** permet aussi d'émettre les identifiants EPG de secours nécessaires au rapprochement.
-- Les liens vérifiés figurent dans le README et l'interface. Pour le Maroc, associer Al Aoula, Al Maghribia et Tamazight aux entrées « Arabic.ma » d'Open‑EPG. La couverture reste partielle, dont 2M Monde via Arabic EPG. Arryadia reste à valider avec une grille détaillée.
-- Avant un déploiement général, actualiser le guide sur une TV TiviMate pilote et vérifier les mêmes chaînes avec une playlist M3U et un appareil Xtream. Le test automatisé couvre l'ajout d'une source externe depuis l'interface et l'alignement des identifiants entre les deux protocoles et leurs guides.
+- Au premier démarrage, les réglages de l'image ajoutent XML TV Fr, EPGShare France, Open‑EPG Maroc et Arabic EPG après les sources déjà enregistrées. Le lien EPGShare Maroc en 404 est retiré des anciens réglages de l'interface. La liste se modifie dans **Système → Guides externes** et les retraits sont conservés.
+- Le rapprochement automatique d'Open‑EPG couvre Al Aoula, Al Maghribia et Tamazight. Arabic EPG couvre 2M Monde et Chada TV. Les entrées génériques de ces deux guides sont exclues du rapprochement automatique. Arryadia reste à valider avec une grille détaillée.
+- Après avoir récupéré l'image `latest` sur Unraid, actualiser le guide sur TiviMate et examiner la source affichée dans **Guide de mes groupes**. Les tests vérifient l'alignement des identifiants M3U, Xtream et XMLTV quand le fournisseur est indisponible.
 
 ## 1. Objectif et contexte utilisateur
 

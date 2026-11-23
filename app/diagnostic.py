@@ -295,7 +295,8 @@ def run(api, epg, series, streams, store, config, devices=None, profile: str | N
         xmltv_result["status"] = "warn"
         xmltv_result["detail"] += " ; le guide est construit chaîne par chaîne via l'API (mode auto)"
     results.extend(r for r in (xmltv_result, api_result) if r)
-    results.extend(extra_guides_check(epg, pool))
+    if config.enable_epg:
+        results.extend(extra_guides_check(epg, pool))
 
     # 4. Flux -----------------------------------------------------------------------------
     busy = streams is not None and (streams.busy() if hasattr(streams, "busy") else streams.count()) > 0
@@ -439,8 +440,7 @@ def extra_guides_check(epg, pool: list[dict]) -> list[dict]:
         started = time.monotonic()
         try:
             extra.ensure()
-            available = extra.upcoming_ids()
-            names = extra.names(available)
+            available, names = extra.automatic_matches(extra.upcoming_ids())
         except EpgUnavailable as exc:
             results.append(_result(f"epg-extra-{number}", label, "error", str(exc), int((time.monotonic() - started) * 1000)))
             continue

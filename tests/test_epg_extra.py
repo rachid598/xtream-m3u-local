@@ -12,7 +12,8 @@ from threading import Thread
 from urllib.parse import urlencode
 
 from app.diagnostic import extra_guides_check
-from app.epg import EpgCache, read_schedule, xmltv_time
+from app import settings
+from app.epg import DEFAULT_EPG_GUIDES, EPGSHARE_FR, GENERIC_EPG_CHANNELS, EpgCache, read_schedule, xmltv_time
 from app.server import Config
 from app.streams import StreamManager
 from app.vod import KeyedCache
@@ -78,6 +79,52 @@ class ThrottleTests(unittest.TestCase):
         self.assertGreater(manager.start_delay(20), 15)
         manager.release(session)
         self.assertEqual(manager.start_delay(), 0)
+
+
+class DefaultGuideTests(unittest.TestCase):
+    def test_upgrade_adds_defaults_after_custom_urls_and_keeps_removals(self):
+        with tempfile.TemporaryDirectory() as directory:
+            defaults = tuple(DEFAULT_EPG_GUIDES)
+            store = settings.Settings(directory, default_epg_sources=defaults)
+            self.assertEqual(store.get()["epg_sources"], list(defaults))
+            custom = "https://guide.example/ma.xml"
+            store.path.write_text(json.dumps({"epg_sources": [custom, settings.RETIRED_EPG_SOURCE]}), encoding="utf-8")
+            self.assertEqual(store.get()["epg_sources"], [custom, *defaults])
+            store.update({"epg_sources": [custom]})
+            restarted = settings.Settings(directory, default_epg_sources=defaults)
+            self.assertEqual(restarted.get()["epg_sources"], [custom])
+            restarted.update({"epg_sources": []})
+            self.assertEqual(settings.Settings(directory, default_epg_sources=defaults).get()["epg_sources"], [])
+
+    def test_moroccan_defaults_match_verified_channels_and_keep_explicit_choices(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            guide = root / "morocco.xml"
+            guide.write_text(
+                f'<tv><channel id="AlAoulaAr.ma"><display-name>Al Aoula Arabic.ma</display-name></channel>'
+                f'<channel id="Arryadia.ma@HD"><display-name>Arryadia</display-name></channel>'
+                f'<programme channel="AlAoulaAr.ma" start="{START}" stop="{STOP}"><title>Actualités</title></programme>'
+                f'<programme channel="Arryadia.ma@HD" start="{START}" stop="{STOP}"><title>Bloc générique</title></programme></tv>',
+                encoding="utf-8")
+            epg = EpgCache((root / "absent.xml").as_uri, str(root / "primary"))
+            epg.mode = "xmltv"
+            automatic = DEFAULT_EPG_GUIDES["https://www.open-epg.com/files/morocco.xml.gz"]
+            french = root / "france.xml"
+            french.write_text(guide.read_text(encoding="utf-8")
+                              .replace("AlAoulaAr.ma", "al.aoula.fr").replace("Arryadia.ma@HD", "arryadia.fr")
+                              .replace("Al Aoula Arabic.ma", "Al Aoula").replace("Actualités", "Chaîne nationale"),
+                              encoding="utf-8")
+            epg.extras = [
+                EpgCache(french.as_uri, str(root / "france"), automatic_exclusions=GENERIC_EPG_CHANNELS[EPGSHARE_FR]),
+                EpgCache(guide.as_uri, str(root / "ext"), automatic_channels=automatic),
+            ]
+            channels = [channel(1, "MA: Al Aoula HD"), channel(2, "Arryadia", "Arryadia.ma@HD")]
+            path, stats = epg.playlist_guide("automatic", channels)
+            self.assertEqual(read_schedule(path)["xtream-1"][0][2], "Actualités")
+            self.assertEqual([c["stream_id"] for c in stats["missing"]], ["2"])
+            channels[1]["epg_manual"] = True
+            _, stats = epg.playlist_guide("manual", channels)
+            self.assertEqual(stats["missing"], [])
 
 
 class ExternalGuideTests(unittest.TestCase):
@@ -350,7 +397,6 @@ class GroupExternalFirstTests(unittest.TestCase):
 
 class GroupGuideApiTests(StackTestCase):
     def test_live_setting_connects_m3u_and_xtream_to_external_guide_in_xmltv_mode(self):
-        from app import settings
         from .fake_xtream import FakeXtream
 
         root = Path(self.tmp.name)
@@ -383,7 +429,6 @@ class GroupGuideApiTests(StackTestCase):
         self.assertEqual(FakeXtream.simple_epg_calls, [])
 
     def test_groups_and_search(self):
-        from app import settings
         settings.install(settings.Settings(self.tmp.name))
         self.addCleanup(settings.install, None)
         root = Path(self.tmp.name)

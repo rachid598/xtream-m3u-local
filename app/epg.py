@@ -40,6 +40,29 @@ MAX_EPG_BYTES = 1024 * 1024 * 1024  # 1 Gio
 RETRY_AFTER_FAILURE = 900  # 15 min sans nouvelle tentative après un échec
 EPG_MODES = ("auto", "xmltv", "api")
 EPG_LOOKAHEAD = 24 * 3600
+EPGSHARE_FR = "https://epgshare01.online/epgshare01/epg_ripper_FR1.xml.gz"
+# Pour le Maroc, les noms ne coïncident pas toujours et certaines entrées sont des blocs génériques.
+# On limite le rapprochement automatique aux grilles vérifiées. Les choix manuels restent possibles.
+DEFAULT_EPG_GUIDES = {
+    "https://xmltvfr.fr/xmltv/xmltv_fr.xml.gz": None,
+    EPGSHARE_FR: None,
+    "https://www.open-epg.com/files/morocco.xml.gz": {
+        "alaoula": "alaoulaar.ma",
+        "almaghribia": "almaghribiaar.ma",
+        "maghribia": "almaghribiaar.ma",
+        "tamazight": "tamazightar.ma",
+        "tamazighttv": "tamazightar.ma",
+        "tamazighte": "tamazightar.ma",
+    },
+    "https://raw.githubusercontent.com/iimnm/arabic-epg/output/guide.xml.gz": {
+        "2mmonde": "2mmonde.ma@sd",
+        "chadatv": "chadatv.ma@sd",
+        "chada": "chadatv.ma@sd",
+    },
+}
+GENERIC_EPG_CHANNELS = {
+    EPGSHARE_FR: ("al.aoula.fr", "al.maghribia.fr", "arryadia.fr", "assadissa.fr", "medi1tv.fr", "télé.maroc.fr"),
+}
 
 
 def _coverage_periods(periods: list[tuple[int, int]]) -> list[tuple[int, int]]:
@@ -127,12 +150,15 @@ class EpgUnavailable(Exception):
 
 class EpgCache:
     def __init__(self, url_factory: Callable[[], str], data_dir: str, *, max_age: int = 12 * 3600,
-                 user_agent: str = "XtreamM3ULocal"):
+                 user_agent: str = "XtreamM3ULocal", automatic_channels: dict[str, str] | None = None,
+                 automatic_exclusions: tuple[str, ...] = ()):
         self._url_factory = url_factory
         self.directory = Path(data_dir) / "epg"
         self.source = self.directory / "xmltv.xml"
         self.max_age = max(60, max_age)
         self.user_agent = user_agent
+        self.automatic_channels = automatic_channels
+        self.automatic_exclusions = automatic_exclusions
         self._download_lock = threading.Lock()
         self._filter_lock = threading.Lock()
         self._index_lock = threading.Lock()
@@ -333,6 +359,14 @@ class EpgCache:
         return {name: cid for name, ids in self._name_candidates().items()
                 if (cid := next((i for i in ids if available is None or i in available), None)) is not None}
 
+    def automatic_matches(self, available: set[str]) -> tuple[set[str], dict[str, str]]:
+        """Identifiants et noms éligibles au rapprochement automatique dans ce guide."""
+        available = available.difference(self.automatic_exclusions)
+        if self.automatic_channels is None:
+            return available, self.names(available)
+        names = {name: cid for name, cid in self.automatic_channels.items() if cid in available}
+        return set(names.values()), names
+
     def _name_candidates(self) -> dict[str, list[str]]:
         key = self._source_key()
         if key is None:
@@ -446,16 +480,17 @@ class EpgCache:
                 except EpgUnavailable:
                     continue
                 available = extra.upcoming_ids(now)
-                by_name = extra.names(available)
+                auto_ids, by_name = extra.automatic_matches(available)
                 mapping: dict[str, list[str]] = {}
                 left = []
                 for c in remaining:
                     eid = (c.get("epg_id") or "").strip().lower()
-                    if eid not in available and not c.get("epg_manual"):
+                    manual = c.get("epg_manual")
+                    if eid not in auto_ids and not manual:
                         # Nom propre du groupe (« TF1 ») d'abord, puis le nom de la chaîne chez le fournisseur.
                         eid = (by_name.get(squash_name(c["epg_name"]), "") if c.get("epg_name") else "") \
                             or by_name.get(squash_name(match_name(c["name"])), "")
-                    if eid in available:
+                    if eid in (available if manual else auto_ids):
                         ours = xml_channel_id(c)
                         if ours not in mapping.setdefault(eid, []):
                             mapping[eid].append(ours)
@@ -605,7 +640,8 @@ def suggest_guides(sources: list[tuple[str, "EpgCache"]], missing: list[dict], *
     pool: dict[str, list[tuple[str, str, str, int]]] = {}   # nom comparable → [(id, nom, source, programmes)]
     for label, cache in sources:
         try:
-            names, labels, counts = cache.names(cache.upcoming_ids()), cache.labels(), cache.index()
+            _, names = cache.automatic_matches(cache.upcoming_ids())
+            labels, counts = cache.labels(), cache.index()
         except Exception:  # guide illisible : simplement ignoré
             continue
         for core, cid in names.items():
