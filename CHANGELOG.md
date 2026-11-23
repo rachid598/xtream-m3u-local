@@ -2,6 +2,14 @@
 
 Format inspiré de « Keep a Changelog ». Les versions suivent le versionnage sémantique.
 
+## [À publier]
+
+### Guide TV
+
+- La sélection et le diagnostic des guides tiennent compte des programmes en cours et des 24 prochaines heures. Un guide périmé ou une variante sans programme, comme « M6 4K », laisse la place à une source à jour.
+- Les guides externes restent utilisables en mode XMLTV lorsque le guide principal est indisponible. Les sources ajoutées depuis l'interface activent aussi les identifiants EPG locaux dans les playlists M3U et les listes Xtream.
+- Les exemples de configuration utilisent des fichiers vérifiés pour la France et une couverture partielle pour le Maroc.
+
 ## [3.28.0] — 2026-11-23
 
 ### Ajouté

@@ -1,24 +1,34 @@
 """Guide : appels API freinés et résumés, priorité au flux, guides externes (EPG_EXTRA_URLS), plafond par playlist."""
+import json
 import tempfile
 import time
 import unittest
+import xml.etree.ElementTree as ET
 import zipfile
+from functools import partial
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from threading import Thread
+from urllib.parse import urlencode
 
-from app.epg import EpgCache, read_schedule
+from app.diagnostic import extra_guides_check
+from app.epg import EpgCache, read_schedule, xmltv_time
 from app.server import Config
 from app.streams import StreamManager
 from app.vod import KeyedCache
 
-PROVIDER_XML = """<?xml version="1.0" encoding="UTF-8"?>
+from .fake_xtream import EPG_END, EPG_START
+
+START, STOP = xmltv_time(EPG_START), xmltv_time(EPG_END)
+PROVIDER_XML = f"""<?xml version="1.0" encoding="UTF-8"?>
 <tv><channel id="TF1.fr"><display-name>TF1</display-name></channel>
-<programme start="20261119200000 +0000" stop="20261119210000 +0000" channel="TF1.fr"><title>JT</title></programme>
+<programme start="{START}" stop="{STOP}" channel="TF1.fr"><title>JT</title></programme>
 </tv>"""
-EXTRA_XML = """<?xml version="1.0" encoding="UTF-8"?>
+EXTRA_XML = f"""<?xml version="1.0" encoding="UTF-8"?>
 <tv><channel id="M6.fr"><display-name>M6</display-name></channel>
 <channel id="France2.fr"><display-name>France 2</display-name></channel>
-<programme start="20261119200000 +0000" stop="20261119210000 +0000" channel="M6.fr"><title>Zone interdite</title></programme>
-<programme start="20261119200000 +0000" stop="20261119210000 +0000" channel="France2.fr"><title>Le 20h</title></programme>
+<programme start="{START}" stop="{STOP}" channel="M6.fr"><title>Zone interdite</title></programme>
+<programme start="{START}" stop="{STOP}" channel="France2.fr"><title>Le 20h</title></programme>
 </tv>"""
 
 
@@ -121,6 +131,54 @@ class ExternalGuideTests(unittest.TestCase):
         self.assertFalse(base.guide_ids)
         from dataclasses import replace
         self.assertTrue(replace(base, epg_extra_urls=("https://guide.example/fr.xml.gz",)).guide_ids)
+
+    def test_expired_guide_and_empty_variant_do_not_hide_current_programmes(self):
+        expired = EXTRA_XML.replace(START, xmltv_time(EPG_START - 86400)).replace(STOP, xmltv_time(EPG_END - 86400))
+        root = Path(self.tmp.name)
+        (root / "expired.xml").write_text(expired, encoding="utf-8")
+        current = EXTRA_XML.replace('<channel id="M6.fr">', '<channel id="M64K.fr"><display-name>M6 4K</display-name>'
+                                    '</channel><channel id="M6.fr">')
+        (root / "current.xml").write_text(current, encoding="utf-8")
+        epg = EpgCache((root / "provider.xml").as_uri, str(root / "data"))
+        epg.mode = "xmltv"
+        stale = EpgCache((root / "expired.xml").as_uri, str(root / "stale"))
+        epg.extras = [stale, EpgCache((root / "current.xml").as_uri, str(root / "current"))]
+        channels = [{**channel(2, "M6"), "epg_prefer_external": True}]
+        path, stats = epg.playlist_guide("salon", channels)
+        self.assertEqual(stats["sources"]["2"], {"source": "external:2", "id": "m6.fr"})
+        self.assertEqual([p[2] for p in read_schedule(path)["xtream-2"]], ["Zone interdite"])
+        self.assertEqual(extra_guides_check(epg, channels)[0]["status"], "warn")
+        self.assertEqual(EpgCache(stale._url_factory, str(root / "stale")).upcoming_ids(), set())
+        epg.extras = [stale]
+        _, stats = epg.playlist_guide("salon", channels)
+        self.assertEqual([c["stream_id"] for c in stats["missing"]], ["2"])
+
+    def test_unavailable_full_primary_with_all_channels_covered_by_extra(self):
+        root = Path(self.tmp.name)
+        epg = EpgCache((root / "absent.xml").as_uri, str(root / "data"))
+        epg.extras = [EpgCache((root / "extra.xml").as_uri, str(root / "extra"))]
+        with tempfile.TemporaryDirectory() as tmp:
+            api = KeyedCache(lambda sid: self.fail("Guide API inattendu"), tmp, max_age=60)
+            _, stats = epg.playlist_guide("_all", [channel(2, "M6")], api=api, api_ids=set())
+        self.assertEqual(stats["external"], 1)
+
+    def test_24_hour_coverage_rebuilds_old_index_and_tracks_time_without_downloading(self):
+        root = Path(self.tmp.name)
+        now = EPG_START + 60
+        path = root / "gap.xml"
+        path.write_text(PROVIDER_XML.replace(START, xmltv_time(now - 7200)).replace(STOP, xmltv_time(now - 3600))
+                        .replace("</tv>", f'<programme start="{xmltv_time(now + 90000)}"'
+                                 f' stop="{xmltv_time(now + 93600)}" channel="TF1.fr"><title>Suivant</title></programme></tv>'),
+                        encoding="utf-8")
+        download = EpgCache(path.as_uri, str(root / "gap"))
+        download.ensure()
+        (download.directory / "index.json").write_text(json.dumps({"source": download._source_key(),
+                                                                    "channels": {"tf1.fr": 2}}), encoding="utf-8")
+        self.assertEqual(download.upcoming_ids(now), set())
+        self.assertEqual(download.upcoming_ids(now + 3600), set())  # début exactement dans 24 h
+        read_disk = EpgCache(path.as_uri, str(root / "gap"))
+        self.assertEqual(read_disk.upcoming_ids(now + 3601), {"tf1.fr"})
+        self.assertEqual(read_disk.index(), {"tf1.fr": 2})
 
 
 if __name__ == "__main__":
@@ -237,7 +295,7 @@ class GroupExternalFirstTests(unittest.TestCase):
         (root / "provider.xml").write_text(PROVIDER_XML, encoding="utf-8")
         (root / "extra.xml").write_text(EXTRA_XML.replace(
             '<channel id="M6.fr">', '<channel id="TF1.ext"><display-name>TF1</display-name></channel>\n<channel id="M6.fr">').replace(
-            '</tv>', '<programme start="20261119200000 +0000" stop="20261119210000 +0000" channel="TF1.ext"><title>Journal externe</title></programme>\n</tv>'),
+            '</tv>', f'<programme start="{START}" stop="{STOP}" channel="TF1.ext"><title>Journal externe</title></programme>\n</tv>'),
             encoding="utf-8")
         self.root = root
 
@@ -291,8 +349,40 @@ class GroupExternalFirstTests(unittest.TestCase):
 
 
 class GroupGuideApiTests(StackTestCase):
+    def test_live_setting_connects_m3u_and_xtream_to_external_guide_in_xmltv_mode(self):
+        from app import settings
+        from .fake_xtream import FakeXtream
+
+        root = Path(self.tmp.name)
+        (root / "radio.xml").write_text(EXTRA_XML.replace("M6</display-name>", 'Radio "TV" HACK</display-name>'),
+                                        encoding="utf-8")
+        source = ThreadingHTTPServer(("127.0.0.1", 0), partial(SimpleHTTPRequestHandler, directory=root))
+        worker = Thread(target=source.serve_forever, daemon=True)
+        worker.start()
+        self.addCleanup(source.server_close)
+        self.addCleanup(source.shutdown)
+        settings.install(settings.Settings(self.tmp.name))
+        self.addCleanup(settings.install, None)
+        base = f"http://127.0.0.1:{source.server_port}"
+        stack = self.make_stack(epg_source="xmltv", epg_url=f"{base}/absent.xml")
+        self.assertEqual(self.send(stack.web_base + "/api/settings", "PUT",
+                                   {"epg_sources": [f"{base}/radio.xml"]})[0], 200)
+        self.assertEqual(self.create({"slug": "salon", "name": "Salon", "category_ids": ["2"],
+                                      "custom_groups": [{"id": "radios", "name": "Radios", "patterns": ["Radio"]}]}, stack)[0], 201)
+        status, device = self.send(stack.web_base + "/api/devices", "POST", {"name": "TV", "playlist": "salon"})
+        self.assertEqual(status, 201)
+        auth = urlencode({k: device[k] for k in ("username", "password")})
+        m3u = self.get(stack.proxy_base + "/p/salon.m3u")[1]
+        self.assertIn(b'tvg-id="xtream-43"', m3u)
+        xtream = self.get(stack.proxy_base + f"/player_api.php?{auth}&action=get_live_streams")[1]
+        self.assertIn(b'"epg_channel_id":"xtream-43"', xtream.replace(b" ", b""))
+        for endpoint in ("/p/salon.xml", "/xmltv.php", f"/xmltv.php?{auth}"):
+            status, body, _ = self.get(stack.proxy_base + endpoint)
+            self.assertEqual(status, 200, body[:300])
+            self.assertEqual(ET.fromstring(body).find("programme[@channel='xtream-43']/title").text, "Zone interdite")
+        self.assertEqual(FakeXtream.simple_epg_calls, [])
+
     def test_groups_and_search(self):
-        import json
         from app import settings
         settings.install(settings.Settings(self.tmp.name))
         self.addCleanup(settings.install, None)

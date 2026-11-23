@@ -3,6 +3,13 @@
 > **État au 20 novembre 2026 — version 3.28.0.** Document à transmettre tel quel à l'IA suivante avec le dépôt.
 > Aucun mot de passe, token ni URL fournisseur réelle ne doit être copié ici ni commité sur GitHub.
 
+### Correctif Guide TV en préparation
+
+- La 3.28.0 pouvait compter les programmes périmés comme une couverture valide. Le correctif indexe les horaires XMLTV et essaie la source suivante si la chaîne n'a aucun programme en cours ou à venir sous 24 h. Le cache reconstruit son index à partir du XML existant lors de la première lecture.
+- En mode `EPG_SOURCE=xmltv`, les guides externes configurés prennent le relais d'un guide principal indisponible, y compris pour les appareils Xtream. Une adresse ajoutée dans **Système → Guides externes** permet aussi d'émettre les identifiants EPG de secours nécessaires au rapprochement.
+- Les liens vérifiés figurent dans le README et l'interface. Pour le Maroc, associer Al Aoula, Al Maghribia et Tamazight aux entrées « Arabic.ma » d'Open‑EPG. La couverture reste partielle, dont 2M Monde via Arabic EPG. Arryadia reste à valider avec une grille détaillée.
+- Avant un déploiement général, actualiser le guide sur une TV TiviMate pilote et vérifier les mêmes chaînes avec une playlist M3U et un appareil Xtream. Le test automatisé couvre l'ajout d'une source externe depuis l'interface et l'alignement des identifiants entre les deux protocoles et leurs guides.
+
 ## 1. Objectif et contexte utilisateur
 
 - Unraid « Tower », appdata sur pool **NVMe**, IP LAN vue sur une capture : `192.168.0.108`. Lecteur Android TV (écran « Playlist M3U via URL » avec champ EPG et « EPG Shift »).
