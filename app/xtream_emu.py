@@ -31,6 +31,12 @@ def everything() -> dict:
             "group_order": [], "group_names": {}, "live_format": "ts", "catchup": True}
 
 
+# Copies d'une chaîne rangée dans plusieurs groupes : 2 000 000 000 – 2 099 999 999 (sous 2³¹, au-delà des
+# identifiants courts des abonnements 2 à 9 qui s'arrêtent à 1 799 999 999).
+VIRTUAL_BASE = 2_000_000_000
+VIRTUAL_SPAN = 100_000_000
+
+
 def public_category_id(group_key: str, kind: str) -> str:
     if group_key.startswith(CUSTOM_PREFIX):
         # Groupe personnalisé : identifiant numérique stable (les lecteurs attendent des nombres).
@@ -45,6 +51,7 @@ def as_int(value: str) -> int | str:
 
 class XtreamEmulator:
     def __init__(self, api, store, config, streams=None, redact=None):
+        self._virtual: dict[int, str] = {}   # identifiant virtuel d'une copie → identifiant interne
         self.api = api
         self.store = store
         self.config = config
@@ -138,9 +145,29 @@ class XtreamEmulator:
         """Identifiant donné au lecteur (court, entier 32 bits) ; inchangé avec un seul abonnement."""
         return to_public(item_id) if self._multi() else str(item_id)
 
-    def internal(self, item_id: object) -> str:
-        """Identifiant reçu d'un lecteur → identifiant interne (accepte aussi l'identifiant interne)."""
-        return from_public(item_id) if self._multi() else str(item_id)
+    def internal(self, item_id: object, device: dict | None = None) -> str:
+        """Identifiant reçu d'un lecteur → identifiant interne (accepte aussi l'identifiant interne).
+
+        Copie d'une chaîne rangée dans plusieurs groupes : identifiant virtuel (voir :meth:`copy_id`),
+        retrouvé dans le registre ; après un redémarrage, la liste de l'appareil le reconstruit.
+        """
+        text = str(item_id)
+        if text.isdigit() and VIRTUAL_BASE <= int(text) < VIRTUAL_BASE + VIRTUAL_SPAN:
+            found = self._virtual.get(int(text))
+            if found is None and device is not None:
+                for kind in ("live",):
+                    self.items(device, kind)
+                found = self._virtual.get(int(text))
+            return found or text
+        return from_public(item_id) if self._multi() else text
+
+    def copy_id(self, internal_id: str, group: str) -> int:
+        """Identifiant distinct pour la 2e, 3e… apparition d'une chaîne (option « plusieurs groupes ») : TiviMate
+        et beaucoup de lecteurs Xtream ne gardent qu'une chaîne par identifiant, donc un seul groupe sinon.
+        Stable (même chaîne + même groupe = même numéro), au-delà des identifiants courts, sous 2³¹."""
+        number = VIRTUAL_BASE + zlib.crc32(f"{internal_id}|{group}".encode()) % VIRTUAL_SPAN
+        self._virtual[number] = internal_id
+        return number
 
     def public_series_info(self, data: object) -> object:
         """Fiche série relayée : identifiants d'épisodes courts."""
@@ -169,9 +196,13 @@ class XtreamEmulator:
               base: str = "") -> list[dict]:
         entries, _, _ = self.entries(device, kind)
         result = []
+        seen: set[str] = set()
         for position, (item, group) in enumerate(entries, start=1):
             cid = self.public(public_category_id(group, kind))
             sid = as_int(self.public(item["stream_id"]))
+            if item["stream_id"] in seen:
+                sid = self.copy_id(item["stream_id"], group)   # même chaîne dans un autre groupe
+            seen.add(item["stream_id"])
             if category_id not in (None, "", "*") and cid != category_id:
                 continue
             num = int(item["num"]) if item.get("custom_num") else position

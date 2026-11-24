@@ -415,4 +415,22 @@ class MultiGroupTests(StackTestCase):
         cats = {c["category_name"]: c["category_id"] for c in json.loads(self.get(
             self.stack.proxy_base + "/player_api.php?" + urlencode({**q, "action": "get_live_categories"}))[1])}
         live = json.loads(self.get(self.stack.proxy_base + "/player_api.php?" + urlencode({**q, "action": "get_live_streams"}))[1])
-        self.assertEqual(sorted(c["category_id"] for c in live if c["stream_id"] == 44), sorted([cats["OTT"], cats["Sport FR"]]))
+        sport1 = [c for c in live if c["name"] == "Sport 1"]
+        self.assertEqual(sorted(c["category_id"] for c in sport1), sorted([cats["OTT"], cats["Sport FR"]]))
+        # TiviMate ne garde qu'une chaîne par identifiant : la copie a son propre numéro (sous 2³¹)…
+        ids = [c["stream_id"] for c in sport1]
+        self.assertEqual(len(set(ids)), 2)
+        copy = next(i for i in ids if i != 44)
+        self.assertTrue(2_000_000_000 <= copy < 2 ** 31)
+        # … qui lance le même flux, y compris après un redémarrage (registre vide).
+        # (dans le faux fournisseur, la chaîne 44 répond « abonnement occupé » : 503 = bien routée vers elle)
+        url = f"{self.stack.proxy_base}/live/{device['username']}/{device['password']}/{copy}.ts"
+        self.assertEqual(self.get(url)[0], 503)
+        emulator = self.stack.proxy.RequestHandlerClass.emulator
+        emulator._virtual.clear()
+        self.assertEqual(self.get(url)[0], 503)
+        unknown = f"{self.stack.proxy_base}/live/{device['username']}/{device['password']}/2099999999.ts"
+        self.assertEqual(self.get(unknown)[0], 404)
+        only_sport = json.loads(self.get(self.stack.proxy_base + "/player_api.php?" + urlencode(
+            {**q, "action": "get_live_streams", "category_id": cats["Sport FR"]}))[1])
+        self.assertEqual([c["stream_id"] for c in only_sport], [copy])            # même numéro par catégorie

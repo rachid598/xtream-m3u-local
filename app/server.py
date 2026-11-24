@@ -1690,7 +1690,7 @@ class Handler(BaseHTTPRequestHandler):
                 data = (emu.public_vod_info(emu.passthrough("get_vod_info", vod_id=sid))
                         if emu.allows(device, "vod", sid) else {})
             elif action in ("get_short_epg", "get_simple_data_table") and arg("stream_id").isdigit():
-                sid = emu.internal(arg("stream_id"))
+                sid = emu.internal(arg("stream_id"), device)
                 params = {"stream_id": sid}
                 if arg("limit").isdigit():
                     params["limit"] = arg("limit")
@@ -1711,7 +1711,7 @@ class Handler(BaseHTTPRequestHandler):
             note_refused_login(self.client_ip or self.client_address[0], username)
             return self._error(403, "Identifiants d'appareil invalides", head_only=head_only)
         self.request_token = device["password"]
-        item_id = self.emulator.internal(item_id)   # identifiant court des lecteurs Xtream
+        item_id = self.emulator.internal(item_id, device)   # identifiant court (ou copie) des lecteurs Xtream
         catalog_kind = {"live": "live", "movie": "vod", "series": "series"}[kind]
         allowed = (self.device_allows("episode", item_id) if kind == "series"
                    else self.emulator.allows(device, catalog_kind, item_id) if device.get("playlist") else True)
@@ -1738,7 +1738,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._error(403, "Identifiants d'appareil invalides", head_only=head_only)
         if not START_RE.fullmatch(start) or not minutes.isdigit() or not 1 <= int(minutes) <= 24 * 60:
             return self._error(400, "Période de replay invalide", head_only=head_only)
-        stream_id = self.emulator.internal(stream_id)
+        stream_id = self.emulator.internal(stream_id, device)
         if not self.emulator.allows(device, "live", stream_id):
             return self._error(404, "Chaîne absente de la playlist de cet appareil", head_only=head_only)
         return self.relay(self.api.timeshift_raw_url(stream_id, int(minutes), start), head_only=head_only,
