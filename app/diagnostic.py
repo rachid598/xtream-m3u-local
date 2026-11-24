@@ -120,13 +120,18 @@ def run(api, epg, series, streams, store, config, devices=None, profile: str | N
     for kind, (label, unit) in labels.items():
         started = time.monotonic()
         try:
-            items, categories = api.catalog(refresh=True, kind=kind)
-            ms = int((time.monotonic() - started) * 1000)
             if profile:
-                items = [i for i in items if api.provider_of(i["stream_id"]) == profile]
-                categories = {cid: n for cid, n in categories.items() if api.provider_of(cid) == profile}
+                target_api = providers[0][0]
+                target_api.catalog(refresh=True, kind=kind)
+                merged = api.kind_state(kind)
+                items = [i for i in (merged.items or []) if api.provider_of(i["stream_id"]) == profile]
+                categories = {cid: n for cid, n in merged.categories.items() if api.provider_of(cid) == profile}
+                state = target_api.kind_state(kind)
+            else:
+                items, categories = api.catalog(refresh=True, kind=kind)
+                state = api.kind_state(kind)
+            ms = int((time.monotonic() - started) * 1000)
             catalogs[kind] = items
-            state = api.kind_state(kind)
             status = "ok" if items else "warn"
             detail = f"{len(items)} {unit}, {len(categories)} catégories"
             if state.categories_error:

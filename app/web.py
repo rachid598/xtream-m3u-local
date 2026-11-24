@@ -19,7 +19,7 @@ import threading
 import time
 
 from .builder import display_logo, select_items
-from .custom import SLUG_RE, filter_kind, uses
+from .custom import SLUG_RE, uses
 from .epg import EpgUnavailable, read_schedule, xml_channel_id
 from .builder import CUSTOM_PREFIX, normalize, regional_group_key
 from .server import KINDS, Config, UpstreamError, XtreamAPI, live_channels_in_order, redact, redact_raw
@@ -161,8 +161,8 @@ class WebHandler(BaseHTTPRequestHandler):
             self.json(403, {"error": "En-tête de requête manquant"})
             return False
         origin = self.headers.get("Origin")
-        if origin and origin != "null":
-            if urlsplit(origin).netloc.lower() != (self.headers.get("Host") or "").lower():
+        if origin:
+            if origin == "null" or urlsplit(origin).netloc.lower() != (self.headers.get("Host") or "").lower():
                 self.json(403, {"error": "Origine de la requête refusée"})
                 return False
         return True
@@ -712,16 +712,17 @@ class WebHandler(BaseHTTPRequestHandler):
             return self.json(500, {"error": "Échec de l'écriture des playlists dans /data (droits du dossier ?)"})
 
     def prefetch_series(self, saved: dict) -> None:
-        """Après un enregistrement : charge en arrière-plan les épisodes des séries sélectionnées."""
+        """Après un enregistrement : charge en arrière-plan les épisodes des séries sélectionnées (borné)."""
         if self.series is None or not uses(saved, "series"):
             return
 
         def job() -> None:
             try:
-                items, _ = self.api.catalog(kind="series")
+                entries, _ = select_items(self.api, saved, "series")
             except UpstreamError:
                 return
-            ids = [item["stream_id"] for item, _ in filter_kind(items, saved, "series")]
+            # Borné pour éviter une rafale de milliers d'appels sur un gros catalogue (le reste passe par la nuit).
+            ids = [item["stream_id"] for item, _ in entries][:200]
             count = self.series.prefetch(ids)
             if count:
                 LOG.info("Playlist %s : préchargement des épisodes de %d série(s)", saved["slug"], count)

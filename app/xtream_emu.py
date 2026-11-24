@@ -103,15 +103,21 @@ class XtreamEmulator:
         return any(item["stream_id"] == item_id for item, _ in entries)
 
     def allows_episode(self, device: dict, episode_id: str, series_cache) -> bool:
-        """Un épisode est permis s'il appartient à une série de la playlist de l'appareil (épisodes déjà connus)."""
+        """Un épisode est permis s'il appartient à une série de la playlist de l'appareil (épisodes connus)."""
         if series_cache is None:
             return False
         try:
             entries, _, _ = self.entries(device, "series")
         except Exception:
             return False
-        for item, _ in entries:
-            if any(str(ep.get("id")) == episode_id for ep in series_cache.known(item["stream_id"]) or []):
+        allowed = {item["stream_id"] for item, _ in entries}
+        if not allowed:
+            return False
+        if hasattr(series_cache, "owners_of") and (series_cache.owners_of(episode_id) & allowed):
+            return True
+        for sid in allowed:
+            known = series_cache.known(sid, allow_stale=True) if hasattr(series_cache, "owners_of") else series_cache.known(sid)
+            if any(str(ep.get("id")) == episode_id for ep in known or []):
                 return True
         return False
 
@@ -235,7 +241,7 @@ class XtreamEmulator:
         by_index = dict(zip(getattr(self.api, "indices", None) or [], getattr(self.api, "apis", None) or []))
         source = by_index.get(int(profile), self.api) if profile.isdigit() else self.api
         provider = source.account() or {}
-        tz = self.api.provider_timezone()
+        tz = source.provider_timezone()
         now = datetime.now(tz if tz is not None else timezone.utc)
         limit = self.streams.limit(profile) if self.streams is not None else 0
         active = self.streams.count(profile) if self.streams is not None else 0

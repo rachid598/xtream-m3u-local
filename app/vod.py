@@ -216,6 +216,8 @@ class KeyedCache:
         self.directory = Path(data_dir) / "cache" / subdir
         self.max_age = max(60, max_age)
         self._memory: dict[str, tuple[float, list[dict]]] = {}
+        self._ep_to_sids: dict[str, set[str]] = {}
+        self._sid_eps: dict[str, set[str]] = {}
         self._lock = threading.Lock()
         self._pending: dict[str, object] = {}
         self._failed: dict[str, float] = {}
@@ -224,6 +226,22 @@ class KeyedCache:
     # ----------------------------------------------------------- stockage
     def _path(self, sid: str) -> Path:
         return self.directory / f"{sid}.json"
+
+    def _index_items(self, sid: str, items: list[dict]) -> None:
+        """Index inversé ``id d'élément -> identifiants parents`` (appelé sous ``_lock``)."""
+        old = self._sid_eps.pop(sid, None)
+        if old:
+            for eid in old:
+                owners = self._ep_to_sids.get(eid)
+                if owners:
+                    owners.discard(sid)
+                    if not owners:
+                        del self._ep_to_sids[eid]
+        current = {str(ep["id"]) for ep in items if isinstance(ep, dict) and ep.get("id") is not None}
+        if current:
+            self._sid_eps[sid] = current
+            for eid in current:
+                self._ep_to_sids.setdefault(eid, set()).add(sid)
 
     def _load(self, sid: str) -> tuple[float, list[dict]] | None:
         with self._lock:
@@ -236,12 +254,14 @@ class KeyedCache:
             return None
         with self._lock:
             self._memory[sid] = entry
+            self._index_items(sid, entry[1])
         return entry
 
     def _store(self, sid: str, episodes: list[dict]) -> None:
         entry = (time.time(), episodes)
         with self._lock:
             self._memory[sid] = entry
+            self._index_items(sid, episodes)
         try:
             self.directory.mkdir(parents=True, exist_ok=True)
             fd, tmp = tempfile.mkstemp(prefix=f".{sid}-", suffix=".tmp", dir=self.directory)
@@ -382,12 +402,28 @@ class KeyedCache:
         """Remet à jour un élément dans le thread appelant (passe de nuit, un à la fois). Vrai si réussi."""
         return self._task(sid) is not None
 
-    def known(self, sid: str) -> list[dict] | None:
-        """Résultat en cache encore valable (liste éventuellement vide), sinon ``None``."""
+    def remember(self, sid: str, raw: object) -> list[dict]:
+        """Normalise et met en cache une réponse déjà obtenue (ex. ``get_series_info`` en mode Xtream)."""
+        episodes = self._normalize(raw)
+        if episodes:
+            self._store(sid, episodes)
+        return episodes
+
+    def owners_of(self, item_id: str) -> set[str]:
+        """Identifiants de séries en mémoire contenant cet épisode (recherche O(1))."""
+        with self._lock:
+            return set(self._ep_to_sids.get(str(item_id), ()))
+
+    def known(self, sid: str, *, allow_stale: bool = False) -> list[dict] | None:
+        """Résultat en cache encore valable (ou périmé si ``allow_stale=True``), sinon ``None``."""
         cached = self._load(sid)
-        if cached and time.time() - cached[0] < self.max_age:
+        if cached and (allow_stale or time.time() - cached[0] < self.max_age):
             return cached[1]
         return None
+
+    def close(self) -> None:
+        """Arrête proprement le pool de threads à la fermeture du serveur."""
+        self._executor.shutdown(wait=False, cancel_futures=True)
 
     def fetched_at(self, sid: str) -> float | None:
         cached = self._load(sid)

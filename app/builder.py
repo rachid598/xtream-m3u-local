@@ -355,7 +355,7 @@ def dedupe(entries: list[tuple[dict, str]], uhd: str = "backup") -> list[tuple[d
 
 
 _CORE_INDEX_LOCK = threading.Lock()
-_CORE_INDEX_CACHE: dict[int, dict[str, list[tuple[float, str]]]] = {}
+_CORE_INDEX_CACHE: dict[int, tuple[list[dict], dict[str, list[tuple[float, str]]]]] = {}
 _CORE_INDEX_ORDER: list[int] = []
 _CORE_INDEX_MAX = 8  # catalogues distincts gardés en mémoire (multi-fournisseurs, tests…)
 
@@ -363,14 +363,14 @@ _CORE_INDEX_MAX = 8  # catalogues distincts gardés en mémoire (multi-fournisse
 def _core_index(items: list[dict]) -> dict[str, list[tuple[float, str]]]:
     """Index ``{nom comparable: [(qualité, stream_id)…]}`` (meilleure qualité d'abord) de tout le catalogue.
 
-    Caché par identité de la liste ``items`` : recalculé seulement quand le catalogue est rechargé,
-    jamais à chaque requête, même avec des dizaines de milliers de chaînes.
+    Caché par identité de la liste ``items`` (la référence est conservée tant que l'entrée reste en cache
+    pour éviter toute collision d'adresse mémoire après libération d'une liste filtrée par profil).
     """
     key = id(items)
     with _CORE_INDEX_LOCK:
         cached = _CORE_INDEX_CACHE.get(key)
-        if cached is not None:
-            return cached
+        if cached is not None and cached[0] is items:
+            return cached[1]
     index: dict[str, list[tuple[float, str]]] = {}
     for item in items:
         name = item.get("name") or ""
@@ -381,7 +381,9 @@ def _core_index(items: list[dict]) -> dict[str, list[tuple[float, str]]]:
     for versions in index.values():
         versions.sort(key=lambda v: -v[0])
     with _CORE_INDEX_LOCK:
-        _CORE_INDEX_CACHE[key] = index
+        _CORE_INDEX_CACHE[key] = (items, index)
+        if key in _CORE_INDEX_ORDER:
+            _CORE_INDEX_ORDER.remove(key)
         _CORE_INDEX_ORDER.append(key)
         while len(_CORE_INDEX_ORDER) > _CORE_INDEX_MAX:
             _CORE_INDEX_CACHE.pop(_CORE_INDEX_ORDER.pop(0), None)

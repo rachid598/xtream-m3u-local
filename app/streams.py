@@ -117,7 +117,7 @@ class StreamManager:
         self.takeover = takeover
         self._lock = threading.Lock()
         self._sessions: dict[int, StreamSession] = {}
-        self._cooldown: dict[tuple[str, str, str], float] = {}
+        self._cooldown: dict[tuple[str, str, str, str], float] = {}
         self._history_path = Path(history_path) if history_path else None
         self._history: deque[dict] = deque(maxlen=HISTORY_SIZE)
         self._history_lock = threading.Lock()
@@ -234,7 +234,7 @@ class StreamManager:
                     victim.cancel()
                     del self._sessions[victim.id]
                     evicted.append(victim)
-                    if victim.client != client:
+                    if (victim.client, victim.device) != (client, device):
                         # L'autre appareil va réessayer tout seul : on l'en empêche quelques secondes.
                         self._cooldown[victim.key] = time.monotonic() + COOLDOWN_SECONDS
                     LOG.info("Limite de %d connexion(s) : arrêt de « %s » (%s) pour « %s »",

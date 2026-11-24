@@ -1683,8 +1683,13 @@ class Handler(BaseHTTPRequestHandler):
                                  base=self.public_base())
             elif action == "get_series_info" and arg("series_id").isdigit():
                 sid = emu.internal(arg("series_id"))
-                data = (emu.public_series_info(emu.passthrough("get_series_info", series_id=sid))
-                        if emu.allows(device, "series", sid) else {})
+                if emu.allows(device, "series", sid):
+                    raw = emu.passthrough("get_series_info", series_id=sid)
+                    if self.series is not None:
+                        self.series.remember(sid, raw)
+                    data = emu.public_series_info(raw)
+                else:
+                    data = {}
             elif action == "get_vod_info" and arg("vod_id").isdigit():
                 sid = emu.internal(arg("vod_id"))
                 data = (emu.public_vod_info(emu.passthrough("get_vod_info", vod_id=sid))
@@ -2313,7 +2318,9 @@ def prepare_data_dir(data_dir: str) -> None:
             path.mkdir(parents=True, exist_ok=True)
             for item in [path, *path.rglob("*")]:
                 try:
-                    os.lchown(item, uid, gid)
+                    st = os.lstat(item)
+                    if st.st_uid != uid or st.st_gid != gid:
+                        os.lchown(item, uid, gid)
                 except OSError:
                     LOG.warning("Impossible de changer le propriétaire de %s", item)
         except OSError:
@@ -2380,6 +2387,11 @@ def main() -> None:
     except KeyboardInterrupt:
         pass
     finally:
+        if tunnel.current() is not None:
+            tunnel.current().stop(disable=False)
+        series.close()
+        if getattr(epg, "api_cache", None) is not None:
+            epg.api_cache.close()
         web.server_close()
         server.shutdown()
         server.server_close()
