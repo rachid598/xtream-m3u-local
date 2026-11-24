@@ -8,6 +8,7 @@ Format inspiré de « Keep a Changelog ». Les versions suivent le versionnage s
 - **Chaînes dans plusieurs groupes invisibles dans TiviMate (mode Xtream)** : TiviMate ne garde qu'une chaîne par numéro de flux, donc beIN Sports 1/2/3 restaient dans « OTT » et disparaissaient de « Sport FR ». Chaque copie a maintenant son propre numéro (lecture, guide et replay identiques). Rafraîchir la playlist dans TiviMate.
 
 ### Modifié
+- Correctifs d'audit (PR #11, autre IA) : épisodes Xtream autorisés dès l'ouverture de la série (index en mémoire), cache de secours sans collision, attente anti-boucle entre deux appareils derrière la même IP, préchargement des séries borné à 200, `Origin: null` refusé, arrêt propre du tunnel et des threads, diagnostic et fuseau par profil.
 - Groupe préfabriqué « Francophonie » : chaînes francophones de Belgique en premier, puis Suisse romande, puis TV5Monde (sans Québec ni Monaco).
 
 ## [3.31.0] — 2026-11-23
