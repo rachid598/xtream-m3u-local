@@ -1540,23 +1540,50 @@ class Handler(BaseHTTPRequestHandler):
         index = ids.index(remembered["sid"]) if remembered else 0
 
         client, device = self._viewer_identity()
+        headers_done = False
         if self.hub is not None:
             self.hub.detach_viewer(client, device.get("name", ""), except_sid=ids[index])
-            for candidate_sid in (ids[index], *(s for s in ids if s != ids[index])):
-                joined = self.hub.try_join(
-                    candidate_sid, client=client, device=device.get("name", ""),
-                    priority=device.get("priority", "normal"), device_id=device.get("id", ""),
-                )
-                if joined is not None:
-                    pump, entry = joined
+            candidates = [ids[index], *(s for s in ids if s != ids[index])]
+            failed: set[str] = set()
+            follow_until = 0.0
+            while True:
+                joined = None
+                for candidate_sid in candidates:
+                    if candidate_sid in failed:
+                        continue
+                    joined = self.hub.try_join(
+                        candidate_sid, client=client, device=device.get("name", ""),
+                        priority=device.get("priority", "normal"), device_id=device.get("id", ""),
+                    )
+                    if joined is not None:
+                        break
+                if joined is None:
+                    if time.monotonic() >= follow_until:
+                        break
+                    time.sleep(0.2)    # l'écran qui a ouvert le flux est en train de basculer : on le suit
+                    continue
+                pump, entry = joined
+                if not headers_done:
                     self._send_pump_headers(pump)
-                    pump.stream_to(self.wfile, entry)
+                    headers_done = True
+                outcome, _ = pump.stream_to(self.wfile, entry)
+                if reconnect or outcome in ("client", "cancelled", "best"):
                     self.close_connection = True
                     return
+                # Flux partagé muet, lent ou terminé : suivre la bascule de l'écran qui l'a ouvert.
+                failed.add(pump.sid)
+                follow_until = time.monotonic() + self.config.failover_stall_seconds + 6
+            if headers_done:
+                remaining = [s for s in ids if s not in failed]
+                if not remaining:
+                    self.close_connection = True
+                    return
+                # Personne n'a repris la suite : cet écran bascule lui-même (sans renvoyer d'en-têtes).
+                index = ids.index(remaining[0])
 
         initial_provider = providers_in_ids[index]
         session = self.open_session("live", ids[0], names[ids[0]], provider=initial_provider,
-                                    silent=multi_provider)
+                                    silent=multi_provider or headers_done)
         if session is None and multi_provider:
             # L'abonnement initial est plein ou en pause : chercher un secours sur un autre abonnement libre.
             for step in range(1, len(ids)):
@@ -1570,14 +1597,19 @@ class Handler(BaseHTTPRequestHandler):
                              initial_provider, cand_provider, ids[cand_idx])
                     index = cand_idx
                     break
+            if session is None and headers_done:
+                self.close_connection = True   # flux déjà commencé : pas de réponse d'erreur possible
+                return
             if session is None:
                 # Aucun abonnement de secours n'a de place : renvoyer la réponse normale du fournisseur initial.
                 self.open_session("live", ids[0], names[ids[0]], provider=initial_provider, silent=False)
                 return
         elif session is None:
+            if headers_done:
+                self.close_connection = True
             return
 
-        state: dict = {"headers_sent": False, "transferred": False}
+        state: dict = {"headers_sent": headers_done, "transferred": False}
         switches, tried, max_switches = 0, 0, 2 * len(ids)
         session.channel = names[ids[0]]
         base_wait = self.config.failover_return_minutes * 60
@@ -1594,6 +1626,14 @@ class Handler(BaseHTTPRequestHandler):
                 else:
                     outcome = self._pump_live(sid, session, state, return_after=wait_best if index else 0,
                                               multi_provider=multi_provider)
+                if state.get("transferred") and outcome == "best" and not reconnect:
+                    # Le secours reste partagé avec un autre écran (qui garde la connexion) :
+                    # cet écran retente la meilleure version avec une nouvelle connexion.
+                    fresh = self.open_session("live", ids[0], names[ids[0]], provider=providers_in_ids[0],
+                                              silent=True)
+                    if fresh is not None:
+                        session, state["transferred"] = fresh, False
+                        session.channel = names[ids[0]]
                 if state.get("transferred") or outcome in ("client", "cancelled", "busy"):
                     break
                 if outcome == "best":

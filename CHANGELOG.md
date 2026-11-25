@@ -2,6 +2,15 @@
 
 Format inspiré de « Keep a Changelog ». Les versions suivent le versionnage sémantique.
 
+## [3.33.1] — 2026-11-25
+
+### Corrigé
+- **Bascule automatique sur un direct partagé entre deux écrans** (mode « enchaînement ») : l'écran qui avait rejoint la chaîne était coupé quand elle se taisait ; il suit maintenant la bascule de l'autre écran (ou bascule lui-même si personne ne reprend), sans renvoyer d'en-têtes.
+- **Retour à la meilleure version** : l'écran qui avait ouvert le secours n'est plus coupé quand un autre écran partage ce secours ; il retente la meilleure version avec sa propre connexion.
+
+### Ajouté
+- Tests des combinaisons : partage + bascule (modes reconnexion et enchaînement), partage + retour à la meilleure version, partage + chaîne dans plusieurs groupes (copie Xtream) (`tests/test_shared_failover.py`).
+
 ## [3.33.0] — 2026-11-24
 
 ### Ajouté
