@@ -74,7 +74,8 @@ class DeviceStore:
             except (OSError, ValueError):
                 raise RuntimeError("devices.json illisible") from None
             data = {"require_token": bool(data.get("require_token")),
-                    "devices": [d for d in data["devices"] if isinstance(d, dict) and d.get("password")]}
+                    "devices": [{"profile": "", **d} for d in data["devices"]
+                                if isinstance(d, dict) and d.get("password")]}
             self._cache = (mtime, data)
             return data
 
@@ -193,8 +194,18 @@ class DeviceStore:
         except ValueError:
             raise InvalidDevice("Adresse IP de l'appareil invalide (ex. 192.168.0.42)") from None
 
+    @staticmethod
+    def _check_profile(profile: object) -> str:
+        if profile in (None, ""):
+            return ""
+        text = str(profile).strip()
+        if text.isdigit() and 1 <= int(text) <= 9:
+            return text
+        raise InvalidDevice("Espace (profil) d'appareil invalide")
+
     def create(self, name: object, playlist: object = "", username: object = None,
-               priority: object = "normal", ip: object = "", links: object = "lan") -> dict:
+               priority: object = "normal", ip: object = "", links: object = "lan",
+               profile: object = "") -> dict:
         with self._lock:
             data = self._load()
             devices = data["devices"]
@@ -212,7 +223,8 @@ class DeviceStore:
             device = {"id": secrets.token_hex(4), "name": clean_name, "username": candidate,
                       "password": new_password(), "playlist": self._check_playlist(playlist),
                       "priority": self._check_priority(priority), "ip": self._check_ip(ip),
-                      "links": self._check_links(links), "created_at": int(time.time())}
+                      "links": self._check_links(links), "profile": self._check_profile(profile),
+                      "created_at": int(time.time())}
             self._write({"require_token": data["require_token"], "devices": devices + [device]})
             return dict(device)
 
@@ -233,6 +245,8 @@ class DeviceStore:
                 device["ip"] = self._check_ip(payload["ip"])
             if "links" in payload:
                 device["links"] = self._check_links(payload["links"])
+            if "profile" in payload:
+                device["profile"] = self._check_profile(payload["profile"])
             if payload.get("regenerate"):
                 device["password"] = new_password()
             self._write({"require_token": data["require_token"], "devices": devices})
@@ -284,12 +298,15 @@ class DeviceStore:
                 created = int(raw.get("created_at") or time.time())
             except (TypeError, ValueError):
                 created = int(time.time())
+            prof = raw.get("profile")
+            clean_prof = str(prof).strip() if prof is not None else ""
             devices.append({"id": device_id, "name": name,
                             "username": username, "password": password,
                             "playlist": self._check_playlist(raw.get("playlist")),
                             "priority": self._check_priority(raw.get("priority")),
                             "ip": self._check_ip(raw.get("ip")),
                             "links": self._safe_links(raw.get("links")),
+                            "profile": clean_prof if clean_prof.isdigit() and 1 <= int(clean_prof) <= 9 else "",
                             "created_at": created})
         if dry_run:
             return

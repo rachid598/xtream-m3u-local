@@ -33,7 +33,7 @@ from .builder import FAVORITES_GROUP, GROUP_PREFIX, add_favorites, display_logo,
 from .devices import DeviceStore
 from .providers import UnknownProvider
 from .hls import MAX_MANIFEST_BYTES, SEGMENT_MIME, HlsRegistry, rewrite_manifest, segment_ext
-from .streams import EvictedRecently, LimitReached, StreamManager
+from .streams import EvictedRecently, LimitReached, LiveHub, StreamManager
 from .custom import CATEGORY_RE, UNCATEGORIZED, PlaylistStore, uses
 from .epg import (DEFAULT_EPG_GUIDES, EPG_MODES, GENERIC_EPG_CHANNELS, EpgCache, EpgUnavailable,
                   normalize_listings, xml_channel_id)
@@ -306,6 +306,7 @@ class Config:
     epg_api_per_second: int = 2      # EPG_API_PER_SECOND : appels « guide par chaîne » par seconde (0 = sans limite)
     max_connections: int = -1        # -1 = auto (valeur de l'abonnement), 0 = illimité
     stream_takeover: bool = True
+    share_streams: bool = True       # SHARE_STREAMS : 1 connexion fournisseur partagée si 2 TV regardent la même chaîne
     failover_stall_seconds: float = 6.0   # bascule automatique : flux muet pendant N s → version suivante
     failover_slow_ratio: float = 0.35     # … ou débit < 35 % du meilleur débit observé (2 fenêtres de suite) ; 0 = jamais
     failover_return_minutes: int = 10     # sur une version de secours : retenter la meilleure après N min (0 = jamais)
@@ -395,6 +396,7 @@ class Config:
             epg_startup_quiet=max(0, min(3600, _env_int("EPG_STARTUP_QUIET", 120))),
             max_connections=_max_connections(),
             stream_takeover=_env_bool("STREAM_TAKEOVER", True),
+            share_streams=_env_bool("SHARE_STREAMS", True),
             failover_stall_seconds=float(min(60, max(2, _env_int("FAILOVER_STALL_SECONDS", 6)))),
             failover_slow_ratio=min(90, max(0, _env_int("FAILOVER_SLOW_PERCENT", 35))) / 100,
             failover_return_minutes=min(240, max(0, _env_int("FAILOVER_RETURN_MINUTES", 10))),
@@ -451,7 +453,7 @@ def normalize_channel(entry: object) -> dict | None:
             archive = max(0, min(int(str(entry.get("tv_archive_duration") or 0).strip()), 365))
         except ValueError:
             archive = 0
-    return {
+    channel = {
         "stream_id": sid,
         "name": _clean_text(entry.get("name"), "Sans nom"),
         "logo": logo,
@@ -461,6 +463,9 @@ def normalize_channel(entry: object) -> dict | None:
         "category_ids": cats,
         "archive": archive,
     }
+    if str(entry.get("is_adult") or "").strip().lower() in ("1", "true"):
+        channel["adult"] = True
+    return channel
 
 
 KINDS = {
@@ -1129,6 +1134,7 @@ class Handler(BaseHTTPRequestHandler):
     epg: EpgCache
     series: SeriesCache
     streams: StreamManager
+    hub: "LiveHub | None" = None
     hls: HlsRegistry
     devices: "DeviceStore | None" = None
     emulator: XtreamEmulator
@@ -1344,32 +1350,49 @@ class Handler(BaseHTTPRequestHandler):
         except (OSError, ValueError):
             pass
 
-    def open_session(self, kind: str, item_id: str, label: str, *, virtual: bool = False, provider: str | None = None):
-        """Réserve une connexion fournisseur. Retourne la session, ou ``None`` après avoir répondu (409/503)."""
+    hub: LiveHub | None = None
+
+    def _viewer_identity(self) -> tuple[str, dict]:
+        return self.client_ip or self.client_address[0], self.current_device() or {}
+
+    def _send_pump_headers(self, pump, default_type: str = "video/mp2t") -> None:
+        self.send_response(pump.status)
+        for key, value in pump.headers.items():
+            self.send_header(key, value)
+        if "Content-Type" not in pump.headers:
+            self.send_header("Content-Type", default_type)
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+
+    def open_session(self, kind: str, item_id: str, label: str, *, virtual: bool = False,
+                     provider: str | None = None, silent: bool = False):
+        """Réserve une connexion fournisseur. Retourne la session, ou ``None`` (après 409/503 sauf ``silent``)."""
         provider = provider or self.api.provider_of(item_id)
         wait = self.busy_wait(provider)
         if wait:
-            # Refus récent du fournisseur : répondre tout de suite, sans le redemander (ça prolongerait le blocage).
-            self.send_busy(wait)
+            if not silent:
+                self.send_busy(wait)
             return None
-        device = self.current_device() or {}
+        client, device = self._viewer_identity()
         try:
-            return self.streams.acquire(kind=kind, item_id=item_id, client=self.client_ip or self.client_address[0],
+            return self.streams.acquire(kind=kind, item_id=item_id, client=client,
                                         label=label, virtual=virtual, provider=provider,
                                         device=device.get("name", ""), priority=device.get("priority", "normal"),
                                         device_id=device.get("id", ""))
         except EvictedRecently:
-            self._error(409, "Lecture arrêtée : la connexion au fournisseur a été donnée à un autre appareil "
-                             "(réessaie dans 30 secondes ou choisis une autre chaîne)", head_only=False)
+            if not silent:
+                self._error(409, "Lecture arrêtée : la connexion au fournisseur a été donnée à un autre appareil "
+                                 "(réessaie dans 30 secondes ou choisis une autre chaîne)", head_only=False)
         except LimitReached as exc:
-            holder = exc.holder
-            if holder is not None:
-                who = f"« {holder.device} »" if holder.device else "un appareil prioritaire"
-                self._error(503, f"Connexion occupée : {who} regarde « {holder.channel or holder.label} » et passe en "
-                                 "priorité (interface Web, onglet Appareils)", head_only=False)
-            else:
-                self._error(503, f"Limite de {exc.args[0]} connexion(s) simultanée(s) atteinte : arrête une autre "
-                                 "lecture (interface Web, onglet Système)", head_only=False)
+            if not silent:
+                holder = exc.holder
+                if holder is not None:
+                    who = f"« {holder.device} »" if holder.device else "un appareil prioritaire"
+                    self._error(503, f"Connexion occupée : {who} regarde « {holder.channel or holder.label} » et passe en "
+                                     "priorité (interface Web, onglet Appareils)", head_only=False)
+                else:
+                    self._error(503, f"Limite de {exc.args[0]} connexion(s) simultanée(s) atteinte : arrête une autre "
+                                     "lecture (interface Web, onglet Système)", head_only=False)
         return None
 
     def item_label(self, kind: str, item_id: str) -> str:
@@ -1383,6 +1406,24 @@ class Handler(BaseHTTPRequestHandler):
     def relay(self, upstream_url: str, *, head_only: bool, default_type: str = "video/mp2t",
               track: tuple[str, str] | None = None, touch=None) -> None:
         """Relaie un flux fournisseur. ``track=(type, id)`` : lecture comptée dans la limite de connexions."""
+        has_range = bool(self.headers.get("Range") or self.headers.get("If-Range"))
+        use_hub = bool(self.hub is not None and track and track[0] == "live" and not head_only and not has_range)
+        client, device = ("", {})
+        if self.hub is not None and track and not head_only:
+            client, device = self._viewer_identity()
+            self.hub.detach_viewer(client, device.get("name", ""), except_sid=track[1] if track[0] == "live" else "")
+        if use_hub:
+            joined = self.hub.try_join(
+                track[1], client=client, device=device.get("name", ""),
+                priority=device.get("priority", "normal"), device_id=device.get("id", ""),
+            )
+            if joined is not None:
+                pump, entry = joined
+                self._send_pump_headers(pump, default_type)
+                pump.stream_to(self.wfile, entry)
+                self.close_connection = True
+                return
+
         session = None
         if track and not head_only:
             session = self.open_session(track[0], track[1], self.item_label(*track))
@@ -1394,7 +1435,22 @@ class Handler(BaseHTTPRequestHandler):
                 headers[h] = self.headers[h]
         request = Request(upstream_url, headers=headers)
         headers_sent = False
+        session_transferred = False
         try:
+            if use_hub and session is not None:
+                upstream = urlopen(request, timeout=45)
+                pump, entry = self.hub.register(
+                    track[1], upstream, session, client=client, device=device.get("name", ""),
+                    priority=device.get("priority", "normal"), device_id=device.get("id", ""),
+                )
+
+                def send_initial_headers(p) -> None:
+                    nonlocal headers_sent
+                    self._send_pump_headers(p, default_type)
+                    headers_sent = True
+
+                _, session_transferred = pump.stream_to(self.wfile, entry, on_start=send_initial_headers)
+                return
             with urlopen(request, timeout=45) as upstream:
                 if session is not None:
                     session.attach(upstream.close)
@@ -1419,7 +1475,7 @@ class Handler(BaseHTTPRequestHandler):
                         chunk = reader(64 * 1024)
                     except Exception:
                         if session is not None and session.cancelled.is_set():
-                            break  # connexion fermée depuis un autre thread (coupure volontaire)
+                            break
                         raise
                     if not chunk:
                         break
@@ -1454,43 +1510,77 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 self.close_connection = True
         finally:
-            if session is not None:
+            if session is not None and not session_transferred:
                 self.streams.release(session)
             if headers_sent:
                 self.close_connection = True
 
     def relay_live(self, ids: list[str]) -> None:
-        """Direct avec bascule automatique : si la version lue coupe, se tait ou rame, passer à la suivante.
+        """Direct avec bascule automatique et débordement multi-abonnements.
 
         Une seule connexion fournisseur à la fois (la précédente est fermée avant d'ouvrir la suivante).
-        Tant que rien n'a été envoyé au lecteur, les versions sont essayées l'une après l'autre.
-        Ensuite, mode ``reconnect`` (défaut) : la connexion est fermée et la version qui marche est
-        mémorisée ; le lecteur se reconnecte et la reçoit directement (un flux MPEG-TS d'une autre version
-        — autre codec, résolution, horloge — collé à la suite fige l'image de nombreux lecteurs).
-        Mode ``splice`` : les versions sont enchaînées dans la même réponse.
+        Si la version principale est déjà lue par un autre écran local (``LiveHub``), le flux est partagé.
+        Si l'abonnement principal est saturé (limite atteinte ou HTTP 429/458/509) et qu'une version de
+        secours appartient à un second abonnement disponible, la lecture déborde automatiquement dessus.
         """
         ids = list(dict.fromkeys(ids))
         names = {sid: self.item_label("live", sid) for sid in ids}
+        providers_in_ids = [self.api.provider_of(sid) for sid in ids]
+        multi_provider = len(set(providers_in_ids)) > 1
         reconnect = self.config.failover_mode == "reconnect"
         memory = self.failover_memory
         now = time.monotonic()
         remembered = memory.get(ids[0]) if reconnect else None
         if remembered and (remembered["sid"] not in ids or now >= remembered["until"]):
             if remembered["sid"] != ids[0]:
-                # Délai écoulé : on retente la meilleure version (« essai », pour allonger l'attente si elle flanche).
                 remembered = {"sid": ids[0], "until": now + 6 * 3600, "wait": remembered["wait"], "trial": now}
                 memory[ids[0]] = remembered
             else:
                 remembered = None
         index = ids.index(remembered["sid"]) if remembered else 0
-        # La place est réservée chez le fournisseur de la version réellement ouverte.
-        session = self.open_session("live", ids[0], names[ids[0]], provider=self.api.provider_of(ids[index]))
-        if session is None:
+
+        client, device = self._viewer_identity()
+        if self.hub is not None:
+            self.hub.detach_viewer(client, device.get("name", ""), except_sid=ids[index])
+            for candidate_sid in (ids[index], *(s for s in ids if s != ids[index])):
+                joined = self.hub.try_join(
+                    candidate_sid, client=client, device=device.get("name", ""),
+                    priority=device.get("priority", "normal"), device_id=device.get("id", ""),
+                )
+                if joined is not None:
+                    pump, entry = joined
+                    self._send_pump_headers(pump)
+                    pump.stream_to(self.wfile, entry)
+                    self.close_connection = True
+                    return
+
+        initial_provider = providers_in_ids[index]
+        session = self.open_session("live", ids[0], names[ids[0]], provider=initial_provider,
+                                    silent=multi_provider)
+        if session is None and multi_provider:
+            # L'abonnement initial est plein ou en pause : chercher un secours sur un autre abonnement libre.
+            for step in range(1, len(ids)):
+                cand_idx = (index + step) % len(ids)
+                cand_provider = providers_in_ids[cand_idx]
+                if cand_provider == initial_provider:
+                    continue
+                session = self.open_session("live", ids[0], names[ids[0]], provider=cand_provider, silent=True)
+                if session is not None:
+                    LOG.info("Débordement multi-abonnements : abonnement %s occupé, bascule immédiate sur l'abonnement %s (%s)",
+                             initial_provider, cand_provider, ids[cand_idx])
+                    index = cand_idx
+                    break
+            if session is None:
+                # Aucun abonnement de secours n'a de place : renvoyer la réponse normale du fournisseur initial.
+                self.open_session("live", ids[0], names[ids[0]], provider=initial_provider, silent=False)
+                return
+        elif session is None:
             return
-        state = {"headers_sent": False}
+
+        state: dict = {"headers_sent": False, "transferred": False}
         switches, tried, max_switches = 0, 0, 2 * len(ids)
         session.channel = names[ids[0]]
-        base_wait = self.config.failover_return_minutes * 60  # retour à la meilleure version (0 = jamais)
+        base_wait = self.config.failover_return_minutes * 60
         wait_best = remembered["wait"] if remembered else base_wait
         outcome = ""
         try:
@@ -1500,13 +1590,13 @@ class Handler(BaseHTTPRequestHandler):
                 started = time.monotonic()
                 provider = self.api.provider_of(sid)
                 if provider != session.provider and (self.busy_wait(provider) or not self.streams.move(session, provider)):
-                    outcome = "full"  # version chez un autre fournisseur sans place libre : sautée, sans l'appeler
+                    outcome = "full"
                 else:
-                    outcome = self._pump_live(sid, session, state, return_after=wait_best if index else 0)
-                if outcome in ("client", "cancelled", "busy"):
+                    outcome = self._pump_live(sid, session, state, return_after=wait_best if index else 0,
+                                              multi_provider=multi_provider)
+                if state.get("transferred") or outcome in ("client", "cancelled", "busy"):
                     break
                 if outcome == "best":
-                    # La version de secours a tenu : on retente la meilleure (courte coupure).
                     LOG.info("Retour à la meilleure version de %s après %d min", ids[0], int((time.monotonic() - started) / 60))
                     session.switches += 1
                     if reconnect:
@@ -1517,7 +1607,7 @@ class Handler(BaseHTTPRequestHandler):
                     continue
                 trial = memory.get(ids[0], {}).get("trial") if reconnect else (started if index == 0 and switches == 0 else None)
                 if index == 0 and trial and time.monotonic() - trial < 60 and wait_best:
-                    wait_best = min(wait_best * 2, 4 * 3600)  # meilleure version encore instable : patienter plus
+                    wait_best = min(wait_best * 2, 4 * 3600)
                 switches += 1
                 tried += 1
                 session.switches += 1
@@ -1531,41 +1621,71 @@ class Handler(BaseHTTPRequestHandler):
                     memory[ids[0]] = {"sid": ids[index], "until": time.monotonic() + (hold if index else 6 * 3600),
                                       "wait": wait_best, "trial": None}
                     if state["headers_sent"]:
-                        break  # le lecteur se reconnecte et reçoit directement la version suivante
+                        break
                 if index == 0:
-                    time.sleep(1)  # toutes les versions essayées : petite pause avant de recommencer
+                    time.sleep(1)
             if reconnect and index == 0 and outcome in ("client", "cancelled"):
-                memory.pop(ids[0], None)  # la meilleure version a tenu jusqu'au bout : rien à mémoriser
+                memory.pop(ids[0], None)
         finally:
-            self.streams.release(session)
+            if not state.get("transferred"):
+                self.streams.release(session)
             if state["headers_sent"]:
                 self.close_connection = True
             elif state.get("busy"):
                 self.send_busy(*state["busy"])
+            elif state.get("last_busy"):
+                self.send_busy(*state["last_busy"])
             else:
                 try:
                     self._error(502, "Flux fournisseur inaccessible (toutes les versions ont été essayées)", head_only=False)
                 except (OSError, ValueError):
                     pass
 
-    def _pump_live(self, sid: str, session, state: dict, *, return_after: float = 0) -> str:
-        """Relaie une version. Retourne client | cancelled | failed | stalled | slow | ended | best."""
+    def _pump_live(self, sid: str, session, state: dict, *, return_after: float = 0,
+                   multi_provider: bool = False) -> str:
+        """Relaie une version. Retourne client | cancelled | failed | stalled | slow | ended | best | busy."""
         stall = self.config.failover_stall_seconds
         url = self.api.direct_stream(sid)
         request = Request(url, headers={"User-Agent": self.user_agent_for(url), "Accept": "*/*"})
         try:
-            upstream = urlopen(request, timeout=stall + 4)  # délai de démarrage un peu plus large
+            upstream = urlopen(request, timeout=stall + 4)
         except (HTTPError, URLError, TimeoutError, OSError, HTTPException, ValueError) as exc:
             LOG.warning("Version %s indisponible (%s)", sid, getattr(exc, "code", type(exc).__name__))
             if isinstance(exc, HTTPError) and exc.code in BUSY_CODES:
-                # Même abonnement pour toutes les versions : inutile d'essayer les suivantes.
-                state["busy"] = (self.mark_busy(sid, exc), exc.code)
-                return "busy"
+                pause = self.mark_busy(sid, exc)
+                if not multi_provider:
+                    state["busy"] = (pause, exc.code)
+                    return "busy"
+                state["last_busy"] = (pause, exc.code)
+                return "failed"
             return "failed"
+        if self.hub is not None and not (self.headers.get("Range") or self.headers.get("If-Range")):
+            client, device = self._viewer_identity()
+            pump, entry = self.hub.register(
+                sid, upstream, session, client=client, device=device.get("name", ""),
+                priority=device.get("priority", "normal"), device_id=device.get("id", ""),
+                stall_timeout=stall, slow_ratio=self.config.failover_slow_ratio,
+                warmup=SLOW_WARMUP, slow_windows_limit=SLOW_WINDOWS,
+            )
+
+            def send_headers_once(_pump) -> None:
+                if not state["headers_sent"]:
+                    self.send_response(200)
+                    self.send_header("Content-Type", "video/mp2t")
+                    self.send_header("Cache-Control", "no-store")
+                    self.end_headers()
+                    state["headers_sent"] = True
+
+            outcome, transferred = pump.stream_to(self.wfile, entry, on_start=send_headers_once,
+                                                  return_after=return_after)
+            if transferred:
+                state["transferred"] = True
+            return outcome
+
         with upstream:
             session.attach(upstream.close)
             try:
-                upstream.fp.raw._sock.settimeout(stall)  # lecture : « muet » au-delà de N secondes
+                upstream.fp.raw._sock.settimeout(stall)
             except AttributeError:
                 pass
             if not state["headers_sent"]:
@@ -1576,7 +1696,7 @@ class Handler(BaseHTTPRequestHandler):
                 state["headers_sent"] = True
             reader = getattr(upstream, "read1", upstream.read)
             window, window_start, slow_windows = 0, time.monotonic(), 0
-            rates: list[float] = []  # débits par fenêtre de 10 s, rafale de démarrage exclue
+            rates: list[float] = []
             started = window_start
             ratio = self.config.failover_slow_ratio
             while True:
@@ -1602,8 +1722,6 @@ class Handler(BaseHTTPRequestHandler):
                 if now - window_start >= 10:
                     rate = window / (now - window_start)
                     if now - started > SLOW_WARMUP:
-                        # Référence = médiane des fenêtres récentes : ni la rafale de démarrage (le fournisseur
-                        # remplit le tampon du lecteur), ni un pic d'une scène chargée ne la faussent.
                         baseline = sorted(rates)[len(rates) // 2] if len(rates) >= 2 else 0.0
                         slow = bool(ratio and baseline and rate < baseline * ratio)
                         slow_windows = slow_windows + 1 if slow else 0
@@ -2295,10 +2413,12 @@ def make_server(config: Config, *, host: str = "0.0.0.0", port: int | None = Non
     emulator = XtreamEmulator(api, store, config, streams, redact=lambda value: redact(value, config))
     if getattr(epg, "api_cache", None) is not None:
         epg.api_cache.defer = streams.start_delay  # priorité au flux vidéo qui démarre
+    hub = LiveHub(streams) if config.share_streams else None
     handler = type("ConfiguredHandler", (Handler,),
                    {"api": api, "config": config, "store": store, "epg": epg, "series": series,
-                    "streams": streams, "hls": hls or HlsRegistry(), "devices": devices, "emulator": emulator,
-                    "failover_memory": {}, "provider_busy": {}, "guard": access.FailureGuard()})
+                    "streams": streams, "hub": hub, "hls": hls or HlsRegistry(), "devices": devices,
+                    "emulator": emulator, "failover_memory": {}, "provider_busy": {},
+                    "guard": access.FailureGuard()})
     server = ThreadingHTTPServer((host, config.port if port is None else port), handler)
     server.daemon_threads = True
     return server

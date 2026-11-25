@@ -18,11 +18,10 @@ from .epg import EpgCache
 import threading
 import time
 
-from .builder import display_logo, select_items
+from .builder import CUSTOM_PREFIX, FAVORITES_GROUP, add_favorites, display_logo, normalize, regional_group_key, select_items
 from .custom import SLUG_RE, uses
 from .epg import EpgUnavailable, read_schedule, xml_channel_id
-from .builder import CUSTOM_PREFIX, normalize, regional_group_key
-from .server import KINDS, Config, UpstreamError, XtreamAPI, live_channels_in_order, redact, redact_raw
+from .server import KINDS, Config, UpstreamError, XtreamAPI, live_channels_in_order, order_entries, redact, redact_raw
 from .devices import DeviceStore, InvalidDevice
 from .streams import StreamManager
 from .vod import SeriesCache
@@ -194,20 +193,20 @@ class WebHandler(BaseHTTPRequestHandler):
                 return self.json(500, {"error": "Sauvegarde illisible : vérifie /data/playlists.json"})
         kind = qs.get("kind", ["live"])[0]
         refresh = qs.get("refresh", [""])[0] == "1"
+        profile = qs.get("profile", [""])[0]
+        profile = profile if profile.isdigit() else ""
         if path in ("/api/catalog", "/api/catalog/export") and kind not in KINDS:
             return self.json(400, {"error": "kind doit valoir live, vod ou series"})
         if path == "/api/catalog/summary":
-            return self.json(200, self.catalog_summary(refresh=refresh))
+            return self.json(200, self.catalog_summary(refresh=refresh, profile=profile))
         if path == "/api/catalog/export":
-            return self.export_catalog(refresh=refresh, kind=kind)
+            return self.export_catalog(refresh=refresh, kind=kind, profile=profile)
         if path == "/api/catalog":
             try:
                 items, categories = self.api.catalog(refresh=refresh, kind=kind)
             except UpstreamError as exc:
                 return self.json(502, {"error": str(exc)})
             return self.json(200, catalog_payload(items, categories, self.api, kind))
-        profile = qs.get("profile", [""])[0]
-        profile = profile if profile.isdigit() else ""
         if path == "/api/streams":
             return self.json(200, self.streams_status(profile))
         if path == "/api/history":
@@ -285,8 +284,10 @@ class WebHandler(BaseHTTPRequestHandler):
                 row["error"] = "Numéro déjà pris par la configuration du conteneur : abonnement ignoré"
             rows.append(row)
         mixable = settings.mixable()
+        aux = settings.aux_providers()
         for row in rows:
             row["mixable"] = mixable is None or str(row["index"]) in mixable
+            row["aux"] = str(row["index"]) in aux and row["index"] != 1
         return {"editable": self.providers_editable(), "mix_editable": settings.current() is not None, "providers": rows}
 
     def reload_providers(self) -> None:
@@ -338,7 +339,7 @@ class WebHandler(BaseHTTPRequestHandler):
         return self.json(200, {"index": index, "username": found[0], "password": found[1]})
 
     def provider_mix(self, index: int) -> None:
-        """« Peut être mélangé aux autres abonnements » : réglage d'un abonnement (configuration comprise)."""
+        """Rôle d'un abonnement (espace membre séparé ou complément/secours) et autorisation de mélange."""
         body = self.read_payload()
         if body is None:
             return
@@ -347,10 +348,19 @@ class WebHandler(BaseHTTPRequestHandler):
         if settings.current() is None:
             return self.json(409, {"error": "Réglages non modifiables dans ce mode de démarrage"})
         try:
-            settings.set_mixable(index, bool(body.get("mixable")))
+            if "aux" in body:
+                settings.set_aux(index, bool(body["aux"]))
+            if "mixable" in body:
+                settings.set_mixable(index, bool(body["mixable"]))
         except OSError:
             return self.json(500, {"error": "Impossible d'enregistrer /data/settings.json"})
-        return self.json(200, {"index": index, "mixable": bool(body.get("mixable"))})
+        mix_set = settings.mixable()
+        aux_set = settings.aux_providers()
+        return self.json(200, {
+            "index": index,
+            "mixable": mix_set is None or str(index) in mix_set,
+            "aux": str(index) in aux_set and index != 1,
+        })
 
     def provider_write(self, method: str, index: int | None) -> None:
         if method != "DELETE":
@@ -371,6 +381,7 @@ class WebHandler(BaseHTTPRequestHandler):
                     return self.json(404, {"error": "Abonnement introuvable (ceux de la configuration ne se suppriment pas ici)"})
                 if settings.current() is not None:
                     settings.set_mixable(index, False)   # numéro réutilisable : pas de réglage hérité
+                    settings.set_aux(index, False)
                 self.reload_providers()
                 return self.json(200, {"deleted": True})
             current = next((p for p in store.list() if p["index"] == index), None) if index else None
@@ -398,11 +409,17 @@ class WebHandler(BaseHTTPRequestHandler):
                                   user_agent=agent)
                 if settings.current() is not None:
                     settings.set_mixable(entry["index"], bool(body.get("mixable")))
+                    if "aux" in body:
+                        settings.set_aux(entry["index"], bool(body.get("aux")))
             else:
                 entry = store.update(index, name=body.get("name"), url=url, username=username,
                                      password=password if changed else "", user_agent=agent)
+                if settings.current() is not None and "aux" in body:
+                    settings.set_aux(index, bool(body.get("aux")))
             self.reload_providers()
-            return self.json(201 if method == "POST" else 200, provider_store.public(entry))
+            pub = provider_store.public(entry)
+            pub["aux"] = str(entry["index"]) in settings.aux_providers() and entry["index"] != 1
+            return self.json(201 if method == "POST" else 200, pub)
         except (provider_store.InvalidProvider, ValueError) as exc:
             return self.json(400, {"error": str(exc)})
         except RuntimeError:
@@ -444,9 +461,11 @@ class WebHandler(BaseHTTPRequestHandler):
                 self.devices.set_require_token(bool(body.get("require_token")))
                 return self.devices_status()
             if method == "POST":
-                return self.json(201, self.devices.create(body.get("name"), body.get("playlist", ""),
-                                                          body.get("username"), body.get("priority", "normal"),
-                                                          body.get("ip", ""), body.get("links", "lan")))
+                return self.json(201, self.devices.create(
+                    body.get("name"), body.get("playlist", ""), body.get("username"),
+                    body.get("priority", "normal"), body.get("ip", ""), body.get("links", "lan"),
+                    body.get("profile", ""),
+                ))
             return self.json(200, self.devices.update(device_id, body))
         except KeyError:
             return self.json(404, {"error": "Appareil introuvable"})
@@ -522,24 +541,34 @@ class WebHandler(BaseHTTPRequestHandler):
         return {"limit": self.streams.limit(profile or "1"), "auto": self.config.max_connections < 0,
                 "takeover": self.streams.takeover, "streams": streams}
 
-    def catalog_summary(self, *, refresh: bool) -> dict:
+    def catalog_summary(self, *, refresh: bool, profile: str = "") -> dict:
         """Nombre d'éléments et de catégories par type (léger : ne renvoie pas les listes)."""
+        multi = len(getattr(self.api, "apis", ())) > 1
         result = {}
         for kind in KINDS:
             try:
                 items, categories = self.api.catalog(refresh=refresh, kind=kind)
+                if profile and multi:
+                    items = [i for i in items if self.api.provider_of(i["stream_id"]) == profile]
+                    categories = {cid: n for cid, n in categories.items()
+                                  if cid == "none" or self.api.provider_of(cid) == profile}
                 result[kind] = {"items": len(items), "categories": len(categories), "error": None}
             except UpstreamError as exc:
                 result[kind] = {"items": None, "categories": None, "error": str(exc)}
         return result
 
-    def export_catalog(self, *, refresh: bool, kind: str = "live") -> None:
+    def export_catalog(self, *, refresh: bool, kind: str = "live", profile: str = "") -> None:
         """Copie de la structure d'origine (réponses brutes ``player_api.php``), identifiants masqués."""
+        multi = len(getattr(self.api, "apis", ())) > 1
+        target_api = self.api
+        if profile and multi:
+            by_index = dict(zip(getattr(self.api, "indices", ()), getattr(self.api, "apis", ())))
+            target_api = by_index.get(int(profile), self.api)
         try:
-            items, categories = self.api.catalog(refresh=refresh, kind=kind)
+            items, categories = target_api.catalog(refresh=refresh, kind=kind)
         except UpstreamError as exc:
             return self.json(502, {"error": str(exc)})
-        st = self.api.kind_state(kind)
+        st = target_api.kind_state(kind)
         categories_action, items_action = KINDS[kind][0], KINDS[kind][1]
         stamp = time.strftime("%Y%m%d-%H%M%S", time.localtime(st.updated_at or time.time()))
         document = {
@@ -587,7 +616,8 @@ class WebHandler(BaseHTTPRequestHandler):
             "series_cache": self.series.stats() if self.series is not None else None,
             "epg_mode": self.config.epg_source,
             "logos": logos.current().status() if logos.current() else None,
-            "profiles": profiles(self.api, self.config),
+            "profiles": profiles(self.api, self.config, self.store),
+            "sources": sources(self.api, self.config),
         }
         # Le token des lecteurs n'est transmis que si l'interface est protégée par mot de passe.
         if self.config.access_token and self.config.web_password:
@@ -598,6 +628,75 @@ class WebHandler(BaseHTTPRequestHandler):
             if len(providers) > 1:
                 data["providers"] = providers
         return data
+
+    def playlist_preview(self) -> None:
+        """Aperçu instantané d'une playlist (même avant enregistrement) : groupes et éléments dans l'ordre final."""
+        body = self.read_payload()
+        if body is None:
+            return
+        draft = dict(body)
+        raw_slug = str(draft.get("slug") or "").strip()
+        draft["slug"] = raw_slug if SLUG_RE.fullmatch(raw_slug) else "apercu"
+        draft["name"] = str(draft.get("name") or "").strip()[:100] or "Aperçu"
+        try:
+            saved = validate_playlist(draft)
+        except InvalidPlaylist as exc:
+            return self.json(400, {"error": str(exc)})
+        entries: list[tuple[dict, str]] = []
+        groups: dict[str, str] = {}
+        counts = {"live": 0, "vod": 0, "series": 0, "backups": 0}
+        for kind in ("live", "vod", "series"):
+            if not uses(saved, kind):
+                continue
+            try:
+                selected, kind_groups = select_items(self.api, saved, kind)
+            except UpstreamError as exc:
+                return self.json(502, {"error": str(exc)})
+            groups.update(kind_groups)
+            counts[kind] = len(selected)
+            if kind == "live":
+                counts["backups"] = sum(1 for item, _ in selected if item.get("alternates"))
+            entries.extend(selected)
+        ordered = order_entries(add_favorites(entries, groups, saved), groups, saved.get("group_order"))
+        custom_names = saved.get("group_names") or {}
+        grouped: dict[str, dict] = {}
+        total_emitted = 0
+        for item, gid in ordered:
+            kind = item.get("kind", "live")
+            ui_kind = "vod" if kind == "movie" else ("series" if kind == "series" else "live")
+            g = grouped.get(gid)
+            if g is None:
+                g = {
+                    "id": gid,
+                    "name": custom_names.get(gid) or groups.get(gid) or ("Sans catégorie" if gid == "none" else "TV"),
+                    "kind": "favorites" if gid == FAVORITES_GROUP else ui_kind,
+                    "custom": gid.startswith(CUSTOM_PREFIX),
+                    "total": 0,
+                    "items": [],
+                }
+                grouped[gid] = g
+            g["total"] += 1
+            if len(g["items"]) < 120 and total_emitted < 1500:
+                row = {
+                    "id": item["stream_id"],
+                    "kind": ui_kind,
+                    "name": item.get("name", ""),
+                    "logo": display_logo(item),
+                    "num": item.get("num", "") if ui_kind == "live" else "",
+                }
+                if ui_kind == "live":
+                    if item.get("alternates"):
+                        row["backups"] = len(item["alternates"])
+                    if item.get("archive"):
+                        row["archive"] = item["archive"]
+                    if item.get("epg_id") or item.get("epg_prefer_external") or item.get("epg_manual"):
+                        row["epg"] = True
+                elif item.get("year"):
+                    row["year"] = item["year"]
+                g["items"].append(row)
+                total_emitted += 1
+        counts["groups"] = len(grouped)
+        return self.json(200, {"counts": counts, "groups": list(grouped.values())})
 
     # ----------------------------------------------------------- mutations
     def read_payload(self) -> dict | None:
@@ -629,6 +728,8 @@ class WebHandler(BaseHTTPRequestHandler):
         path = urlsplit(self.path).path
         if path == "/api/epg/refresh":
             return self.refresh_epg()
+        if path == "/api/playlists/preview":
+            return self.playlist_preview()
         if path == "/api/devices":
             return self.device_write("POST", None)
         if path == "/api/providers":
@@ -1041,13 +1142,28 @@ def public_addresses(config) -> list[dict]:
     return result
 
 
-def profiles(api, config) -> list[dict]:
-    """Profils = abonnements configurés (``XTREAM_URL``, ``XTREAM_URL_2``…), chacun avec son nom."""
+def sources(api, config) -> list[dict]:
+    """Tous les abonnements configurés : espaces membres et abonnements de complément/secours."""
     names = getattr(api, "names", None) or [config.provider_name or "Mon abonnement"]
     indices = getattr(api, "indices", None) or list(range(1, len(names) + 1))
     mixable = settings.mixable()
-    return [{"id": str(i), "name": name, "mixable": mixable is None or str(i) in mixable}
+    aux = settings.aux_providers()
+    return [{"id": str(i), "name": name,
+             "mixable": mixable is None or str(i) in mixable,
+             "aux": str(i) in aux and int(i) != 1}
             for i, name in zip(indices, names)]
+
+
+def profiles(api, config, store: PlaylistStore | None = None) -> list[dict]:
+    """Espaces membres : abonnements ayant leur propre espace (hors compléments/secours sans playlist propre)."""
+    all_sources = sources(api, config)
+    used: set[str] = set()
+    if store is not None:
+        try:
+            used = {str(p.get("provider") or "1") for p in store.list()}
+        except RuntimeError:
+            used = set()
+    return [s for s in all_sources if s["id"] == "1" or not s["aux"] or s["id"] in used]
 
 
 def catalog_payload(channels: list[dict], categories: dict[str, str], api: XtreamAPI | None = None,
@@ -1095,7 +1211,7 @@ def catalog_payload(channels: list[dict], categories: dict[str, str], api: Xtrea
         hq = library.match(c["name"], categories.get(c["category_id"], "")) if library else None
         if hq:
             entry["logo_hq"] = f"/logo/{hq}.png"
-        for extra in ("ext", "year", "rating", "archive"):
+        for extra in ("ext", "year", "rating", "archive", "adult"):
             if c.get(extra):
                 entry[extra] = c[extra]
         channel_list.append(entry)

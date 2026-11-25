@@ -3,6 +3,7 @@ import json
 import os
 import stat
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from urllib.parse import urlencode
@@ -99,6 +100,9 @@ class EmulatorTests(StackTestCase):
             status, body, _ = self.get(self.stack.proxy_base + "/player_api.php?" + urlencode(
                 {"username": self.u, "password": self.p, "action": "get_live_categories"}))
             self.assertEqual((status, json.loads(body)["user_info"]["auth"]), (401, 0))
+            deadline = time.monotonic() + 2.0
+            while time.monotonic() < deadline and not any("Appareil « TV salon » connecté" in m for m in logs.output):
+                time.sleep(0.02)
         text = "\n".join(logs.output)
         self.assertIn("Appareil « TV salon » connecté depuis 127.0.0.1 : playlist « Salon », profil 1 — 2 chaîne(s)", text)
         self.assertEqual(text.count("identifiants refusés"), 1)    # une ligne par minute et par adresse

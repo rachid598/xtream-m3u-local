@@ -85,8 +85,9 @@ try {
   await waitFor(async () => !/Playlist sœur/.test(await page.innerText('#saved')), 'playlist de Sœur cachée dans Moi');
   assert(await page.inputValue('#opt-provider') === '1', 'nouvelle playlist sur l\'abonnement de Moi');
 
-  // Abonnement ajouté depuis l'interface (Système → Abonnements) : nouveau profil sans redémarrer
+  // Abonnement ajouté depuis l'interface (Système → Abonnements & Espaces) : nouveau profil sans redémarrer
   await page.click('#view-btn-system');
+  await page.click('#sys-btn-providers');
   await waitFor(async () => (await page.locator('#providers-list li').count()) >= 2, 'liste des abonnements');
   const host = (await api('/api/providers')).providers[0].host;   // faux fournisseur de la démo
   await page.fill('#provider-name', 'Maman');

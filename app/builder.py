@@ -53,6 +53,31 @@ def is_separator(name: str) -> bool:
     return not any(ch.isalnum() for ch in text)
 
 
+_ADULT_RE = re.compile(
+    r"(?<![a-z0-9])(?:xxx|18\s*\+|\+\s*18|for\s+adults?|adults?(?!\s+swim)|adultes?|porno?|eroti(?:c|que)|"
+    r"x-rated|nsfw|dorcel|brazzers|penthouse|hustler|playboy\s*tv)(?![a-z0-9])",
+    re.IGNORECASE,
+)
+
+
+def is_adult_category(name: str) -> bool:
+    """Catégorie réservée aux adultes (18+, XXX, Adult, Dorcel…)."""
+    return bool(_ADULT_RE.search(normalize(name)))
+
+
+def is_adult_item(item: dict, categories: dict[str, str] | None = None) -> bool:
+    """Élément réservé aux adultes (drapeau ``is_adult`` du fournisseur, nom ou catégorie)."""
+    if item.get("adult"):
+        return True
+    if _ADULT_RE.search(normalize(item.get("name") or "")):
+        return True
+    if categories:
+        for cid in item.get("category_ids") or ():
+            if is_adult_category(categories.get(cid, "")):
+                return True
+    return False
+
+
 # Préfixe de pays du fournisseur : « FR: », « FR | », « |FR| », « [FR] », « FR - ».
 _COUNTRY = re.compile(r"^\W*[A-Za-z]{2}\s*[:|\-\]●•»◉]+\s*")
 
@@ -495,6 +520,9 @@ def select_items(api, saved: dict, kind: str, *, refresh: bool = False) -> tuple
         items = [item for item in items if api.provider_of(item["stream_id"]) in allowed]
         categories = {cid: name for cid, name in categories.items()
                       if cid == "none" or api.provider_of(cid) in allowed}
+    if saved.get("hide_adult"):
+        items = [item for item in items if not is_adult_item(item, categories)]
+        categories = {cid: name for cid, name in categories.items() if not is_adult_category(name)}
     prefix = GROUP_PREFIX[kind]
     cats_field = SELECTION_FIELDS[kind][0]
     effective = saved

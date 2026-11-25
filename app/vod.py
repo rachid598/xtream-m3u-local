@@ -83,6 +83,10 @@ def rating_of(entry: dict) -> str:
     return f"{value:.1f}" if 0 < value <= 10 else ""
 
 
+def _is_adult(entry: dict) -> bool:
+    return str(entry.get("is_adult") or "").strip().lower() in ("1", "true")
+
+
 def normalize_movie(entry: object) -> dict | None:
     """Raw ``get_vod_streams`` entry -> internal movie."""
     if not isinstance(entry, dict):
@@ -92,7 +96,7 @@ def normalize_movie(entry: object) -> dict | None:
         return None
     cats = category_ids(entry)
     num = str(entry.get("num", "")).strip()
-    return {
+    item = {
         "kind": "movie",
         "stream_id": sid,
         "name": clean_text(entry.get("name"), "Sans titre"),
@@ -105,6 +109,9 @@ def normalize_movie(entry: object) -> dict | None:
         "year": year_of(entry),
         "rating": rating_of(entry),
     }
+    if _is_adult(entry):
+        item["adult"] = True
+    return item
 
 
 def normalize_series(entry: object) -> dict | None:
@@ -116,7 +123,7 @@ def normalize_series(entry: object) -> dict | None:
         return None
     cats = category_ids(entry)
     num = str(entry.get("num", "")).strip()
-    return {
+    item = {
         "kind": "series",
         "stream_id": sid,
         "name": clean_text(entry.get("name"), "Sans titre"),
@@ -128,6 +135,9 @@ def normalize_series(entry: object) -> dict | None:
         "year": year_of(entry),
         "rating": rating_of(entry),
     }
+    if _is_adult(entry):
+        item["adult"] = True
+    return item
 
 
 def _int(value: object, default: int = 0) -> int:

@@ -484,6 +484,8 @@ try {
     `diagnostic bascule automatique en erreur : ${await failoverDiag.locator('.d-detail').innerText()}`);
   assert(/secours/.test(await failoverDiag.locator('.d-detail').innerText()), 'détail du diagnostic mentionne les secours');
   if (shots) await page.screenshot({ path: join(shots, 'desktop-system.png'), fullPage: true });
+  await page.click('#sys-btn-backup');
+  await waitFor(() => page.isVisible('#sys-backup'), 'sous-onglet sauvegarde');
   const backupHref = await page.getAttribute('#backup-download', 'href');
   const backupText = (await fetchText(`${base}${backupHref}`)).text;
   const backup = JSON.parse(backupText);
@@ -504,7 +506,7 @@ try {
       const overflow = await p2.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
       assert(overflow <= 0, `${name}/${tab} : débordement horizontal de ${overflow}px`);
     }
-    for (const sec of ['organize', 'options', 'guide']) {
+    for (const sec of ['organize', 'preview', 'options', 'guide']) {
       await p2.click(`#sec-btn-${sec}`);
       const overflow = await p2.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
       assert(overflow <= 0, `${name}/${sec} : débordement horizontal de ${overflow}px`);
