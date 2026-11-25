@@ -24,11 +24,14 @@ EMPTY_AUTH = {"user_info": {"auth": 0, "status": "Disabled", "message": "Identif
 EXPOSED_KINDS = ("live", "vod", "series")
 
 
-def everything() -> dict:
+def everything(profile: str = "") -> dict:
     """Playlist virtuelle « tout le catalogue » (appareil sans playlist associée)."""
-    return {"slug": "", "name": "Tout le catalogue",
+    data = {"slug": "", "name": "Tout le catalogue",
             "rules": [{"kind": k, "match": "contains", "value": ""} for k in EXPOSED_KINDS],
             "group_order": [], "group_names": {}, "live_format": "ts", "catchup": True}
+    if profile:
+        data["provider"] = profile
+    return data
 
 
 # Copies d'une chaîne rangée dans plusieurs groupes : 2 000 000 000 – 2 099 999 999 (sous 2³¹, au-delà des
@@ -62,15 +65,16 @@ class XtreamEmulator:
     # ------------------------------------------------------------ sélection
     def saved_for(self, device: dict) -> dict:
         slug = device.get("playlist") or ""
+        profile = str(device.get("profile") or "")
         if not slug:
-            return everything()
+            return everything(profile)
         try:
             saved = self.store.get(slug)
         except RuntimeError:
             saved = None
         if saved is None:
             LOG.warning("Appareil %s : playlist « %s » introuvable", device.get("username"), slug)
-            return {"slug": slug, "name": slug, "group_order": [], "group_names": {}}
+            return {"slug": slug, "name": slug, "provider": profile, "group_order": [], "group_names": {}}
         return saved
 
     def entries(self, device: dict, kind: str) -> tuple[list[tuple[dict, str]], dict[str, str], dict]:

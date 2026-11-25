@@ -65,9 +65,11 @@ class Settings:
             try:
                 stamp = self.path.stat().st_mtime
             except OSError:
-                return {**DEFAULTS, "mixable": [], "public_hosts": [], "epg_sources": list(self._default_epg_sources)}
+                return {**DEFAULTS, "mixable": [], "aux_providers": [], "public_hosts": [],
+                        "epg_sources": list(self._default_epg_sources)}
             if self._cache and self._cache[0] == stamp:
                 return {**self._cache[1], "mixable": list(self._cache[1]["mixable"]),
+                        "aux_providers": list(self._cache[1]["aux_providers"]),
                         "public_hosts": list(self._cache[1]["public_hosts"]),
                         "epg_sources": list(self._cache[1]["epg_sources"])}
             try:
@@ -79,6 +81,8 @@ class Settings:
             # « autoriser le mélange » cochée : tous les abonnements le restent.
             values["mixable"] = _indices(data["mixable"]) if "mixable" in data else (
                 list(INDICES) if data.get("allow_mix") else [])
+            # Abonnements « complément / secours » : n'apparaissent pas comme espace membre séparé en haut.
+            values["aux_providers"] = [i for i in _indices(data.get("aux_providers")) if i != 1]
             values["public_hosts"] = _hosts(data.get("public_hosts"))
             sources = _urls(data.get("epg_sources"))
             if self._default_epg_sources and not data.get("epg_sources_initialized"):
@@ -91,14 +95,21 @@ class Settings:
         values = {**self.get(), **{k: bool(v) for k, v in changes.items() if k in DEFAULTS}}
         if "mixable" in changes:
             values["mixable"] = _indices(changes["mixable"])
+        if "aux_providers" in changes:
+            values["aux_providers"] = [i for i in _indices(changes["aux_providers"]) if i != 1]
         if "public_hosts" in changes:
             values["public_hosts"] = _hosts(changes["public_hosts"])
         if "epg_sources" in changes:
             values["epg_sources"] = _urls(changes["epg_sources"])
         with self._lock:
+            had_init = False
+            try:
+                had_init = bool(json.loads(self.path.read_text(encoding="utf-8")).get("epg_sources_initialized"))
+            except (OSError, ValueError, AttributeError):
+                pass
             self.path.parent.mkdir(parents=True, exist_ok=True)
             tmp = self.path.with_suffix(".tmp")
-            stored = {**values, "epg_sources_initialized": True} if self._default_epg_sources else values
+            stored = {**values, "epg_sources_initialized": True} if (self._default_epg_sources or had_init) else values
             tmp.write_text(json.dumps(stored, indent=1), encoding="utf-8")
             os.replace(tmp, self.path)
             self._cache = None
@@ -125,6 +136,13 @@ def mixable() -> set[str] | None:
     return {str(i) for i in _SETTINGS.get()["mixable"]}
 
 
+def aux_providers() -> set[str]:
+    """Abonnements servant de complément / secours plutôt que d'espace membre séparé."""
+    if _SETTINGS is None:
+        return set()
+    return {str(i) for i in _SETTINGS.get()["aux_providers"] if i != 1}
+
+
 def epg_sources() -> list[str]:
     """Guides XMLTV externes ajoutés dans l'interface (en plus de ``EPG_EXTRA_URLS``)."""
     return list(_SETTINGS.get()["epg_sources"]) if _SETTINGS is not None else []
@@ -142,6 +160,20 @@ def set_mixable(index: int, on: bool) -> list[int]:
     current = set(_SETTINGS.get()["mixable"])
     current = current | {index} if on else current - {index}
     return _SETTINGS.update({"mixable": sorted(current)})["mixable"]
+
+
+def set_aux(index: int, on: bool) -> list[int]:
+    """Définit si un abonnement (2 à 9) est un complément/secours plutôt qu'un espace membre séparé."""
+    if _SETTINGS is None:
+        raise RuntimeError("Réglages non modifiables dans ce mode de démarrage")
+    on = bool(on) and index != 1
+    state = _SETTINGS.get()
+    cur_aux = set(state["aux_providers"])
+    cur_aux = (cur_aux | {index}) if on else (cur_aux - {index})
+    changes: dict = {"aux_providers": sorted(cur_aux)}
+    if on:
+        changes["mixable"] = sorted(set(state["mixable"]) | {index})
+    return _SETTINGS.update(changes)["aux_providers"]
 
 
 def local_networks(config) -> tuple:

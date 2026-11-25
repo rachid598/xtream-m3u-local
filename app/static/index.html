@@ -11,35 +11,39 @@
 </head>
 <body>
 <a class="skip" href="#editor">Aller à l'éditeur</a>
+
 <header class="topbar">
   <div class="brand">
-    <div class="logo" aria-hidden="true">M3U</div>
-    <div>
+    <div class="logo" aria-hidden="true">TV</div>
+    <div class="brand-text">
       <h1>Xtream M3U Local</h1>
-      <p class="subtitle">Playlists IPTV personnalisées pour ton réseau local</p>
+      <p class="subtitle">Passerelle IPTV locale &amp; multi-espaces</p>
     </div>
   </div>
   <nav class="views" aria-label="Vues">
     <button type="button" class="view-btn" id="view-btn-playlists" aria-pressed="true">Mes playlists</button>
     <button type="button" class="view-btn" id="view-btn-guide" aria-pressed="false">Guide TV</button>
-    <button type="button" class="view-btn" id="view-btn-catalog" aria-pressed="false">Catalogue<span class="hide-sm"> fournisseur</span></button>
+    <button type="button" class="view-btn" id="view-btn-catalog" aria-pressed="false">Catalogue<span class="hide-sm"> brut</span></button>
     <button type="button" class="view-btn" id="view-btn-devices" aria-pressed="false">Appareils</button>
     <button type="button" class="view-btn" id="view-btn-system" aria-pressed="false">Système</button>
   </nav>
   <div class="top-actions">
-    <span class="pill" id="connection" role="status" aria-live="polite"><span class="dot"></span><span id="connection-text">Connexion au fournisseur…</span></span>
+    <span class="pill" id="connection" role="status" aria-live="polite"><span class="dot"></span><span id="connection-text">Connexion…</span></span>
     <span class="pill subtle" id="account" hidden></span>
     <button type="button" class="pill pill-btn" id="streams-pill" hidden title="Lectures en cours (onglet Système)"><span class="dot live-dot"></span><span id="streams-pill-text"></span></button>
-    <button type="button" class="btn" id="refresh" title="Recharger la liste des chaînes depuis le fournisseur">
-      <span aria-hidden="true">↻</span> <span class="hide-sm">Actualiser le catalogue</span>
+    <button type="button" class="btn small" id="refresh" title="Recharger le catalogue depuis le fournisseur">
+      <span aria-hidden="true">↻</span> <span class="hide-sm">Actualiser</span>
     </button>
   </div>
 </header>
 
 <div class="profile-bar" id="profile-bar" hidden>
-  <span class="profile-label">Profil</span>
-  <div class="views" id="profile-buttons" role="group" aria-label="Profil (abonnement)"></div>
-  <span class="hint" id="profile-hint">Chaque profil a son abonnement, ses playlists et ses appareils.</span>
+  <div class="profile-bar-inner">
+    <span class="profile-label">Espace membre</span>
+    <div class="views" id="profile-buttons" role="group" aria-label="Espace membre (profil)"></div>
+    <span class="hint" id="profile-hint">Espace isolé : playlists, appareils et lectures séparés.</span>
+    <button type="button" class="btn small ghost profile-manage" id="profile-manage">Gérer les abonnements</button>
+  </div>
 </div>
 
 <div id="expiry-banner" class="banner" role="alert" hidden></div>
@@ -54,37 +58,36 @@
       <ul id="saved" class="playlist-list"></ul>
     </section>
 
-    <section class="card">
-      <h2 class="h3">Playlist complète</h2>
-      <p class="muted small">Toutes les chaînes du fournisseur, relayées par ton serveur. Films : ajouter <code>?content=vod</code>.</p>
-      <div class="url-box">
-        <code id="full-url">—</code>
-        <button type="button" class="btn small" data-copy="full-url">Copier</button>
-      </div>
-      <p class="muted small epg-label">Guide des programmes (champ « EPG » du lecteur) :</p>
-      <div class="url-box">
-        <code id="full-epg-url">—</code>
-        <button type="button" class="btn small" data-copy="full-epg-url">Copier</button>
-      </div>
-      <p class="hint">Conseil : une playlist personnalisée (<code>/p/nom.m3u</code>) est plus légère, inclut films et séries, et son guide est complété pour toutes ses chaînes.</p>
-    </section>
-
     <section class="card" id="token-card" hidden>
-      <h2 class="h3">Token de lecture</h2>
-      <p class="muted small">Un code est exigé sur le port 7777 : saisis ACCESS_TOKEN ou le code d'un appareil (onglet Appareils) pour qu'il soit ajouté aux URL copiées. Il reste dans ce navigateur.</p>
+      <h2 class="h3">Code de lecture</h2>
+      <p class="muted small">Port 7777 protégé : saisis <code>ACCESS_TOKEN</code> ou un code d'appareil pour l'inclure dans les liens copiés.</p>
       <label class="sr-only" for="token">Token de lecture</label>
       <input id="token" type="password" autocomplete="off" placeholder="ACCESS_TOKEN ou code d'appareil">
     </section>
 
-    <section class="card help">
-      <h2 class="h3">Mode d'emploi</h2>
+    <details class="card compact-details" id="full-card" open>
+      <summary class="h3">Liens bruts complets</summary>
+      <div class="details-body">
+        <p class="muted small">Tout le catalogue en direct (sans tri). Films : ajouter <code>?content=vod</code>.</p>
+        <div class="url-box">
+          <code id="full-url">—</code>
+          <button type="button" class="btn small" data-copy="full-url">Copier</button>
+        </div>
+        <p class="muted small epg-label">Guide XMLTV complet :</p>
+        <div class="url-box">
+          <code id="full-epg-url">—</code>
+          <button type="button" class="btn small" data-copy="full-epg-url">Copier</button>
+        </div>
+      </div>
+    </details>
+
+    <section class="card help" id="help-card">
+      <h2 class="h3">Démarrage rapide</h2>
       <ol class="small">
-        <li>Crée une playlist et donne-lui un nom.</li>
-        <li>Coche des catégories entières.</li>
-        <li>Affine chaîne par chaîne si besoin.</li>
-        <li>Enregistre, puis colle l'URL dans VLC, TiviMate ou ton lecteur Android TV.</li>
+        <li>Donne un nom à ta playlist (ex. <em>Salon</em>).</li>
+        <li>Coche tes catégories ou ajoute un modèle dans <strong>Organisation</strong>.</li>
+        <li>Enregistre et connecte ta TV via <strong>Appareils</strong> ou l'URL M3U.</li>
       </ol>
-      <p class="muted small">L'URL ne change jamais : il suffit d'actualiser la playlist dans le lecteur après une modification.</p>
     </section>
   </aside>
 
@@ -92,295 +95,342 @@
     <div id="alert" class="alert" role="alert" hidden></div>
 
     <section class="card editor-head">
-      <div class="card-head">
-        <h2 id="editor-title">Nouvelle playlist</h2>
-        <span id="dirty" class="badge warn" hidden>Modifications non enregistrées</span>
+      <div class="editor-top">
+        <div class="editor-title-wrap">
+          <h2 id="editor-title">Nouvelle playlist</h2>
+          <span id="dirty" class="badge warn" hidden>Modifications non enregistrées</span>
+        </div>
+        <div class="stats stats-compact" aria-live="polite">
+          <div class="stat"><strong id="stat-channels">0</strong><span id="stat-channels-label">chaînes</span></div>
+          <div class="stat"><strong id="stat-vod">0</strong><span>films</span></div>
+          <div class="stat"><strong id="stat-series">0</strong><span>séries</span></div>
+          <div class="stat"><strong id="stat-categories">0</strong><span>catégories</span></div>
+        </div>
       </div>
-      <div class="fields">
+
+      <div class="editor-Identity">
         <div class="field">
           <label for="name">Nom de la playlist</label>
-          <input id="name" type="text" maxlength="100" placeholder="Ex. Salon, Chambre, TV française" autocomplete="off">
+          <input id="name" type="text" maxlength="100" placeholder="Ex. Salon, Chambre, Parents…" autocomplete="off">
         </div>
         <div class="field">
-          <label for="slug">Adresse (identifiant dans l'URL)</label>
+          <label for="slug">Identifiant d'adresse</label>
           <div class="slug-input">
             <span class="prefix">/p/</span>
             <input id="slug" type="text" maxlength="60" placeholder="salon" autocomplete="off" spellcheck="false" aria-describedby="slug-help">
             <span class="suffix">.m3u</span>
           </div>
-          <p id="slug-help" class="hint">Minuscules, chiffres, « - » et « _ ». Fixée après le premier enregistrement pour que l'URL reste permanente.</p>
+          <p id="slug-help" class="sr-only">Minuscules, chiffres, - et _. Figé après création.</p>
         </div>
-      </div>
-      <div class="url-box big" id="url-box">
-        <div class="url-text">
-          <span class="label">URL permanente pour le lecteur</span>
-          <code id="url">Enregistre la playlist pour obtenir son URL</code>
+        <div class="url-box big" id="url-box">
+          <div class="url-text">
+            <span class="label">Lien M3U permanent</span>
+            <code id="url">Enregistre la playlist pour obtenir son URL</code>
+          </div>
+          <div class="url-actions">
+            <button type="button" class="btn small" id="copy" disabled>Copier l'URL</button>
+            <a class="btn small ghost" id="open" target="_blank" rel="noopener noreferrer" aria-disabled="true">Ouvrir</a>
+          </div>
         </div>
-        <div class="url-actions">
-          <button type="button" class="btn" id="copy" disabled>Copier l'URL</button>
-          <a class="btn ghost" id="open" target="_blank" rel="noopener noreferrer" aria-disabled="true">Ouvrir le M3U</a>
-        </div>
-      </div>
-      <div class="stats" aria-live="polite">
-        <div class="stat"><strong id="stat-channels">0</strong><span id="stat-channels-label">chaînes retenues</span></div>
-        <div class="stat"><strong id="stat-vod">0</strong><span>films retenus</span></div>
-        <div class="stat"><strong id="stat-series">0</strong><span>séries retenues</span></div>
-        <div class="stat"><strong id="stat-categories">0</strong><span>catégories cochées</span></div>
       </div>
     </section>
 
     <nav class="section-nav" role="tablist" aria-label="Parties de la playlist">
       <button type="button" role="tab" id="sec-btn-content" aria-controls="sec-content" aria-selected="true"><span aria-hidden="true">📺</span> Contenu</button>
       <button type="button" role="tab" id="sec-btn-organize" aria-controls="sec-organize" aria-selected="false" tabindex="-1"><span aria-hidden="true">📁</span> Organisation</button>
+      <button type="button" role="tab" id="sec-btn-preview" aria-controls="sec-preview" aria-selected="false" tabindex="-1"><span aria-hidden="true">👁</span> Aperçu TV</button>
       <button type="button" role="tab" id="sec-btn-options" aria-controls="sec-options" aria-selected="false" tabindex="-1"><span aria-hidden="true">⚙️</span> Options</button>
       <button type="button" role="tab" id="sec-btn-guide" aria-controls="sec-guide" aria-selected="false" tabindex="-1"><span aria-hidden="true">🗓️</span> Guide</button>
     </nav>
 
     <div id="sec-content" role="tabpanel" aria-labelledby="sec-btn-content" class="sec-panel">
-    <section class="card content-card" aria-labelledby="content-title">
-      <div class="card-head">
-        <h2 id="content-title">Contenu de la playlist</h2>
-        <span class="hint">Choisis ce que tu veux éditer : chaque type a ses propres catégories et sélections.</span>
-      </div>
-      <div class="kind-tiles" role="group" aria-label="Type de contenu à éditer">
-        <button type="button" class="kind-tile" data-kind="live" aria-pressed="true">
-          <span class="kt-icon" aria-hidden="true">📺</span>
-          <span class="kt-text"><strong>TV en direct</strong><span class="kt-meta" data-kind-meta="live">Chargement…</span></span>
-          <span class="kt-badge"><span class="kind-count" data-kind-count="live"></span><span class="kt-unit">sélectionnés</span></span>
-        </button>
-        <button type="button" class="kind-tile" data-kind="vod" aria-pressed="false">
-          <span class="kt-icon" aria-hidden="true">🎬</span>
-          <span class="kt-text"><strong>Films</strong><span class="kt-meta" data-kind-meta="vod">Chargement…</span></span>
-          <span class="kt-badge"><span class="kind-count" data-kind-count="vod"></span><span class="kt-unit">sélectionnés</span></span>
-        </button>
-        <button type="button" class="kind-tile" data-kind="series" aria-pressed="false">
-          <span class="kt-icon" aria-hidden="true">🎞️</span>
-          <span class="kt-text"><strong>Séries</strong><span class="kt-meta" data-kind-meta="series">Chargement…</span></span>
-          <span class="kt-badge"><span class="kind-count" data-kind-count="series"></span><span class="kt-unit">sélectionnés</span></span>
-        </button>
-      </div>
-      <div id="vod-hint" class="callout" role="note" hidden></div>
-    </section>
+      <section class="card content-card" aria-labelledby="kind-title">
+        <div class="kind-tiles" role="group" aria-label="Type de contenu à éditer">
+          <button type="button" class="kind-tile" data-kind="live" aria-pressed="true">
+            <span class="kt-icon" aria-hidden="true">📺</span>
+            <span class="kt-text"><strong>TV en direct</strong><span class="kt-meta" data-kind-meta="live">Chargement…</span></span>
+            <span class="kt-badge"><span class="kind-count" data-kind-count="live"></span><span class="kt-unit">retenues</span></span>
+          </button>
+          <button type="button" class="kind-tile" data-kind="vod" aria-pressed="false">
+            <span class="kt-icon" aria-hidden="true">🎬</span>
+            <span class="kt-text"><strong>Films</strong><span class="kt-meta" data-kind-meta="vod">Chargement…</span></span>
+            <span class="kt-badge"><span class="kind-count" data-kind-count="vod"></span><span class="kt-unit">retenus</span></span>
+          </button>
+          <button type="button" class="kind-tile" data-kind="series" aria-pressed="false">
+            <span class="kt-icon" aria-hidden="true">🎞️</span>
+            <span class="kt-text"><strong>Séries</strong><span class="kt-meta" data-kind-meta="series">Chargement…</span></span>
+            <span class="kt-badge"><span class="kind-count" data-kind-count="series"></span><span class="kt-unit">retenues</span></span>
+          </button>
+        </div>
+        <div id="vod-hint" class="callout" role="note" hidden></div>
 
-    <section class="card">
-      <h2 class="kind-title" id="kind-title">📺 TV en direct : choisis les catégories et les chaînes</h2>
-      <div class="tabs" role="tablist" aria-label="Étapes">
-        <button type="button" role="tab" id="tab-categories" aria-controls="panel-categories" aria-selected="true">1. Catégories <span class="count" id="tab-cat-count"></span></button>
-        <button type="button" role="tab" id="tab-channels" aria-controls="panel-channels" aria-selected="false" tabindex="-1">2. <span id="tab-items-label">Chaînes</span> <span class="count" id="tab-ch-count"></span></button>
-        <button type="button" role="tab" id="tab-summary" aria-controls="panel-summary" aria-selected="false" tabindex="-1">3. Ajouts et exclusions</button>
-      </div>
-
-      <div id="panel-categories" role="tabpanel" aria-labelledby="tab-categories" class="panel">
-        <div class="toolbar">
-          <div class="search"><label class="sr-only" for="cat-search">Filtrer les catégories</label><input id="cat-search" type="search" placeholder="Filtrer les catégories…" autocomplete="off"></div>
-          <div class="segmented" role="group" aria-label="Afficher">
-            <button type="button" data-catfilter="all" aria-pressed="true">Toutes</button>
-            <button type="button" data-catfilter="on" aria-pressed="false">Cochées</button>
-            <button type="button" data-catfilter="off" aria-pressed="false">Non cochées</button>
-          </div>
-          <div class="btn-row">
-            <button type="button" class="btn small" id="cat-all">Tout cocher</button>
-            <button type="button" class="btn small" id="cat-none">Tout décocher</button>
+        <div class="content-subhead">
+          <h2 class="kind-title" id="kind-title">📺 TV en direct : choisis les catégories et les chaînes</h2>
+          <div class="tabs" role="tablist" aria-label="Étapes">
+            <button type="button" role="tab" id="tab-categories" aria-controls="panel-categories" aria-selected="true">1. Catégories <span class="count" id="tab-cat-count"></span></button>
+            <button type="button" role="tab" id="tab-channels" aria-controls="panel-channels" aria-selected="false" tabindex="-1">2. <span id="tab-items-label">Chaînes</span> <span class="count" id="tab-ch-count"></span></button>
+            <button type="button" role="tab" id="tab-summary" aria-controls="panel-summary" aria-selected="false" tabindex="-1">3. Ajouts et exclusions</button>
           </div>
         </div>
-        <details class="rules-box" id="rules-box">
-          <summary><span>⚡ Règles automatiques</span> <span class="count" id="rules-count"></span></summary>
-          <p class="hint">Les catégories dont le nom correspond sont ajoutées automatiquement à la playlist, y compris celles que le fournisseur créera plus tard (insensible aux majuscules et aux accents).</p>
-          <ul id="rules-list" class="sum-list"></ul>
-          <div class="rule-form">
-            <label class="sr-only" for="rule-match">Condition</label>
-            <select id="rule-match">
-              <option value="prefix">Le nom commence par</option>
-              <option value="contains">Le nom contient</option>
-              <option value="exact">Le nom est exactement</option>
+
+        <div id="panel-categories" role="tabpanel" aria-labelledby="tab-categories" class="panel">
+          <div class="toolbar">
+            <div class="search"><label class="sr-only" for="cat-search">Filtrer les catégories</label><input id="cat-search" type="search" placeholder="Filtrer les catégories (ex. FR, Sport, 4K)…" autocomplete="off"></div>
+            <div class="segmented" role="group" aria-label="Afficher">
+              <button type="button" data-catfilter="all" aria-pressed="true">Toutes</button>
+              <button type="button" data-catfilter="on" aria-pressed="false">Cochées</button>
+              <button type="button" data-catfilter="off" aria-pressed="false">Non cochées</button>
+            </div>
+            <div class="btn-row">
+              <button type="button" class="btn small" id="cat-all">Tout cocher</button>
+              <button type="button" class="btn small" id="cat-none">Tout décocher</button>
+            </div>
+          </div>
+          <details class="rules-box" id="rules-box">
+            <summary><span>⚡ Règles automatiques</span> <span class="count" id="rules-count"></span></summary>
+            <p class="hint">Inclut automatiquement toute catégorie présente ou future dont le nom correspond.</p>
+            <ul id="rules-list" class="sum-list"></ul>
+            <div class="rule-form">
+              <label class="sr-only" for="rule-match">Condition</label>
+              <select id="rule-match">
+                <option value="prefix">Le nom commence par</option>
+                <option value="contains">Le nom contient</option>
+                <option value="exact">Le nom est exactement</option>
+              </select>
+              <label class="sr-only" for="rule-value">Texte</label>
+              <input id="rule-value" type="text" maxlength="100" placeholder="Ex. FR |" autocomplete="off">
+              <button type="button" class="btn small" id="rule-add">Ajouter la règle</button>
+            </div>
+            <p class="hint" id="rule-preview"></p>
+          </details>
+          <p class="hint" id="cat-info"></p>
+          <div id="categories" class="category-grid"></div>
+        </div>
+
+        <div id="panel-channels" role="tabpanel" aria-labelledby="tab-channels" class="panel" hidden>
+          <div class="toolbar">
+            <div class="search grow"><label class="sr-only" for="search">Rechercher une chaîne</label><input id="search" type="search" placeholder="Rechercher…" autocomplete="off"></div>
+            <label class="sr-only" for="ch-category">Catégorie</label>
+            <select id="ch-category"><option value="">Toutes les catégories</option></select>
+            <label class="sr-only" for="ch-state">État</label>
+            <select id="ch-state">
+              <option value="all">Tout afficher</option>
+              <option value="on">Retenus</option>
+              <option value="off">Non retenus</option>
+              <option value="included">Ajouts manuels</option>
+              <option value="excluded">Exclusions</option>
+              <option value="favorites">★ Favoris</option>
+              <option value="custom">Renommés / numérotés</option>
+              <option value="grouped">Rangées dans mes groupes</option>
             </select>
-            <label class="sr-only" for="rule-value">Texte</label>
-            <input id="rule-value" type="text" maxlength="100" placeholder="Ex. FR |" autocomplete="off">
-            <button type="button" class="btn small" id="rule-add">Ajouter la règle</button>
           </div>
-          <p class="hint" id="rule-preview"></p>
-        </details>
-        <p class="hint" id="cat-info"></p>
-        <div id="categories" class="category-grid"></div>
-      </div>
+          <div class="toolbar between">
+            <p class="hint" id="shown"></p>
+            <div class="btn-row">
+              <button type="button" class="btn small" id="ch-check">Retenir les résultats</button>
+              <button type="button" class="btn small" id="ch-uncheck">Écarter les résultats</button>
+            </div>
+          </div>
+          <ul id="channels" class="channel-list"></ul>
+          <div class="more"><button type="button" class="btn" id="more" hidden>Afficher plus de chaînes</button></div>
+        </div>
 
-      <div id="panel-channels" role="tabpanel" aria-labelledby="tab-channels" class="panel" hidden>
-        <div class="toolbar">
-          <div class="search grow"><label class="sr-only" for="search">Rechercher une chaîne</label><input id="search" type="search" placeholder="Rechercher…" autocomplete="off"></div>
-          <label class="sr-only" for="ch-category">Catégorie</label>
-          <select id="ch-category"><option value="">Toutes les catégories</option></select>
-          <label class="sr-only" for="ch-state">État</label>
-          <select id="ch-state">
-            <option value="all">Tout afficher</option>
-            <option value="on">Retenus</option>
-            <option value="off">Non retenus</option>
-            <option value="included">Ajouts manuels</option>
-            <option value="excluded">Exclusions</option>
-            <option value="favorites">★ Favoris</option>
-            <option value="custom">Renommés / numérotés</option>
-            <option value="grouped">Rangées dans mes groupes</option>
-          </select>
-        </div>
-        <div class="toolbar between">
-          <p class="hint" id="shown"></p>
-          <div class="btn-row">
-            <button type="button" class="btn small" id="ch-check">Retenir les résultats</button>
-            <button type="button" class="btn small" id="ch-uncheck">Écarter les résultats</button>
+        <div id="panel-summary" role="tabpanel" aria-labelledby="tab-summary" class="panel" hidden>
+          <div id="missing-included-bar" class="callout warn-callout" hidden>
+            <span id="missing-included-text"></span>
+            <button type="button" class="btn small" id="clean-missing-included">Nettoyer les introuvables</button>
+          </div>
+          <div class="summary-grid">
+            <div>
+              <div class="card-head"><h3>Ajouts manuels</h3><button type="button" class="btn small ghost" id="clear-included">Tout retirer</button></div>
+              <ul id="sum-included" class="sum-list"></ul>
+            </div>
+            <div>
+              <div class="card-head"><h3>Exclusions</h3><button type="button" class="btn small ghost" id="clear-excluded">Tout retirer</button></div>
+              <ul id="sum-excluded" class="sum-list"></ul>
+            </div>
           </div>
         </div>
-        <ul id="channels" class="channel-list"></ul>
-        <div class="more"><button type="button" class="btn" id="more" hidden>Afficher plus de chaînes</button></div>
-      </div>
-
-      <div id="panel-summary" role="tabpanel" aria-labelledby="tab-summary" class="panel" hidden>
-        <p class="hint">Éléments ajoutés un par un hors des catégories cochées, et éléments retirés de catégories cochées.</p>
-        <div class="summary-grid">
-          <div>
-            <div class="card-head"><h3>Ajouts manuels</h3><button type="button" class="btn small ghost" id="clear-included">Tout retirer</button></div>
-            <ul id="sum-included" class="sum-list"></ul>
-          </div>
-          <div>
-            <div class="card-head"><h3>Exclusions</h3><button type="button" class="btn small ghost" id="clear-excluded">Tout retirer</button></div>
-            <ul id="sum-excluded" class="sum-list"></ul>
-          </div>
-        </div>
-      </div>
-    </section>
+      </section>
     </div>
 
     <div id="sec-organize" role="tabpanel" aria-labelledby="sec-btn-organize" class="sec-panel" hidden>
-    <section class="card">
+      <section class="card">
         <section class="cg-box" aria-labelledby="cg-title">
           <div class="card-head">
-            <h3 id="cg-title">📁 Mes groupes de chaînes</h3>
+            <div>
+              <h3 id="cg-title">📁 Mes groupes de chaînes</h3>
+              <p class="hint">Placés en tête de playlist et remplis automatiquement par nom (ou via 📁 dans l'onglet 2). Glisse <code>⠿</code> pour réordonner ; écris <code>4: Canal+</code> pour fixer le numéro.</p>
+            </div>
             <button type="button" class="btn small primary" id="cg-add">+ Nouveau groupe en premier</button>
           </div>
-          <p class="hint">Range les chaînes à ton goût (TNT, Canal+, Sport…) : tes groupes passent <strong>en tête de la playlist</strong>. Ils se remplissent tout seuls avec les chaînes retenues dont le nom correspond — sans tenir compte du pays (« FR: »), des accents ni de la qualité (HD, FHD, 4K) — et tu peux y ranger n'importe quelle chaîne avec 📁 dans l'onglet 2. Écris « 4: Canal+ » pour donner aussi son numéro à la chaîne, comme sur un décodeur. Une chaîne rangée quitte son groupe d'origine.</p>
-          <div class="preset-row" id="cg-presets"><span class="muted small">Modèles prêts :</span></div>
-          <label class="check-row"><input type="checkbox" id="opt-multi-groups"> <span><strong>Une chaîne peut être dans plusieurs groupes</strong> : beIN Sports 1 à la fois dans « OTT » et dans « Sport FR », La Une dans « Belgique » et « Francophonie »… Même flux et même guide, aucune connexion en plus. Sans cette case, elle ne va que dans le premier groupe de la liste qui la contient.</span></label>
+          <div class="preset-groups" id="cg-presets"></div>
+          <label class="check-row compact-check"><input type="checkbox" id="opt-multi-groups"> <span><strong>Autoriser une chaîne dans plusieurs groupes</strong> (ex. beIN Sports dans « OTT » et « Sport FR », sans connexion supplémentaire)</span></label>
           <div id="cg-list" class="cg-list"></div>
         </section>
-    </section>
-    <section class="card">
-      <div class="summary-grid">
+
+        <div class="summary-grid">
           <div>
-            <div class="card-head"><h3>Groupes dans la playlist</h3><button type="button" class="btn small ghost" id="reset-groups">Ordre et noms du fournisseur</button></div>
-            <p class="hint">Réorganise et renomme les groupes de cette playlist uniquement : le catalogue du fournisseur n'est jamais modifié.</p>
+            <div class="card-head">
+              <h3>Ordre et noms des groupes</h3>
+              <button type="button" class="btn small ghost" id="reset-groups">Réinitialiser</button>
+            </div>
+            <p class="hint">Glisse <code>⠿</code> ou utilise ↑ ↓ pour classer les bouquets de cette playlist.</p>
             <ol id="sum-groups" class="group-list"></ol>
           </div>
           <div class="stack">
-          <div>
-            <div class="card-head"><h3>★ Favoris</h3><button type="button" class="btn small ghost" id="clear-favorites">Tout retirer</button></div>
-            <p class="hint">Regroupés en tête de la playlist (ils restent aussi dans leur groupe). Ajoute-les avec ☆ dans la liste.</p>
-            <ol id="sum-favorites" class="sum-list"></ol>
-          </div>
-          <div>
-            <div class="card-head"><h3>Noms et numéros</h3>
-              <div class="btn-row">
-                <button type="button" class="btn small" id="auto-number" title="Numéros 1, 2, 3… dans l'ordre actuel des chaînes">Numéroter les chaînes</button>
-                <button type="button" class="btn small ghost" id="clear-custom">Tout effacer</button>
-              </div>
+            <div>
+              <div class="card-head"><h3>★ Favoris</h3><button type="button" class="btn small ghost" id="clear-favorites">Tout retirer</button></div>
+              <p class="hint">Affichés tout en haut de la playlist (ajoute-les avec ☆).</p>
+              <ol id="sum-favorites" class="sum-list"></ol>
             </div>
-            <p class="hint">Les numéros servent au zapping à la télécommande et à l'ordre des chaînes dans chaque groupe. Utilise ✎ dans la liste pour renommer ou numéroter.</p>
-            <ul id="sum-custom" class="sum-list"></ul>
+            <div>
+              <div class="card-head"><h3>Personnalisations (✎)</h3>
+                <div class="btn-row">
+                  <button type="button" class="btn small" id="auto-number" title="Numérote toutes les chaînes retenues de 1 à N dans l'ordre des groupes">Numéroter 1…N</button>
+                  <button type="button" class="btn small ghost" id="clear-custom">Tout effacer</button>
+                </div>
+              </div>
+              <p class="hint">Noms, numéros de télécommande, logos et guides personnalisés.</p>
+              <ul id="sum-custom" class="sum-list"></ul>
+            </div>
           </div>
+        </div>
+      </section>
+    </div>
+
+    <div id="sec-preview" role="tabpanel" aria-labelledby="sec-btn-preview" class="sec-panel" hidden>
+      <section class="card">
+        <div class="card-head">
+          <div>
+            <h2><span aria-hidden="true">👁</span> Aperçu TV final</h2>
+            <p class="hint">Rendu exact tel qu'affiché dans TiviMate, VLC ou IPTV Smarters (groupes, ordre, numéros, logos HQ et secours), même avant d'enregistrer.</p>
           </div>
-      </div>
-    </section>
+          <button type="button" class="btn small" id="tv-preview-refresh">↻ Actualiser l'aperçu</button>
+        </div>
+        <div class="toolbar">
+          <div class="search grow"><label class="sr-only" for="tv-preview-search">Filtrer l'aperçu</label><input id="tv-preview-search" type="search" placeholder="Chercher une chaîne, un film ou un groupe dans le résultat…" autocomplete="off"></div>
+          <div class="segmented" role="group" aria-label="Type dans l'aperçu">
+            <button type="button" data-pvkind="all" aria-pressed="true">Tout</button>
+            <button type="button" data-pvkind="live" aria-pressed="false">Direct</button>
+            <button type="button" data-pvkind="vod" aria-pressed="false">Films</button>
+            <button type="button" data-pvkind="series" aria-pressed="false">Séries</button>
+          </div>
+        </div>
+        <p class="hint" id="tv-preview-meta"></p>
+        <div id="tv-preview-groups" class="tv-preview-groups"></div>
+      </section>
     </div>
 
     <div id="sec-options" role="tabpanel" aria-labelledby="sec-btn-options" class="sec-panel" hidden>
-    <section class="card options-card" id="options-box">
-      <div class="card-head"><h2><span aria-hidden="true">⚙️</span> Options de la playlist</h2><span class="pill" id="options-pill"><span id="options-pill-text">MPEG-TS</span></span></div>
-        <div class="epg-body">
-          <div class="option-row" id="opt-provider-row" hidden>
-            <label for="opt-provider">Abonnement utilisé par cette playlist</label>
+      <section class="card options-card" id="options-box">
+        <div class="card-head">
+          <h2><span aria-hidden="true">⚙️</span> Options de la playlist</h2>
+          <span class="pill" id="options-pill"><span id="options-pill-text">MPEG-TS</span></span>
+        </div>
+
+        <div class="option-banner" id="opt-provider-row" hidden>
+          <div class="field">
+            <label for="opt-provider">Source(s) de contenu et de secours</label>
             <select id="opt-provider"></select>
-            <p class="hint">Une playlist d'un profil n'utilise que son abonnement (chaînes, secours, connexions). « Tous les abonnements » mélange les catalogues : réservé à tes propres playlists.</p>
-          </div>
-          <div class="option-row">
-            <label for="opt-live-format">Format des chaînes en direct</label>
-            <select id="opt-live-format">
-              <option value="ts">MPEG-TS (recommandé, une connexion continue)</option>
-              <option value="hls">HLS .m3u8 (petits morceaux : si le TS se fige ou coupe souvent)</option>
-            </select>
-            <p class="hint">Les deux passent par ton serveur, sans identifiants dans la playlist. Pour tester sans changer la playlist : ajoute <code>?format=m3u8</code> à son URL.</p>
-          </div>
-          <div class="option-row">
-            <label class="check-row"><input type="checkbox" id="opt-dedupe"> <span>Masquer les doublons SD / HD / FHD / 4K d'une même chaîne (garder la meilleure qualité dans chaque groupe)</span></label>
-            <div class="option-row sub-option">
-              <label for="opt-uhd">Versions 4K / UHD</label>
-              <select id="opt-uhd">
-                <option value="backup">En dernier secours (conseillé) : la FHD passe avant la 4K</option>
-                <option value="normal">Comme les autres : la meilleure qualité d'abord</option>
-                <option value="never">Jamais, sauf chaîne qui n'existe qu'en 4K</option>
-              </select>
-              <p class="hint">Beaucoup de « 4K » de fournisseurs sont des chaînes d'événement ou une vidéo de logo en boucle (ex. « M6 4K ») : la bascule automatique ne peut pas les repérer, elle ne voit pas de coupure.</p>
-            </div>
-          </div>
-          <div class="option-row">
-            <label class="check-row"><input type="checkbox" id="opt-failover"> <span>Bascule automatique : si la version lue coupe, se fige ou rame, passer toute seule à la version suivante de la même chaîne (4K → FHD → HD → SD)</span></label>
-            <p class="hint" id="opt-failover-hint">Utilise les doublons masqués comme versions de secours : active aussi « Masquer les doublons ». Format MPEG-TS seulement ; chaque bascule provoque une courte coupure (1 à 3 s) et la version suivante reste jusqu'au prochain changement de chaîne.</p>
-            <label class="check-row sub-option"><input type="checkbox" id="opt-failover-any"> <span>Secours hors catégories cochées : cherche aussi des versions de secours dans tout le catalogue, même les catégories que tu n'as pas cochées (elles ne sont jamais ajoutées à la playlist, utilisées seulement si toutes les versions cochées sont indisponibles)</span></label>
-          </div>
-          <div class="option-row">
-            <label class="check-row"><input type="checkbox" id="opt-hq-logos" checked> <span>Logos haute qualité : remplacer les logos du fournisseur par ceux de la base ouverte iptv-org (chaînes françaises, belges et marocaines), gardés en cache sur le serveur</span></label>
-            <p class="hint" id="opt-hq-logos-hint">Un logo choisi à la main (✎) reste prioritaire.</p>
-          </div>
-          <div class="option-row">
-            <label class="check-row"><input type="checkbox" id="opt-separators"> <span>Masquer les fausses chaînes du fournisseur : séparateurs (« ##### PRIME ##### », « ♣♦♣--- FRANCE ---♣♦♣ ») et emplacements d'événements vides (« NO EVENT STREAMING », qui réapparaissent avec leur vrai nom pendant un match)</span></label>
-          </div>
-          <div class="option-row">
-            <label for="opt-fav-name">Nom du groupe des favoris</label>
-            <input id="opt-fav-name" type="text" maxlength="100" placeholder="★ Favoris">
-          </div>
-          <div class="option-row">
-            <label class="check-row"><input type="checkbox" id="opt-catchup" checked> <span>Replay (catch-up) : revoir les programmes passés depuis le guide, sur les chaînes qui le proposent</span></label>
+            <p class="hint">En mode mélange, les abonnements complémentaires fournissent leurs chaînes et prennent automatiquement le relais si l'abonnement principal est occupé.</p>
           </div>
         </div>
-      
-    </section>
+
+        <div class="options-grid">
+          <div class="options-col">
+            <h3 class="options-group-title">Flux &amp; continuité</h3>
+            <div class="option-row">
+              <label for="opt-live-format">Format du direct</label>
+              <select id="opt-live-format">
+                <option value="ts">MPEG-TS (recommandé : rapide, partage local &amp; bascule auto)</option>
+                <option value="hls">HLS .m3u8 (segments : utile si le TS fige sur un lecteur)</option>
+              </select>
+            </div>
+            <div class="option-row">
+              <label class="check-row"><input type="checkbox" id="opt-dedupe"> <span><strong>Masquer les doublons</strong> (garder la meilleure version SD/HD/FHD/4K par groupe)</span></label>
+              <div class="option-row sub-option">
+                <label for="opt-uhd">Priorité des versions 4K / UHD</label>
+                <select id="opt-uhd">
+                  <option value="backup">En dernier secours (conseillé : FHD avant 4K)</option>
+                  <option value="normal">Meilleure qualité d'abord (4K en tête)</option>
+                  <option value="never">Ignorer la 4K si une autre version existe</option>
+                </select>
+              </div>
+            </div>
+            <div class="option-row">
+              <label class="check-row"><input type="checkbox" id="opt-failover"> <span><strong>Bascule automatique</strong> en cas de coupure, gel ou saturation</span></label>
+              <p class="hint" id="opt-failover-hint">Nécessite « Masquer les doublons » et le format MPEG-TS.</p>
+              <label class="check-row sub-option"><input type="checkbox" id="opt-failover-any"> <span><strong>Secours étendu</strong> : chercher aussi des versions de repli dans les catégories non cochées</span></label>
+            </div>
+            <div class="option-row">
+              <label class="check-row"><input type="checkbox" id="opt-catchup" checked> <span><strong>Replay (catch-up)</strong> sur les chaînes compatibles</span></label>
+            </div>
+          </div>
+
+          <div class="options-col">
+            <h3 class="options-group-title">Propreté &amp; filtrage</h3>
+            <div class="option-row">
+              <label class="check-row"><input type="checkbox" id="opt-hq-logos" checked> <span><strong>Logos haute qualité</strong> locaux en cache (iptv-org / tv-logos)</span></label>
+              <p class="hint" id="opt-hq-logos-hint">Un logo personnalisé (✎) reste toujours prioritaire.</p>
+            </div>
+            <div class="option-row">
+              <label class="check-row"><input type="checkbox" id="opt-separators"> <span><strong>Masquer les séparateurs</strong> (« ##### SPORT ##### », « NO EVENT STREAMING »…)</span></label>
+            </div>
+            <div class="option-row">
+              <label class="check-row"><input type="checkbox" id="opt-adult"> <span><strong>Masquer les contenus adultes (18+ / XXX)</strong> dans le direct, les films, les séries et les secours</span></label>
+            </div>
+            <div class="option-row">
+              <label for="opt-fav-name">Nom du bouquet des favoris</label>
+              <input id="opt-fav-name" type="text" maxlength="100" placeholder="★ Favoris">
+            </div>
+          </div>
+        </div>
+      </section>
     </div>
 
     <div id="sec-guide" role="tabpanel" aria-labelledby="sec-btn-guide" class="sec-panel" hidden>
-    <section class="card options-card" id="epg-box">
-      <div class="card-head"><h2><span aria-hidden="true">🗓️</span> Guide des programmes (EPG)</h2><span class="pill" id="epg-pill"><span class="dot"></span><span id="epg-pill-text">Vérification…</span></span></div>
-      <p class="hint" id="epg-unavailable" hidden>Enregistre la playlist avec des chaînes en direct pour obtenir son guide. Le guide TV complet (ce qui passe maintenant, recherche) est dans la vue « Guide TV ».</p>
-      <div id="epg-content">
-        <div class="epg-body">
-          <p class="hint">Les lecteurs (TiviMate, VLC…) le chargent automatiquement depuis la playlist. Si ton lecteur demande une adresse « EPG » séparée, copie celle-ci (l'adresse <code>http://IP:7777/xmltv.php</code> fonctionne aussi) :</p>
-          <div class="url-box">
-            <code id="epg-url">—</code>
-            <button type="button" class="btn small" data-copy="epg-url">Copier</button>
-          </div>
-          <div class="epg-grid">
-            <div class="stat"><strong id="epg-covered">–</strong><span>chaînes avec programmes</span></div>
-            <div class="stat"><strong id="epg-xmltv">–</strong><span id="epg-xmltv-label">via xmltv.php</span></div>
-            <div class="stat"><strong id="epg-api">–</strong><span>via l'API (chaîne par chaîne)</span></div>
-            <div class="stat"><strong id="epg-missing-count">–</strong><span>sans programme</span></div>
-          </div>
-          <p class="hint" id="epg-source"></p>
-          <details class="epg-missing" id="epg-missing-box" hidden>
-            <summary id="epg-missing-summary">Chaînes sans programme</summary>
-            <p class="muted small">Le serveur peut chercher, dans le guide du fournisseur et tes guides externes, des chaînes au nom proche. Choisis la bonne, puis enregistre la playlist.</p>
-            <button type="button" class="btn small" id="epg-suggest">Proposer des guides</button>
-            <ul id="epg-missing" class="sum-list"></ul>
-          </details>
-          <details class="epg-groups" id="epg-groups-box">
-            <summary>Guide de mes groupes (OTT, TNT, Maroc…)</summary>
-            <label class="check-row"><input type="checkbox" id="opt-group-epg"> <span><strong>Guides externes d'abord</strong> pour les chaînes de « Mes groupes » : rapprochées par le nom propre du groupe (« TF1 »), le guide du fournisseur ne sert que s'ils n'ont pas la chaîne. Ajoute tes guides fiables dans Système → Guides externes.</span></label>
-            <p class="muted small" id="epg-groups-hint">Pour chaque chaîne : d'où vient son guide. « Changer » pour choisir à la main dans tous les guides, puis enregistre la playlist.</p>
-            <button type="button" class="btn small" id="epg-groups-load">Afficher le guide de chaque chaîne</button>
-            <ul id="epg-groups" class="sum-list epg-group-list"></ul>
-          </details>
-          <div class="btn-row">
-            <button type="button" class="btn small" id="epg-refresh">Actualiser le guide</button>
-            <a class="btn small ghost" id="epg-open" target="_blank" rel="noopener noreferrer">Ouvrir le XML</a>
+      <section class="card options-card" id="epg-box">
+        <div class="card-head">
+          <h2><span aria-hidden="true">🗓️</span> Guide des programmes (EPG)</h2>
+          <span class="pill" id="epg-pill"><span class="dot"></span><span id="epg-pill-text">Vérification…</span></span>
+        </div>
+        <p class="hint" id="epg-unavailable" hidden>Enregistre d'abord la playlist avec des chaînes en direct pour générer son guide XMLTV dédié.</p>
+        <div id="epg-content">
+          <div class="epg-body">
+            <p class="hint">Inclus automatiquement dans le M3U et Xtream Codes. Adresse XMLTV dédiée si ton lecteur la demande séparément :</p>
+            <div class="url-box">
+              <code id="epg-url">—</code>
+              <button type="button" class="btn small" data-copy="epg-url">Copier</button>
+            </div>
+            <div class="epg-grid">
+              <div class="stat"><strong id="epg-covered">–</strong><span>chaînes couvertes</span></div>
+              <div class="stat"><strong id="epg-xmltv">–</strong><span id="epg-xmltv-label">via xmltv.php</span></div>
+              <div class="stat"><strong id="epg-external">–</strong><span>via guides externes</span></div>
+              <div class="stat"><strong id="epg-api">–</strong><span>via l'API Xtream</span></div>
+              <div class="stat"><strong id="epg-missing-count">–</strong><span>sans programme</span></div>
+            </div>
+            <p class="hint" id="epg-source"></p>
+            <details class="epg-missing" id="epg-missing-box" hidden>
+              <summary id="epg-missing-summary">Chaînes sans programme</summary>
+              <p class="muted small">Associe une chaîne proche issue du fournisseur ou des guides externes, puis enregistre la playlist.</p>
+              <button type="button" class="btn small" id="epg-suggest">Proposer des guides</button>
+              <ul id="epg-missing" class="sum-list"></ul>
+            </details>
+            <details class="epg-groups" id="epg-groups-box">
+              <summary>Rapprochement EPG de « Mes groupes » (OTT, TNT, Maroc…)</summary>
+              <label class="check-row"><input type="checkbox" id="opt-group-epg"> <span><strong>Guides externes prioritaires</strong> sur « Mes groupes » (plus complets et sans requêtes vers le fournisseur)</span></label>
+              <p class="muted small" id="epg-groups-hint">Vérifie ou remplace manuellement la source EPG de chaque chaîne de tes groupes.</p>
+              <button type="button" class="btn small" id="epg-groups-load">Afficher le guide de chaque chaîne</button>
+              <ul id="epg-groups" class="sum-list epg-group-list"></ul>
+            </details>
+            <div class="btn-row">
+              <button type="button" class="btn small" id="epg-refresh">Actualiser le guide</button>
+              <a class="btn small ghost" id="epg-open" target="_blank" rel="noopener noreferrer">Ouvrir le XML</a>
+            </div>
           </div>
         </div>
-      
-      </div>
-    </section>
+      </section>
     </div>
   </main>
 </div>
@@ -391,7 +441,7 @@
       <div class="card-head">
         <div>
           <h2>Guide TV</h2>
-          <p class="muted small">Ce qui passe sur les chaînes d'une playlist (favoris et « Mes groupes » d'abord), et recherche dans les programmes des 7 prochains jours. ▶ ouvre un aperçu dans le navigateur.</p>
+          <p class="muted small">Programmes en cours, soirée et recherche sur 7 jours. Clique sur ▶ pour prévisualiser dans le navigateur.</p>
         </div>
       </div>
       <div class="guide-toolbar">
@@ -402,7 +452,7 @@
           <button type="button" data-when="tomorrow" aria-pressed="false">Demain 21 h</button>
         </div>
         <div class="search"><label class="sr-only" for="guide-search">Rechercher un programme</label><input id="guide-search" type="search" placeholder="Rechercher un programme (match, film…)" autocomplete="off"></div>
-        <label class="check-row"><input type="checkbox" id="guide-mine"> <span>Mes groupes et favoris seulement</span></label>
+        <label class="check-row"><input type="checkbox" id="guide-mine"> <span>Mes groupes et favoris</span></label>
       </div>
       <p class="hint" id="guide-status"></p>
       <ul id="guide-list" class="guide-list"></ul>
@@ -415,12 +465,12 @@
     <section class="card">
       <div class="card-head">
         <div>
-          <h2>Catalogue original du fournisseur</h2>
-          <p class="muted small">Lecture seule : catégories et chaînes exactement dans l'ordre renvoyé par <code>player_api.php</code> (<code id="prov-actions">get_live_categories et get_live_streams</code>), avec leurs identifiants et sous-groupes (<code>parent_id</code>).</p>
+          <h2>Catalogue brut du fournisseur</h2>
+          <p class="muted small">Lecture seule dans l'ordre exact de <code>player_api.php</code> (<code id="prov-actions">get_live_categories et get_live_streams</code>).</p>
         </div>
         <div class="btn-row">
-          <a class="btn" id="export" href="/api/catalog/export" download>Exporter le catalogue fournisseur (JSON)</a>
-          <a class="btn ghost" id="export-raw" href="/api/catalog?refresh=1" target="_blank" rel="noopener noreferrer">Voir le JSON interprété</a>
+          <a class="btn small" id="export" href="/api/catalog/export" download>Exporter en JSON</a>
+          <a class="btn small ghost" id="export-raw" href="/api/catalog?refresh=1" target="_blank" rel="noopener noreferrer">JSON interprété</a>
         </div>
       </div>
       <div class="kinds" role="group" aria-label="Type de contenu">
@@ -430,7 +480,6 @@
       </div>
       <div id="catalog-warning" class="alert warn" role="status" hidden></div>
       <div class="stats" id="catalog-stats"></div>
-      <p class="hint">L'API Xtream n'expose que les catégories et chaînes autorisées pour ton compte, pas la configuration administrative du fournisseur. Le catalogue est gardé en cache (CACHE_SECONDS, 30 min par défaut) : « Actualiser le catalogue » force un nouvel appel.</p>
     </section>
     <section class="card">
       <div class="toolbar">
@@ -453,7 +502,7 @@
       <div class="card-head">
         <div>
           <h2>Appareils</h2>
-          <p class="muted small">Un code par TV ou téléphone : chaque appareil reçoit ses adresses (mode M3U) et ses identifiants (mode Xtream Codes), limités à la playlist choisie. Supprimer un appareil coupe son accès sans toucher aux autres.</p>
+          <p class="muted small">Crée un accès dédié par TV, boîtier ou téléphone (M3U, Xtream Codes ou tuner Plex/Jellyfin) limité à sa playlist.</p>
         </div>
       </div>
       <form class="device-form" id="device-form">
@@ -462,30 +511,30 @@
           <input id="device-name" type="text" maxlength="60" placeholder="Ex. TV du salon" autocomplete="off">
         </div>
         <div class="field">
-          <label for="device-playlist">Playlist</label>
+          <label for="device-playlist">Playlist associée</label>
           <select id="device-playlist"></select>
         </div>
         <div class="field">
           <label for="device-priority">Priorité</label>
           <select id="device-priority">
             <option value="normal">Normale</option>
-            <option value="high">Haute : jamais coupée par une autre TV</option>
-            <option value="low">Basse : cède toujours sa place</option>
+            <option value="high">Haute (jamais coupée)</option>
+            <option value="low">Basse (cède sa place)</option>
           </select>
         </div>
         <div class="field">
-          <label for="device-links">Liens</label>
+          <label for="device-links">Réseau</label>
           <select id="device-links">
-            <option value="lan">Réseau local : à la maison</option>
-            <option value="external">Externe : hors de la maison</option>
+            <option value="lan">Maison (réseau local)</option>
+            <option value="external">Externe (hors domicile)</option>
           </select>
         </div>
-        <button type="submit" class="btn primary">+ Ajouter l'appareil</button>
+        <button type="submit" class="btn primary">+ Ajouter</button>
       </form>
-    </section>
-    <section class="card">
-      <label class="check-row"><input type="checkbox" id="require-token"> <span><strong>Exiger un code d'appareil</strong> pour les playlists, le guide et les flux (port 7777). Recommandé si d'autres personnes utilisent ton réseau.</span></label>
-      <p class="hint" id="require-token-hint"></p>
+      <div class="device-guard-bar">
+        <label class="check-row"><input type="checkbox" id="require-token"> <span><strong>Exiger un code d'appareil</strong> sur le réseau local (port 7777)</span></label>
+        <span class="hint" id="require-token-hint"></span>
+      </div>
     </section>
     <div id="devices-list" class="devices-list"></div>
   </main>
@@ -493,167 +542,198 @@
 
 <div class="layout single" id="view-system" hidden>
   <main class="main">
-    <section class="card">
-      <div class="card-head"><h2>Abonnement</h2><span class="hint" id="sys-version"></span></div>
-      <dl class="facts" id="account-facts"><dt>État</dt><dd>Chargement…</dd></dl>
-    </section>
-    <section class="card" id="remote-card">
-      <div class="card-head">
-        <div>
-          <h2>Accès à distance</h2>
-          <p class="muted small">Par défaut, seul ton réseau local (box, Wi-Fi) a accès à ce serveur.</p>
-        </div>
+    <nav class="section-nav sys-nav" role="tablist" aria-label="Rubriques système">
+      <button type="button" role="tab" id="sys-btn-overview" aria-controls="sys-overview" aria-selected="true"><span aria-hidden="true">📊</span> État &amp; Diagnostic</button>
+      <button type="button" role="tab" id="sys-btn-providers" aria-controls="sys-providers" aria-selected="false" tabindex="-1"><span aria-hidden="true">🔑</span> Abonnements &amp; Espaces</button>
+      <button type="button" role="tab" id="sys-btn-network" aria-controls="sys-network" aria-selected="false" tabindex="-1"><span aria-hidden="true">🌍</span> Accès &amp; Guides</button>
+      <button type="button" role="tab" id="sys-btn-backup" aria-controls="sys-backup" aria-selected="false" tabindex="-1"><span aria-hidden="true">💾</span> Sauvegarde</button>
+    </nav>
+
+    <div id="sys-overview" role="tabpanel" aria-labelledby="sys-btn-overview" class="sec-panel">
+      <div class="sys-two-col">
+        <section class="card">
+          <div class="card-head"><h2>Abonnement actif</h2><span class="hint" id="sys-version"></span></div>
+          <dl class="facts" id="account-facts"><dt>État</dt><dd>Chargement…</dd></dl>
+        </section>
+
+        <section class="card">
+          <div class="card-head">
+            <div>
+              <h2>Lectures en cours</h2>
+              <p class="muted small" id="streams-limit">Chargement…</p>
+            </div>
+            <button type="button" class="btn small" id="streams-refresh">↻ Actualiser</button>
+          </div>
+          <ul id="streams-list" class="stream-list"></ul>
+          <p class="hint">Deux écrans sur la même chaîne en direct partagent automatiquement une seule connexion fournisseur.</p>
+        </section>
       </div>
-      <label class="check-row"><input type="checkbox" id="tailscale-local"> <span><strong>Tailscale = mon réseau local</strong> : tes appareils connectés à Tailscale (téléphone, ordinateur, TV chez quelqu'un d'autre) ont le même accès que chez toi, interface Web comprise, sans code supplémentaire. À n'activer que si ton réseau Tailscale ne contient que tes propres appareils.</span></label>
-      <p class="hint" id="remote-hint"></p>
-      <div class="hosts-box">
-        <h3>Adresses publiques (reverse proxy)</h3>
-        <p class="muted small">Nginx Proxy Manager, Traefik… : le nom de domaine qui renvoie vers le port 7777 en https (ex. tv2.mondomaine.fr). Il est proposé dans « Liens » de chaque appareil. Le tunnel Cloudflare s'ajoute tout seul.</p>
-        <ul class="sum-list" id="hosts-list"></ul>
-        <form class="hosts-form" id="hosts-form" autocomplete="off">
-          <input id="hosts-input" type="text" maxlength="253" placeholder="tv2.mondomaine.fr" inputmode="url" spellcheck="false" aria-label="Adresse publique à ajouter">
+
+      <section class="card">
+        <div class="card-head">
+          <div>
+            <h2>Diagnostic complet</h2>
+            <p class="muted small">Vérifie l'API Xtream, les catalogues, les guides EPG, la bascule auto et les flux (ignorés si une lecture est active).</p>
+          </div>
+          <div class="btn-row">
+            <button type="button" class="btn primary" id="diag-run">Lancer le diagnostic</button>
+            <button type="button" class="btn" id="diag-copy" hidden>Copier le rapport</button>
+          </div>
+        </div>
+        <ul id="diag-results" class="diag-list"></ul>
+      </section>
+
+      <section class="card">
+        <div class="card-head">
+          <div>
+            <h2>Historique des lectures (30 jours)</h2>
+            <p class="muted small">Chaînes les plus suivies et bascules automatiques observées.</p>
+          </div>
+          <button type="button" class="btn small ghost" id="history-clear">Effacer</button>
+        </div>
+        <div class="summary-grid">
+          <div><h3>Les plus regardées</h3><ol id="history-top" class="sum-list"></ol></div>
+          <div><h3>Bascules automatiques</h3><ol id="history-unstable" class="sum-list"></ol></div>
+        </div>
+        <details class="epg-missing"><summary>Dernières sessions détaillées</summary><ul id="history-list" class="sum-list"></ul></details>
+      </section>
+    </div>
+
+    <div id="sys-providers" role="tabpanel" aria-labelledby="sys-btn-providers" class="sec-panel" hidden>
+      <section class="card" id="providers-card">
+        <div class="card-head">
+          <div>
+            <h2>Abonnements Xtream &amp; Rôles</h2>
+            <p class="muted small">Chaque abonnement supplémentaire peut créer un <strong>Espace membre séparé</strong> (barre du haut : famille, proche…) ou servir de <strong>Complément / secours</strong> discret pour enrichir tes playlists et absorber les limites de connexions.</p>
+          </div>
+        </div>
+        <ul class="sum-list provider-list" id="providers-list"><li class="empty">Chargement…</li></ul>
+        <form class="provider-form" id="provider-form" autocomplete="off">
+          <div class="field">
+            <label for="provider-name">Nom affiché</label>
+            <input id="provider-name" type="text" maxlength="40" placeholder="Ex. Ma sœur ou Secours Sport" required>
+          </div>
+          <div class="field">
+            <label for="provider-url">Adresse du serveur Xtream</label>
+            <input id="provider-url" type="text" maxlength="200" placeholder="http://serveur:8080" required>
+          </div>
+          <div class="field">
+            <label for="provider-user">Utilisateur</label>
+            <input id="provider-user" type="text" maxlength="200" autocomplete="off" required>
+          </div>
+          <div class="field">
+            <label for="provider-pass">Mot de passe</label>
+            <span class="pass-wrap"><input id="provider-pass" type="password" maxlength="200" autocomplete="new-password" required><button type="button" class="pass-eye" id="provider-pass-eye" aria-label="Afficher le mot de passe" title="Afficher le mot de passe">👁</button></span>
+          </div>
+          <div class="field">
+            <label for="provider-role">Rôle de cet abonnement</label>
+            <select id="provider-role">
+              <option value="space">👤 Espace membre séparé (onglet dédié en haut)</option>
+              <option value="aux">🛡️ Complément / secours (sans onglet en haut, mélange &amp; débordement)</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="provider-ua">User-Agent (facultatif)</label>
+            <input id="provider-ua" type="text" maxlength="200" autocomplete="off" placeholder="par défaut">
+          </div>
+          <label class="check-row provider-mix-row"><input type="checkbox" id="provider-mix"> <span><strong>Autoriser le mélange</strong> avec les playlists des espaces membres (activé d'office en mode Complément / secours)</span></label>
+          <p class="provider-edit-hint hint" id="provider-edit-hint" hidden></p>
+          <div class="btn-row provider-buttons">
+            <button type="submit" class="btn primary" id="provider-add">+ Ajouter l'abonnement</button>
+            <button type="button" class="btn" id="provider-cancel" hidden>Annuler</button>
+          </div>
+        </form>
+        <p class="hint" id="providers-hint"></p>
+      </section>
+    </div>
+
+    <div id="sys-network" role="tabpanel" aria-labelledby="sys-btn-network" class="sec-panel" hidden>
+      <section class="card" id="remote-card">
+        <div class="card-head">
+          <div>
+            <h2>Accès à distance</h2>
+            <p class="muted small">Par défaut, seul ton réseau local accède au serveur. Ouvre l'accès extérieur de façon sécurisée avec Tailscale, un reverse proxy HTTPS ou Cloudflare Tunnel.</p>
+          </div>
+        </div>
+        <label class="check-row"><input type="checkbox" id="tailscale-local"> <span><strong>Tailscale = réseau local de confiance</strong> : accès complet sans code pour tes propres appareils Tailscale.</span></label>
+        <p class="hint" id="remote-hint"></p>
+        <div class="hosts-box">
+          <h3>Domaines publics HTTPS (reverse proxy)</h3>
+          <p class="muted small">Nginx Proxy Manager, Traefik, Caddy… proposés dans le sélecteur « Réseau » des appareils.</p>
+          <ul class="sum-list" id="hosts-list"></ul>
+          <form class="hosts-form" id="hosts-form" autocomplete="off">
+            <input id="hosts-input" type="text" maxlength="253" placeholder="tv.mondomaine.fr" inputmode="url" spellcheck="false" aria-label="Adresse publique à ajouter">
+            <button type="submit" class="btn small">Ajouter</button>
+          </form>
+        </div>
+        <div class="tunnel-box" id="tunnel-box" hidden>
+          <h3>Tunnel Cloudflare <span class="pill" id="tunnel-pill"><span class="dot" aria-hidden="true"></span><span id="tunnel-pill-text">Non configuré</span></span></h3>
+          <p class="muted small">Expose uniquement le port lecteurs (7777) en HTTPS avec code d'appareil obligatoire.</p>
+          <p class="tunnel-warn small">Note : l'offre gratuite Cloudflare déconseille le transit vidéo intensif (préfère Tailscale ou un reverse proxy direct pour un usage quotidien).</p>
+          <form class="tunnel-form" id="tunnel-form" autocomplete="off">
+            <div class="field">
+              <label for="tunnel-host">Domaine ou sous-domaine Cloudflare</label>
+              <input id="tunnel-host" type="text" maxlength="253" placeholder="tv.mondomaine.fr" inputmode="url" spellcheck="false">
+            </div>
+            <button type="submit" class="btn primary" id="tunnel-connect">Connecter à Cloudflare</button>
+          </form>
+          <div class="tunnel-login" id="tunnel-login" hidden>
+            <p><strong>Étape 2 :</strong> connecte-toi sur Cloudflare, choisis ton domaine puis clique sur « Authorize ».</p>
+            <a class="btn primary" id="tunnel-login-link" href="#" target="_blank" rel="noopener noreferrer">Ouvrir Cloudflare et autoriser</a>
+          </div>
+          <div class="tunnel-ready" id="tunnel-ready" hidden>
+            <p>Adresse publique active : <a id="tunnel-link" href="#" target="_blank" rel="noopener noreferrer"></a></p>
+            <p class="muted small" id="tunnel-detail"></p>
+            <div class="btn-row">
+              <button type="button" class="btn small" id="tunnel-toggle">Arrêter</button>
+              <button type="button" class="btn small danger" id="tunnel-remove">Supprimer le tunnel</button>
+            </div>
+          </div>
+          <p class="hint" id="tunnel-hint"></p>
+        </div>
+      </section>
+
+      <section class="card" id="guides-card">
+        <div class="card-head">
+          <div>
+            <h2>Guides XMLTV externes</h2>
+            <p class="muted small">Utilisés en priorité sur « Mes groupes » (OTT, TNT France, Maroc…) sans solliciter l'API du fournisseur.</p>
+          </div>
+        </div>
+        <ul class="sum-list" id="guides-list"></ul>
+        <form class="hosts-form" id="guides-form" autocomplete="off">
+          <input id="guides-input" type="url" maxlength="500" placeholder="https://…/guide.xml.gz" spellcheck="false" aria-label="Adresse d'un guide XMLTV">
           <button type="submit" class="btn small">Ajouter</button>
         </form>
-      </div>
-      <div class="tunnel-box" id="tunnel-box" hidden>
-        <h3>Tunnel Cloudflare <span class="pill" id="tunnel-pill"><span class="dot" aria-hidden="true"></span><span id="tunnel-pill-text">Non configuré</span></span></h3>
-        <p class="muted small">Ton domaine Cloudflare donne accès aux lecteurs (port 7777) depuis l'extérieur, en https, sans ouvrir de port sur ta box. Chaque TV utilise son code d'appareil ; l'interface de gestion reste à la maison.</p>
-        <p class="tunnel-warn small">Pour tester : les conditions du service gratuit de Cloudflare interdisent de faire passer surtout de la vidéo. Un usage intensif peut être coupé ou faire suspendre ton compte. Pour un usage régulier, Tailscale est plus sûr.</p>
-        <form class="tunnel-form" id="tunnel-form" autocomplete="off">
+      </section>
+    </div>
+
+    <div id="sys-backup" role="tabpanel" aria-labelledby="sys-btn-backup" class="sec-panel" hidden>
+      <section class="card">
+        <div class="card-head">
+          <div>
+            <h2>Sauvegarde &amp; Restauration</h2>
+            <p class="muted small">Exporte toutes les playlists et les appareils dans un fichier JSON portable (sans aucun mot de passe fournisseur).</p>
+          </div>
+          <a class="btn primary" id="backup-download" href="/api/backup" download>Télécharger la sauvegarde</a>
+        </div>
+        <div class="restore-form">
           <div class="field">
-            <label for="tunnel-host">Adresse publique (domaine ou sous-domaine)</label>
-            <input id="tunnel-host" type="text" maxlength="253" placeholder="tv.mondomaine.fr" inputmode="url" spellcheck="false">
+            <label for="restore-file">Fichier de sauvegarde (.json)</label>
+            <input id="restore-file" type="file" accept="application/json,.json">
           </div>
-          <button type="submit" class="btn primary" id="tunnel-connect">Connecter à Cloudflare</button>
-        </form>
-        <div class="tunnel-login" id="tunnel-login" hidden>
-          <p><strong>Étape 2 :</strong> ouvre Cloudflare, connecte-toi, choisis ton domaine puis clique sur « Authorize ». Cette page continue toute seule ensuite.</p>
-          <a class="btn primary" id="tunnel-login-link" href="#" target="_blank" rel="noopener noreferrer">Ouvrir Cloudflare et autoriser</a>
-        </div>
-        <div class="tunnel-ready" id="tunnel-ready" hidden>
-          <p>Adresse des lecteurs : <a id="tunnel-link" href="#" target="_blank" rel="noopener noreferrer"></a></p>
-          <p class="muted small" id="tunnel-detail"></p>
-          <div class="btn-row">
-            <button type="button" class="btn small" id="tunnel-toggle">Arrêter</button>
-            <button type="button" class="btn small danger" id="tunnel-remove">Supprimer le tunnel</button>
+          <div class="field">
+            <label for="restore-mode">Mode d'importation</label>
+            <select id="restore-mode">
+              <option value="merge">Fusionner (ajoute et met à jour par adresse)</option>
+              <option value="replace">Remplacer toutes les playlists existantes</option>
+            </select>
           </div>
+          <label class="check-row"><input type="checkbox" id="restore-devices"> <span>Restaurer aussi la liste des appareils et leurs codes d'accès</span></label>
+          <button type="button" class="btn" id="restore-run">Restaurer la sauvegarde</button>
         </div>
-        <p class="hint" id="tunnel-hint"></p>
-      </div>
-    </section>
-    <section class="card" id="guides-card">
-      <div class="card-head">
-        <div>
-          <h2>Guides externes</h2>
-          <p class="muted small">Les sources fournies couvrent OTT et TNT France ainsi qu'une partie du Maroc. Les guides externes passent en premier pour « Mes groupes ». Le diagnostic indique la couverture de chaque source sur les prochaines 24 h.</p>
-        </div>
-      </div>
-      <ul class="sum-list" id="guides-list"></ul>
-      <form class="hosts-form" id="guides-form" autocomplete="off">
-        <input id="guides-input" type="url" maxlength="500" placeholder="https://…/guide.xml.gz" spellcheck="false" aria-label="Adresse d'un guide XMLTV">
-        <button type="submit" class="btn small">Ajouter</button>
-      </form>
-    </section>
-    <section class="card" id="providers-card">
-      <div class="card-head">
-        <div>
-          <h2>Abonnements</h2>
-          <p class="muted small">Un abonnement = un profil (barre « Profil » en haut) : un serveur à part, avec ses playlists, ses appareils, son guide, ses lectures et son diagnostic. Changer de profil recharge toute l'interface sur ce profil seul. Celui de la configuration du conteneur se modifie dans Unraid (seul son mélange se règle ici). Les autres s'ajoutent ici : la connexion est testée avant l'enregistrement. Utilisateur et mot de passe s'affichent seulement à la demande (bouton « Afficher »), depuis ton réseau local.</p>
-        </div>
-      </div>
-      <ul class="sum-list" id="providers-list"><li class="empty">Chargement…</li></ul>
-      <form class="provider-form" id="provider-form" autocomplete="off">
-        <div class="field">
-          <label for="provider-name">Nom (profil)</label>
-          <input id="provider-name" type="text" maxlength="40" placeholder="Ex. Ma sœur" required>
-        </div>
-        <div class="field">
-          <label for="provider-url">Adresse du serveur</label>
-          <input id="provider-url" type="text" maxlength="200" placeholder="http://serveur:8080" required>
-        </div>
-        <div class="field">
-          <label for="provider-user">Utilisateur</label>
-          <input id="provider-user" type="text" maxlength="200" autocomplete="off" required>
-        </div>
-        <div class="field">
-          <label for="provider-pass">Mot de passe</label>
-          <span class="pass-wrap"><input id="provider-pass" type="password" maxlength="200" autocomplete="new-password" required><button type="button" class="pass-eye" id="provider-pass-eye" aria-label="Afficher le mot de passe" title="Afficher le mot de passe">👁</button></span>
-        </div>
-        <div class="field">
-          <label for="provider-ua">User agent (facultatif)</label>
-          <input id="provider-ua" type="text" maxlength="200" autocomplete="off" placeholder="par défaut">
-        </div>
-        <label class="check-row provider-mix-row"><input type="checkbox" id="provider-mix"> <span><strong>Peut être mélangé aux autres abonnements</strong> : proposé dans les playlists « mélange » des autres profils (ex. abonnement d'appoint à plusieurs connexions). Non coché : il reste isolé dans son profil.</span></label>
-        <p class="provider-edit-hint hint" id="provider-edit-hint" hidden></p>
-        <div class="btn-row provider-buttons">
-          <button type="submit" class="btn primary" id="provider-add">+ Ajouter l'abonnement</button>
-          <button type="button" class="btn" id="provider-cancel" hidden>Annuler</button>
-        </div>
-      </form>
-      <p class="hint" id="providers-hint"></p>
-    </section>
-    <section class="card">
-      <div class="card-head">
-        <div>
-          <h2>Lectures en cours</h2>
-          <p class="muted small" id="streams-limit">Chargement…</p>
-        </div>
-        <button type="button" class="btn small" id="streams-refresh">↻ Actualiser</button>
-      </div>
-      <ul id="streams-list" class="stream-list"></ul>
-      <p class="hint">Quand la limite de l'abonnement est atteinte, le flux du même appareil est remplacé (zapping), sinon le plus ancien est coupé, mais jamais celui d'un appareil plus prioritaire (vue Appareils). L'appareil coupé ne peut pas reprendre ce même flux pendant 30 secondes.</p>
-    </section>
-    <section class="card">
-      <div class="card-head">
-        <div>
-          <h2>Historique des lectures</h2>
-          <p class="muted small">30 derniers jours : chaînes les plus regardées (lectures de plus de 20 s) et chaînes qui ont dû basculer sur une version de secours.</p>
-        </div>
-        <button type="button" class="btn small ghost" id="history-clear">Effacer</button>
-      </div>
-      <div class="summary-grid">
-        <div><h3>Les plus regardées</h3><ol id="history-top" class="sum-list"></ol></div>
-        <div><h3>Bascules automatiques</h3><ol id="history-unstable" class="sum-list"></ol></div>
-      </div>
-      <details class="epg-missing"><summary>Dernières lectures</summary><ul id="history-list" class="sum-list"></ul></details>
-    </section>
-    <section class="card">
-      <div class="card-head">
-        <div>
-          <h2>Diagnostic</h2>
-          <p class="muted small">Teste l'API du fournisseur, les catalogues, le guide, un flux direct (TS et HLS), un film, un épisode et le replay. Les tests de flux sont ignorés si une lecture est en cours.</p>
-        </div>
-        <div class="btn-row">
-          <button type="button" class="btn primary" id="diag-run">Lancer le diagnostic</button>
-          <button type="button" class="btn" id="diag-copy" hidden>Copier le rapport</button>
-        </div>
-      </div>
-      <ul id="diag-results" class="diag-list"></ul>
-    </section>
-    <section class="card">
-      <div class="card-head">
-        <div>
-          <h2>Sauvegarde</h2>
-          <p class="muted small">Toutes les playlists et les appareils (avec leurs codes) dans un fichier JSON. Aucun identifiant du fournisseur n'y figure.</p>
-        </div>
-        <a class="btn" id="backup-download" href="/api/backup" download>Télécharger la sauvegarde</a>
-      </div>
-      <div class="restore-form">
-        <div class="field">
-          <label for="restore-file">Restaurer depuis un fichier</label>
-          <input id="restore-file" type="file" accept="application/json,.json">
-        </div>
-        <div class="field">
-          <label for="restore-mode">Mode</label>
-          <select id="restore-mode">
-            <option value="merge">Fusionner (ajoute et remplace les playlists de même adresse)</option>
-            <option value="replace">Remplacer toutes les playlists</option>
-          </select>
-        </div>
-        <label class="check-row"><input type="checkbox" id="restore-devices"> <span>Restaurer aussi les appareils (remplace la liste et les codes actuels)</span></label>
-        <button type="button" class="btn" id="restore-run">Restaurer</button>
-      </div>
-    </section>
+      </section>
+    </div>
   </main>
 </div>
 
@@ -674,6 +754,7 @@
     <h2 id="dialog-title">Confirmer</h2>
     <p id="dialog-text"></p>
     <div class="field" id="dialog-field" hidden>
+      <label for="dialog-label-target" class="sr-only">Champ</label>
       <label for="dialog-input" id="dialog-label"></label>
       <input id="dialog-input" type="text" autocomplete="off">
     </div>
@@ -698,21 +779,20 @@
     <button type="button" class="btn small" id="preview-close">Fermer</button>
   </div>
   <video id="preview-video" controls playsinline muted></video>
-  <p class="hint" id="preview-status">Utilise la connexion de ton abonnement : une lecture en cours sur une TV peut être coupée (selon les priorités).</p>
+  <p class="hint" id="preview-status">Utilise une connexion de ton abonnement (libérée dès la fermeture).</p>
 </dialog>
 
 <dialog id="item-dialog">
   <form method="dialog">
     <h2 id="item-title">Personnaliser</h2>
-    <p class="hint">Laisse vide pour garder la valeur du fournisseur. Ne concerne que cette playlist.</p>
+    <p class="hint">Laisse vide pour conserver la valeur d'origine. S'applique uniquement à cette playlist.</p>
     <div class="field"><label for="item-name">Nom affiché</label><input id="item-name" type="text" maxlength="100" autocomplete="off"></div>
     <div class="field" id="item-number-field"><label for="item-number">Numéro de chaîne (1 à 99 999)</label><input id="item-number" type="number" min="1" max="99999" step="1"></div>
-    <div class="field"><label for="item-logo">Logo (adresse http(s) d'une image)</label><input id="item-logo" type="url" maxlength="490" placeholder="https://…/logo.png" autocomplete="off"></div>
+    <div class="field"><label for="item-logo">Logo personnalisé (http/https)</label><input id="item-logo" type="url" maxlength="490" placeholder="https://…/logo.png" autocomplete="off"></div>
     <div class="field" id="item-epg-field">
-      <label for="item-epg">Guide des programmes : prendre celui de…</label>
+      <label for="item-epg">Emprunter le guide EPG d'une autre chaîne</label>
       <input id="item-epg" type="search" list="item-epg-list" placeholder="Nom d'une autre chaîne (vide = son propre guide)" autocomplete="off">
       <datalist id="item-epg-list"></datalist>
-      <p class="hint">Utile si cette chaîne n'a pas de programmes mais qu'une autre version les a (ex. « FR: TF1 » pour « VIP: TF1 »).</p>
     </div>
     <div class="btn-row end">
       <button type="submit" class="btn ghost" value="cancel">Annuler</button>
@@ -722,7 +802,7 @@
 </dialog>
 
 <div id="toasts" class="toasts" aria-live="polite"></div>
-<footer class="footer">Service local · Ne pas exposer les ports 7777 et 7778 directement sur Internet · <span id="version"></span></footer>
+<footer class="footer">Passerelle locale · Ne jamais exposer les ports 7777 / 7778 sans protection · <span id="version"></span></footer>
 <script src="/static/app.js"></script>
 </body>
 </html>

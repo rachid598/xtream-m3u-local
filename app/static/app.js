@@ -27,14 +27,18 @@
     cat: { live: emptyCatalog(), vod: emptyCatalog(), series: emptyCatalog() },
     sel: { live: emptySelection(), vod: emptySelection(), series: emptySelection() },
     playlists: [],
-    profiles: [],            // abonnements configurés [{id, name}] (profils : moi, ma sœur…)
+    sources: [],             // tous les abonnements configurés [{id, name, mixable, aux}]
+    profiles: [],            // espaces membres affichés en haut [{id, name, mixable, aux}]
     openGroups: new Set(),   // blocs « fournisseur » dépliés dans la liste des catégories (playlist mélange)
-    profile: '1',            // profil sélectionné
+    openCgDrawers: new Set(),// tiroirs de motifs dépliés dans « Mes groupes »
+    fullCardTouched: false,  // l'utilisateur a déplié/replié « Liens bruts complets » à la main
+    profile: '1',            // espace membre sélectionné
     accounts: [],            // comptes des abonnements (onglet Système, badge)
     editing: null,           // slug de la playlist ouverte (null = nouvelle)
     groupOrder: [],          // ordre personnalisé des groupes (clés : "12", "vod:3", "series:7")
     groupNames: {},          // noms de groupes personnalisés {clé: nom}
     view: 'playlists',
+    sysTab: 'overview',      // sous-onglet Système : overview | providers | network | backup
     slugTouched: false,
     snapshot: '',            // pour détecter les modifications non enregistrées
     catFilter: 'all',
@@ -53,7 +57,9 @@
     itemEpg: {},             // guide emprunté {id_chaîne: id_chaîne_source}
     itemXmltv: {},           // guide choisi {id_chaîne: identifiant XMLTV} (suggestions validées)
     epgSuggestions: null,    // suggestions de guide de la playlist ouverte {id_chaîne: [{id, name, source, …}]}
-    section: 'content',      // partie de l'éditeur : content | organize | options | guide
+    section: 'content',      // partie de l'éditeur : content | organize | preview | options | guide
+    tvPreview: null,         // dernier aperçu TV calculé par /api/playlists/preview
+    tvPreviewKind: 'all',    // filtre de type dans l'aperçu TV : all | live | vod | series
   };
   // Raccourcis vers le catalogue et la sélection du type affiché (state.categories, state.selected…).
   for (const key of ['categories', 'categoryNames', 'channels', 'channelById', 'channelsByCat', 'catalogLoaded', 'categoriesError']) {
@@ -120,24 +126,26 @@
     return '';
   }
 
-  // ------------------------------------------------------------ profils
-  // Un profil = un abonnement (XTREAM_URL, XTREAM_URL_2…) avec ses playlists et ses appareils.
+  // --------------------------------------------------- espaces & abonnements
+  // Espace membre (profiles) = onglet dédié en haut (Moi, Sœur…).
+  // Source complémentaire (aux dans sources) = enrichissement / débordement sans onglet dédié.
   const multiProfile = () => state.profiles.length > 1;
-  const profileName = (id) => (state.profiles.find((p) => p.id === String(id)) || {}).name || `Abonnement ${id}`;
+  const hasMultipleSources = () => state.sources.length > 1 || state.profiles.length > 1;
+  const sourceName = (id) => (state.sources.find((s) => s.id === String(id)) || state.profiles.find((p) => p.id === String(id)) || {}).name || `Abonnement ${id}`;
+  const profileName = (id) => (state.profiles.find((p) => p.id === String(id)) || {}).name || sourceName(id);
   const playlistProfile = (p) => (p && p.provider) || '1';
-  // Playlist « mélange » : son abonnement + les abonnements cochés « peut être mélangé aux autres ».
-  // Une playlist d'avant les profils (sans abonnement) est en mélange sur le profil 1.
   const playlistMixed = (p) => Boolean(p && (p.mix || !p.provider));
-  // Un profil = un serveur à part : seulement ses playlists. Une ancienne playlist sans abonnement appartient
-  // au profil 1, sauf si le mélange est autorisé (Système → Abonnements) : elle est alors visible partout.
-  /** Autres abonnements mélangeables (proposés aux playlists « mélange » du profil affiché). */
-  const mixPartners = () => state.profiles.filter((p) => p.mixable && p.id !== state.profile);
+  /** Autres abonnements mélangeables (espaces membres autorisés + compléments/secours). */
+  const mixPartners = () => {
+    const pool = state.sources.length ? state.sources : state.profiles;
+    return pool.filter((p) => p.mixable && p.id !== state.profile);
+  };
   const allowMix = () => mixPartners().length > 0;
-  const inProfile = (p) => !multiProfile() || playlistProfile(p) === state.profile;
-  const profileQuery = () => (multiProfile() ? `?profile=${encodeURIComponent(state.profile)}` : '');
-  /** Abonnements visibles dans l'éditeur (null = tous) : le profil, plus les mélangeables en mode « mélange ». */
+  const inProfile = (p) => !hasMultipleSources() || playlistProfile(p) === state.profile;
+  const profileQuery = () => (hasMultipleSources() ? `?profile=${encodeURIComponent(state.profile)}` : '');
+  /** Abonnements visibles dans l'éditeur (null = tous) : l'espace actif, plus les mélangeables en mode « mélange ». */
   const catalogProviders = () => {
-    if (!multiProfile()) return null;
+    if (!hasMultipleSources()) return null;
     return new Set([state.profile, ...($('opt-provider').value === 'mix' ? mixPartners().map((p) => p.id) : [])]);
   };
 
@@ -150,14 +158,14 @@
     })));
   }
 
-  /** Choix « cet abonnement seul » ou « mélange » ; ``value`` = 'mix' ou l'abonnement du profil. */
+  /** Choix « cet abonnement seul » ou « mélange » ; ``value`` = 'mix' ou l'abonnement de l'espace actif. */
   function renderProviderSelect(value) {
     const select = $('opt-provider');
-    $('opt-provider-row').hidden = !multiProfile();
+    $('opt-provider-row').hidden = !hasMultipleSources();
     const own = profileName(state.profile);
-    const options = multiProfile()
+    const options = hasMultipleSources()
       ? [[state.profile, `${own} seul`],
-        ...(allowMix() ? [['mix', `${own} + ${mixPartners().map((p) => p.name).join(', ')} (mélange)`]] : [])]
+        ...(allowMix() ? [['mix', `${own} + ${mixPartners().map((p) => p.name).join(', ')} (mélange & secours)`]] : [])]
       : [[state.profile || '1', 'Abonnement principal']];
     select.replaceChildren(...options.map(([id, name]) => h('option', { value: id, text: name })));
     select.value = options.some(([id]) => id === value) ? value : options[0][0];
@@ -173,9 +181,8 @@
   async function switchProfile(id) {
     if (id === state.profile) return;
     if (!(await confirmLeave())) return;
-    // Profil = serveur à part : l'interface est entièrement rechargée sur ce profil seul.
     storage('xtream-m3u-profile', id);
-    $('dirty').hidden = true;   // changements déjà abandonnés : pas de seconde alerte du navigateur
+    $('dirty').hidden = true;
     location.reload();
   }
 
@@ -235,7 +242,6 @@
     }
     if (typeof dialog.showModal !== 'function') {
       if (select) return Promise.resolve(null);
-      // Navigateur très ancien : repli sur les boîtes natives.
       if (input && input2) {
         const value = window.prompt(`${title}\n${input.label}`, input.value || '');
         return Promise.resolve(value === null ? null : { value, value2: window.prompt(input2.label, input2.value || '') || '' });
@@ -285,10 +291,18 @@
   const SEP_CHARS = '#=*~_\\-•●◆★☆▬▭━─═';
   const SEPARATOR = new RegExp(`^[${SEP_CHARS}|\\s]*[${SEP_CHARS}]{3,}.*[${SEP_CHARS}]{3,}[${SEP_CHARS}|\\s]*$`, 'u');
   /** Fausse chaîne servant de titre de section (même règle que le serveur). */
-  const SYMBOL_EDGES = /^\s*[^\p{L}\p{N}\s]{3,}.*[^\p{L}\p{N}\s]{3,}\s*$/u;  // ♣♦♣--- … ---♣♦♣
-  const PLACEHOLDER = /^[^\p{L}\p{N}]*no\s+(live\s+)?events?\b|\bno\s+event\s+streaming\b/iu;  // emplacement PPV vide
+  const SYMBOL_EDGES = /^\s*[^\p{L}\p{N}\s]{3,}.*[^\p{L}\p{N}\s]{3,}\s*$/u;
+  const PLACEHOLDER = /^[^\p{L}\p{N}]*no\s+(live\s+)?events?\b|\bno\s+event\s+streaming\b/iu;
   const isSeparator = (name) => { const t = String(name || '').trim(); return !t || PLACEHOLDER.test(t) || SEPARATOR.test(t) || SYMBOL_EDGES.test(t) || !/[\p{L}\p{N}]/u.test(t); };
   const squash = (text) => norm(text).split(/\s+/).filter(Boolean).join(' ');
+  const ADULT_RE = /(?<![a-z0-9])(?:xxx|18\s*\+|\+\s*18|for\s+adults?|adults?(?!\s+swim)|adultes?|porno?|eroti(?:c|que)|x-rated|nsfw|dorcel|brazzers|penthouse|hustler|playboy\s*tv)(?![a-z0-9])/i;
+  const isAdultCategory = (name) => ADULT_RE.test(squash(name));
+  const isAdultItem = (c, kind = state.kind) => {
+    if (c.adult || ADULT_RE.test(squash(c.name))) return true;
+    const catNames = state.cat[kind].categoryNames;
+    return (c.category_ids || []).some((cid) => isAdultCategory(catNames.get(cid) || ''));
+  };
+  const adultHidden = (c, kind = state.kind) => $('opt-adult').checked && isAdultItem(c, kind);
 
   // ------------------------------------------- groupes personnalisés (même règle que app/builder.py)
   const CG = 'g:';
@@ -482,7 +496,7 @@
       const sel = state.sel.live;
       const separators = $('opt-separators').checked;
       for (const c of state.cat.live.channels) {
-        if (sel.excluded.has(c.stream_id)) continue;
+        if (sel.excluded.has(c.stream_id) || adultHidden(c, 'live')) continue;
         if (!sel.included.has(c.stream_id) && !c.category_ids.some((id) => catOn('live', id))) continue;
         if (separators && isSeparator(c.name)) continue;
         const manual = state.itemGroups[c.stream_id];
@@ -537,7 +551,7 @@
     const regions = new Map(state.customGroups.filter((g) => g.region).map((g) => [g.id, g.region]));
     const kept = [];
     for (const c of state.cat.live.channels) {
-      if (sel.excluded.has(c.stream_id)) continue;
+      if (sel.excluded.has(c.stream_id) || adultHidden(c, 'live')) continue;
       const group = c.category_ids.find((id) => catOn('live', id)) || (sel.included.has(c.stream_id) ? c.category_id : null);
       if (group == null) continue;
       if (separators && isSeparator(c.name)) { kept.push(c.stream_id); continue; }
@@ -547,17 +561,15 @@
       const regional = regions.get(custom);
       const core = regional && regional === c.regional?.[0] ? c.regional[1] : c._core;
       const key = `${custom ? CG + custom : group}\u0000${core || baseName(c.name)}`;
-      // Versions 4K selon l'option (même règle que builder.version_rank) : en dernier secours par défaut.
       const raw = qualityOf(c.name);
       const q = raw === 4 && $('opt-uhd').value !== 'normal' ? 0.5 : raw;
       if (!best.has(key)) best.set(key, []);
       best.get(key).push({ q, uhd: raw === 4, id: c.stream_id, i: kept.length });
       kept.push(c.stream_id);
     }
-    // Même règle que le serveur (builder.dedupe) : meilleure qualité gardée, les autres = versions de secours.
     const keep = new Set();
-    state.altMap = new Map();   // id gardé → [ids des versions de secours, meilleure d'abord]
-    state.altOf = new Map();    // id masqué → { kept, rank }
+    state.altMap = new Map();
+    state.altOf = new Map();
     for (const versions of best.values()) {
       let sorted = versions.sort((a, b) => b.q - a.q || a.i - b.i);
       if ($('opt-uhd').value === 'never' && sorted.some((v) => !v.uhd)) sorted = sorted.filter((v) => !v.uhd);
@@ -579,7 +591,7 @@
 
   // ----------------------------------------------------------- sélection
   const inCategory = (c) => c.category_ids.some((id) => catOn(state.kind, id));
-  const isOn = (c) => !state.excluded.has(c.stream_id) && (inCategory(c) || state.included.has(c.stream_id));
+  const isOn = (c) => !adultHidden(c) && !state.excluded.has(c.stream_id) && (inCategory(c) || state.included.has(c.stream_id));
 
   function setChannel(c, on) {
     const id = c.stream_id;
@@ -598,7 +610,6 @@
       const sel = state.sel[kind];
       const byId = state.cat[kind].channelById;
       const [catField, incField, excField] = KIND[kind].fields;
-      // Nettoyage : une exclusion n'a de sens que pour un élément d'une catégorie cochée.
       let excluded = [...sel.excluded];
       if (!sorted) excluded = excluded.filter((id) => { const c = byId.get(id); return !c || c.category_ids.some((cid) => catOn(kind, cid)); });
       const list = (set) => (sorted ? [...set].sort() : [...set]);
@@ -615,9 +626,10 @@
     data.group_epg_external = $('opt-group-epg').checked;
     data.multi_groups = $('opt-multi-groups').checked;
     data.hq_logos = $('opt-hq-logos').checked;
-    data.provider = multiProfile() ? state.profile : '';
-    data.mix = multiProfile() && $('opt-provider').value === 'mix';
+    data.provider = hasMultipleSources() ? state.profile : '';
+    data.mix = hasMultipleSources() && $('opt-provider').value === 'mix';
     data.hide_separators = $('opt-separators').checked;
+    data.hide_adult = $('opt-adult').checked;
     data.favorites_name = $('opt-fav-name').value.trim() || '★ Favoris';
     data.rules = state.rules.map((r) => ({ ...r }));
     data.favorites = sorted ? [...state.favorites].sort() : [...state.favorites];
@@ -640,7 +652,7 @@
   function cleanGroupNames() {
     const result = {};
     for (const id of Object.keys(state.groupNames).sort()) {
-      if (id.startsWith(CG)) continue;  // les groupes perso portent leur propre nom
+      if (id.startsWith(CG)) continue;
       const name = String(state.groupNames[id] || '').trim();
       if (name && name !== groupInfo(id).name) result[id] = name.slice(0, 100);
     }
@@ -657,6 +669,7 @@
     const inc = new Set(p[incField] || []), exc = new Set(p[excField] || []);
     let n = 0;
     for (const c of state.cat[kind].channels) {
+      if (p.hide_adult && isAdultItem(c, kind)) continue;
       if (!exc.has(c.stream_id) && (c.category_ids.some((id) => cats.has(id)) || inc.has(c.stream_id))) n += 1;
     }
     return n;
@@ -667,9 +680,18 @@
     const sel = state.sel[kind];
     let n = 0;
     for (const c of state.cat[kind].channels) {
+      if (adultHidden(c, kind)) continue;
       if (!sel.excluded.has(c.stream_id) && (c.category_ids.some((id) => catOn(kind, id)) || sel.included.has(c.stream_id))) n += 1;
     }
-    return kind === 'live' ? n - hiddenDuplicates().size : n;
+    if (kind !== 'live') return n;
+    let extraCopies = 0;
+    if ($('opt-multi-groups').checked) {
+      const hidden = hiddenDuplicates();
+      for (const [sid, more] of groupExtras()) {
+        if (!hidden.has(sid)) extraCopies += more.length;
+      }
+    }
+    return n - hiddenDuplicates().size + extraCopies;
   }
 
   const usesKind = (p, kind) => Boolean((p[KIND[kind].fields[0]] || []).length || (p[KIND[kind].fields[1]] || []).length
@@ -819,19 +841,21 @@
   function renderEpg(data) {
     const pl = data.playlist;
     const src = data.source || {};
-    const sourceName = data.custom_source ? 'la source EPG_URL' : 'xmltv.php';
+    const sourceNameLabel = data.custom_source ? 'la source EPG_URL' : 'xmltv.php';
     $('epg-xmltv-label').textContent = `via ${data.custom_source ? 'EPG_URL' : 'xmltv.php'}`;
     if (!pl) {
       setEpgPill('error', 'Guide indisponible');
-      ['epg-covered', 'epg-xmltv', 'epg-api', 'epg-missing-count'].forEach((id) => { $(id).textContent = '–'; });
+      ['epg-covered', 'epg-xmltv', 'epg-external', 'epg-api', 'epg-missing-count'].forEach((id) => { $(id).textContent = '–'; });
       $('epg-source').textContent = data.error || 'Guide indisponible.';
       $('epg-missing-box').hidden = true;
       return;
     }
-    const covered = pl.xmltv + pl.api;
+    const external = pl.external || 0;
+    const covered = pl.xmltv + external + pl.api;
     const pct = pl.channels ? Math.round((covered / pl.channels) * 100) : 0;
     $('epg-covered').textContent = `${covered} / ${pl.channels}`;
     $('epg-xmltv').textContent = pl.xmltv.toLocaleString('fr-FR');
+    $('epg-external').textContent = external.toLocaleString('fr-FR');
     $('epg-api').textContent = data.mode === 'xmltv' ? 'désactivé' : pl.api.toLocaleString('fr-FR');
     $('epg-missing-count').textContent = pl.missing.length.toLocaleString('fr-FR');
     const mine = pl.mine && pl.mine.channels ? pl.mine : null;
@@ -844,13 +868,14 @@
     else setEpgPill(pl.missing.length ? 'warn' : 'ok', `${pct} % des chaînes`);
     const parts = [];
     if (mine) parts.push(`Mes groupes et favoris : ${mine.covered} / ${mine.channels} chaînes avec programmes (récupérées en premier).`);
+    if (external) parts.push(`${plural(external, 'chaîne couverte', 'chaînes couvertes')} par les guides XMLTV externes.`);
     if (data.mode === 'api') parts.push('Mode EPG_SOURCE=api : programmes récupérés chaîne par chaîne via l\'API Xtream.');
     else if (src.ok) {
       const when = src.updated_at ? new Date(src.updated_at * 1000).toLocaleString('fr-FR', { dateStyle: 'short', timeStyle: 'short' }) : '';
-      parts.push(`Source ${sourceName} : ${plural(src.channels, 'chaîne', 'chaînes')}, ${plural(src.programmes, 'programme', 'programmes')}${when ? `, mise à jour le ${when}` : ''}.`);
-      if (data.mode === 'auto' && pl.api) parts.push(`Les chaînes absentes de ${sourceName} sont complétées par l'API Xtream.`);
+      parts.push(`Source ${sourceNameLabel} : ${plural(src.channels, 'chaîne', 'chaînes')}, ${plural(src.programmes, 'programme', 'programmes')}${when ? `, mise à jour le ${when}` : ''}.`);
+      if (data.mode === 'auto' && pl.api) parts.push(`Les chaînes absentes de ${sourceNameLabel} sont complétées par l'API Xtream.`);
     } else {
-      parts.push(`${sourceName} ne fonctionne pas${src.error ? ` (${src.error})` : ''}${data.mode === 'auto' ? ' : les programmes sont récupérés chaîne par chaîne via l\'API Xtream.' : '.'}`);
+      parts.push(`${sourceNameLabel} ne fonctionne pas${src.error ? ` (${src.error})` : ''}${data.mode === 'auto' ? ' : les programmes sont récupérés chaîne par chaîne via l\'API Xtream.' : '.'}`);
     }
     if (pl.pending) parts.push(`${plural(pl.pending, 'chaîne', 'chaînes')} en cours de récupération (actualisation automatique).`);
     $('epg-source').textContent = parts.join(' ');
@@ -911,7 +936,7 @@
     }
     $('epg-groups-hint').textContent = data.external_guides
       ? `${data.channels.filter((c) => c.source.startsWith('external')).length} / ${data.channels.length} chaînes avec un guide externe. « Changer » pour choisir à la main, puis enregistre la playlist.`
-      : 'Aucun guide externe ajouté (Système → Guides externes) : les chaînes utilisent le guide du fournisseur.';
+      : 'Aucun guide externe ajouté (Système → Accès & Guides) : les chaînes utilisent le guide du fournisseur.';
     list.replaceChildren(...data.channels.map((c) => {
       const chosen = state.itemXmltv[c.stream_id];
       const where = chosen && !c.manual ? `choisi : ${chosen} (à enregistrer)`
@@ -998,6 +1023,7 @@
     if ($('opt-catchup').checked) parts.push('Replay');
     if ($('opt-dedupe').checked) parts.push('Sans doublons');
     if ($('opt-separators').checked) parts.push('Sans séparateurs');
+    if ($('opt-adult').checked) parts.push('Sans 18+');
     if ($('opt-hq-logos').checked) parts.push('Logos HQ');
     if ($('opt-failover').checked && $('opt-dedupe').checked && $('opt-live-format').value !== 'hls') parts.push('Bascule auto');
     $('opt-failover-hint').classList.toggle('warn-text', $('opt-failover').checked && (!$('opt-dedupe').checked || $('opt-live-format').value === 'hls'));
@@ -1009,8 +1035,12 @@
   }
 
   async function loadSummary(force = false) {
+    const params = new URLSearchParams();
+    if (force) params.set('refresh', '1');
+    if (hasMultipleSources()) params.set('profile', state.profile);
+    const qs = params.toString() ? `?${params}` : '';
     try {
-      state.summary = await request(`/api/catalog/summary${force ? '?refresh=1' : ''}`);
+      state.summary = await request(`/api/catalog/summary${qs}`);
     } catch (_) { /* facultatif : les tuiles restent sur « Chargement… » */ }
     renderTiles();
   }
@@ -1039,13 +1069,15 @@
   function renderPlaylists() {
     const list = $('saved');
     list.replaceChildren();
-    if (!state.playlists.length) {
+    const sorted = [...state.playlists].filter(inProfile).sort((a, b) => collator.compare(a.name, b.name));
+    $('help-card').hidden = sorted.length > 0;
+    if (!state.fullCardTouched) $('full-card').open = sorted.length === 0;
+    if (!sorted.length) {
       list.append(h('li', { class: 'empty', text: multiProfile()
         ? `Aucune playlist dans le profil « ${profileName(state.profile)} ». Crée-la avec « + Nouvelle ».`
         : 'Aucune playlist. Crée la première avec « + Nouvelle ».' }));
       return;
     }
-    const sorted = [...state.playlists].filter(inProfile).sort((a, b) => collator.compare(a.name, b.name));
     for (const p of sorted) {
       const parts = KINDS.filter((k) => state.cat[k].catalogLoaded && usesKind(p, k)).map((k) => noun(countFor(p, k), k));
       const count = parts.length ? ` · ${parts.join(' · ')}` : '';
@@ -1053,10 +1085,9 @@
         type: 'button', class: 'playlist-item', 'aria-current': p.slug === state.editing ? 'true' : 'false',
         onclick: () => openPlaylist(p.slug),
       }, h('span', { class: 'pl-name', text: p.name },
-        multiProfile() && playlistMixed(p) && allowMix() ? h('span', { class: 'pl-tag', text: 'mélange' }) : null),
+        hasMultipleSources() && playlistMixed(p) && allowMix() ? h('span', { class: 'pl-tag', text: 'mélange' }) : null),
       h('span', { class: 'pl-meta', text: `/p/${p.slug}.m3u${count}` }))));
     }
-    if (!sorted.length) list.append(h('li', { class: 'empty', text: `Aucune playlist dans le profil « ${profileName(state.profile)} ». Crée-la avec « + Nouvelle ».` }));
   }
 
   function categoryStats() {
@@ -1068,14 +1099,15 @@
     return on;
   }
 
-  /** Catégories regroupées par abonnement (profil du profil affiché d'abord), seulement s'il y en a plusieurs. */
+  /** Catégories regroupées par abonnement (celui de l'espace affiché d'abord), seulement s'il y en a plusieurs. */
   function providerGroups(visible) {
     const ids = [...new Set(state.categories.map((c) => c.profile || '1'))];
     if (ids.length < 2) return [];
     ids.sort((a, b) => (a === state.profile ? -1 : b === state.profile ? 1 : Number(a) - Number(b)));
+    const hideAdult = $('opt-adult').checked;
     return ids.map((id) => ({
-      id, name: profileName(id),
-      all: state.categories.filter((c) => (c.profile || '1') === id),
+      id, name: sourceName(id),
+      all: state.categories.filter((c) => (c.profile || '1') === id && (!hideAdult || !isAdultCategory(c.name))),
       cats: visible.filter((c) => (c.profile || '1') === id),
     })).filter((g) => g.cats.length);
   }
@@ -1095,18 +1127,18 @@
       return;
     }
     const query = norm($('cat-search').value.trim());
+    const hideAdult = $('opt-adult').checked;
     const retained = categoryStats();
     const visible = state.categories.filter((cat) => {
+      if (hideAdult && isAdultCategory(cat.name)) return false;
       if (query && !cat._search.includes(query)) return false;
       if (state.catFilter === 'on' && !catOn(state.kind, cat.category_id)) return false;
       if (state.catFilter === 'off' && catOn(state.kind, cat.category_id)) return false;
       return true;
     });
-    // Catégories qui ne diffèrent que par la qualité (« FRANCE FHD | OTT » / « FRANCE HD | OTT »…) :
-    // même règle que les doublons de chaînes, pour proposer de les cocher ensemble en un clic.
-    // Jamais d'un abonnement à l'autre : chaque fournisseur reste séparé.
     const clusters = new Map();
     for (const cat of state.categories) {
+      if (hideAdult && isAdultCategory(cat.name)) continue;
       const base = `${cat.profile || '1'}|${baseName(cat.name) || cat.name}`;
       if (!clusters.has(base)) clusters.set(base, []);
       clusters.get(base).push(cat);
@@ -1154,7 +1186,6 @@
     const groups = providerGroups(visible);
     if (groups.length < 2) fragment.append(...items.values());
     else {
-      // Plusieurs abonnements (playlist « mélange ») : un bloc repliable par fournisseur, séparation nette.
       for (const group of groups) {
         const checked = group.all.filter((c) => catOn(state.kind, c.category_id)).length;
         const details = h('details', { class: 'provider-group', open: query || state.openGroups.has(group.id) },
@@ -1164,7 +1195,7 @@
               text: `${checked} cochée${checked > 1 ? 's' : ''} sur ${plural(group.all.length, 'catégorie', 'catégories')}` })),
           h('div', { class: 'category-grid' }, ...group.cats.map((c) => items.get(c.category_id))));
         details.addEventListener('toggle', () => {
-          if (query) return;   // ouverture automatique de la recherche : pas mémorisée
+          if (query) return;
           if (details.open) state.openGroups.add(group.id); else state.openGroups.delete(group.id);
           storage('xtream-m3u-open-providers', JSON.stringify([...state.openGroups]));
         });
@@ -1182,6 +1213,7 @@
     const category = $('ch-category').value;
     const mode = $('ch-state').value;
     return state.channels.filter((c) => {
+      if (adultHidden(c)) return false;
       if (category && !c.category_ids.includes(category)) return false;
       if (terms.length) {
         const custom = state.itemNames[keyOf(c)];
@@ -1407,17 +1439,64 @@
     label.querySelector('.badges').replaceChildren(...badgesFor(c));
   }
 
+  let dragScope = '';
+  let dragIndex = -1;
+
+  function wireDragReorder(row, handle, scope, index, onMove) {
+    handle.addEventListener('mousedown', () => { row.draggable = true; });
+    handle.addEventListener('mouseup', () => { row.draggable = false; });
+    row.addEventListener('dragstart', (event) => {
+      dragScope = scope;
+      dragIndex = index;
+      row.classList.add('dragging');
+      if (event.dataTransfer) {
+        event.dataTransfer.effectAllowed = 'move';
+        event.dataTransfer.setData('text/plain', String(index));
+      }
+    });
+    row.addEventListener('dragend', () => {
+      row.draggable = false;
+      row.classList.remove('dragging');
+      dragScope = '';
+      dragIndex = -1;
+      document.querySelectorAll('.drag-over').forEach((n) => n.classList.remove('drag-over'));
+    });
+    row.addEventListener('dragover', (event) => {
+      if (dragScope !== scope || dragIndex < 0 || dragIndex === index) return;
+      event.preventDefault();
+      if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+      row.classList.add('drag-over');
+    });
+    row.addEventListener('dragleave', () => row.classList.remove('drag-over'));
+    row.addEventListener('drop', (event) => {
+      row.classList.remove('drag-over');
+      if (dragScope !== scope || dragIndex < 0 || dragIndex === index) return;
+      event.preventDefault();
+      const from = dragIndex;
+      dragScope = '';
+      dragIndex = -1;
+      onMove(from, index);
+    });
+  }
+
   function groupCounts() {
     const groups = new Map();
+    const extras = groupExtras();
     for (const kind of KINDS) {
       const sel = state.sel[kind];
       for (const c of state.cat[kind].channels) {
-        if (sel.excluded.has(c.stream_id) || (kind === 'live' && hiddenDuplicates().has(c.stream_id))) continue;
+        if (sel.excluded.has(c.stream_id) || adultHidden(c, kind) || (kind === 'live' && hiddenDuplicates().has(c.stream_id))) continue;
         const inCat = c.category_ids.find((id) => catOn(kind, id));
         if (!inCat && !sel.included.has(c.stream_id)) continue;
         const custom = kind === 'live' ? groupAssignment().get(c.stream_id) : null;
         const key = custom ? CG + custom : KIND[kind].prefix + (inCat || c.category_id);
         groups.set(key, (groups.get(key) || 0) + 1);
+        if (kind === 'live' && extras.has(c.stream_id)) {
+          for (const extraGid of extras.get(c.stream_id)) {
+            const extraKey = CG + extraGid;
+            groups.set(extraKey, (groups.get(extraKey) || 0) + 1);
+          }
+        }
       }
     }
     return groups;
@@ -1447,6 +1526,15 @@
     if (buttons) (delta < 0 ? buttons[0] : buttons[1]).focus();
   }
 
+  function reorderGroupTo(order, from, to) {
+    const next = [...order];
+    const [item] = next.splice(from, 1);
+    next.splice(to, 0, item);
+    state.groupOrder = next;
+    renderSummary();
+    renderStats();
+  }
+
   function renderSummary() {
     const groups = groupCounts();
     const order = orderedGroups(groups);
@@ -1468,7 +1556,9 @@
         renderStats();
       });
       if (group) input.addEventListener('change', () => { input.value = group.name; renderCustomGroups(); });
-      gl.append(h('li', { class: 'group-row' },
+      const handle = h('span', { class: 'drag-handle', title: 'Glisser pour réordonner', 'aria-hidden': 'true', text: '⠿' });
+      const row = h('li', { class: 'group-row' },
+        handle,
         h('span', { class: 'pos', text: String(index + 1) }),
         group ? h('span', { class: 'kind-tag mine', text: '📁 Perso', title: 'Mon groupe (rempli par les noms de chaînes et les rangements 📁)' })
           : h('span', { class: `kind-tag ${info.kind}`, text: KIND[info.kind].label, title: `Groupe de ${KIND[info.kind].many}` }),
@@ -1476,10 +1566,25 @@
         h('span', { class: 'num', text: groups.get(id).toLocaleString('fr-FR'), title: KIND[info.kind].title }),
         h('button', { type: 'button', class: 'icon-btn', text: '↑', title: 'Monter', 'aria-label': `Monter ${original}`, disabled: index === 0, onclick: () => moveGroup(order, index, -1) }),
         h('button', { type: 'button', class: 'icon-btn', text: '↓', title: 'Descendre', 'aria-label': `Descendre ${original}`, disabled: index === order.length - 1, onclick: () => moveGroup(order, index, 1) }),
-      ));
+        index >= 2 ? h('button', { type: 'button', class: 'icon-btn', text: '⤒', title: 'Placer tout en haut', 'aria-label': `Placer ${original} en tête`, onclick: () => reorderGroupTo(order, index, 0) }) : null,
+      );
+      wireDragReorder(row, handle, 'sum-groups', index, (from, to) => reorderGroupTo(order, from, to));
+      gl.append(row);
     });
     if (!order.length) gl.append(h('li', { class: 'empty', text: 'La playlist est vide pour le moment.' }));
     $('reset-groups').disabled = !state.groupOrder.length && !Object.keys(cleanGroupNames()).length;
+
+    let missingCount = 0;
+    for (const kind of KINDS) {
+      if (!state.cat[kind].catalogLoaded) continue;
+      for (const id of state.sel[kind].included) {
+        if (!state.cat[kind].channelById.has(id)) missingCount += 1;
+      }
+    }
+    $('missing-included-bar').hidden = !missingCount;
+    if (missingCount) {
+      $('missing-included-text').textContent = `⚠️ ${plural(missingCount, 'ajout manuel ne figure plus', 'ajouts manuels ne figurent plus')} dans le catalogue actuel du fournisseur.`;
+    }
 
     const fill = (node, field, emptyText) => {
       node.replaceChildren();
@@ -1517,7 +1622,7 @@
     const uhd = $('opt-uhd').value;
     const candidates = new Map();
     for (const c of state.cat.live.channels) {
-      if (sel.excluded.has(c.stream_id) || !groupMatches(c, group)) continue;
+      if (sel.excluded.has(c.stream_id) || adultHidden(c, 'live') || !groupMatches(c, group)) continue;
       const selected = sel.included.has(c.stream_id) || c.category_ids.some((cid) => catOn('live', cid));
       const quality = qualityOf(c.name);
       const score = quality === 4 && uhd !== 'normal' ? 0.5 : quality;
@@ -1545,6 +1650,7 @@
     for (let n = 2; state.customGroups.some((g) => g.id === id); n += 1) id = `${base}-${n}`;
     const group = { id, name, match: preset ? preset.match : 'words', patterns: preset ? [...preset.patterns] : [] };
     if (preset?.region) group.region = preset.region;
+    if (!preset) state.openCgDrawers.add(id);
     state.customGroups.push(group);
     setCustomOrder([id, ...orderedCustomGroups().map((g) => g.id).filter((g) => g !== id)]);
     if (group.region) includeRegionalChannels(orderedCustomGroups().find((g) => g.id === id));
@@ -1579,7 +1685,7 @@
     for (const [sid, gid] of pairs) {
       if (!members.has(gid)) members.set(gid, []);
       const c = byId.get(sid);
-      if (c && !hiddenDuplicates().has(sid)) {
+      if (c && !hiddenDuplicates().has(sid) && !adultHidden(c, 'live')) {
         const n = backupsOf(sid).length;
         const group = groups.get(gid);
         const rank = group && c.regional?.[0] === group.region ? group._exact.get(c.regional[1]) : null;
@@ -1592,8 +1698,10 @@
   /** Secours disponibles pour les chaînes d'un groupe perso (parmi les catégories cochées). */
   function groupBackupStats(gid) {
     let total = 0, withBackup = 0;
+    const byId = state.cat.live.channelById;
     for (const [sid, g] of groupAssignment()) {
-      if (g !== gid || hiddenDuplicates().has(sid)) continue;
+      const c = byId.get(sid);
+      if (g !== gid || hiddenDuplicates().has(sid) || (c && adultHidden(c, 'live'))) continue;
       total += 1;
       if (backupsOf(sid).length) withBackup += 1;
     }
@@ -1608,13 +1716,12 @@
 
   /** Avertissement « X/Y chaînes sans secours » (bascule automatique activée mais peu de doublons disponibles). */
   function failoverWarnText(gid) {
-    // « Secours hors catégories cochées » cherche de toute façon dans tout le catalogue : plus rien à signaler.
     if (!$('opt-failover').checked || $('opt-failover-any').checked) return '';
     const { total, withBackup } = groupBackupStats(gid);
     if (!total || withBackup >= total) return '';
     return `⚠️ ${total - withBackup}/${total} chaîne${total - withBackup > 1 ? 's' : ''} sans version de secours. `
       + 'Coche d\'autres catégories de la même chaîne (ex. une autre qualité) dans l\'onglet 1, ou active '
-      + '« Secours hors catégories cochées » dans Options.';
+      + '« Secours étendu » dans Options.';
   }
 
   function renderCustomGroups() {
@@ -1622,17 +1729,31 @@
     list.replaceChildren();
     const ordered = orderedCustomGroups();
     const members = groupMembers();
+    const reorderCg = (from, to) => {
+      const ids = ordered.map((g) => g.id);
+      const [moved] = ids.splice(from, 1);
+      ids.splice(to, 0, moved);
+      setCustomOrder(ids);
+      refresh();
+    };
     ordered.forEach((info, index) => {
       const group = state.customGroups.find((g) => g.id === info.id);
       const count = h('span', { class: 'num', text: String((members.get(group.id) || []).length) });
       const preview = h('p', { class: 'hint cg-preview', text: previewText(members.get(group.id)) });
       const warnText = failoverWarnText(group.id);
       const warn = h('p', { class: 'hint warn-text', text: warnText, hidden: !warnText });
+      const drawerSummaryText = () => {
+        const len = (group.patterns || []).length;
+        if (!len) return 'Motifs automatiques (vide = rangement manuel 📁)';
+        return `Motifs automatiques (${len} ${group.match === 'exact' ? (len > 1 ? 'noms exacts' : 'nom exact') : (len > 1 ? 'mots-clés' : 'mot-clé')})`;
+      };
+      const drawerSummary = h('summary', { text: drawerSummaryText() });
       const update = () => {
         state.groupCache = null; state.hiddenCache = null;
         const names = groupMembers().get(group.id);
         preview.textContent = previewText(names);
         count.textContent = String((names || []).length);
+        drawerSummary.textContent = drawerSummaryText();
         const w = failoverWarnText(group.id);
         warn.textContent = w;
         warn.hidden = !w;
@@ -1651,30 +1772,42 @@
       patterns.addEventListener('input', () => { group.patterns = splitPatterns(patterns.value); update(); });
       patterns.addEventListener('change', () => refresh());
       const move = (delta) => {
-        const ids = ordered.map((g) => g.id);
         const target = index + delta;
-        if (target < 0 || target >= ids.length) return;
-        [ids[index], ids[target]] = [ids[target], ids[index]];
-        setCustomOrder(ids);
-        refresh();
+        if (target < 0 || target >= ordered.length) return;
+        reorderCg(index, target);
       };
+      const isOpen = state.openCgDrawers.has(group.id) || (group.patterns || []).length <= 10;
+      const drawer = h('details', { class: 'cg-drawer', open: isOpen },
+        drawerSummary,
+        h('div', { class: 'cg-drawer-body' }, match, patterns));
+      drawer.addEventListener('toggle', () => {
+        if (drawer.open) state.openCgDrawers.add(group.id);
+        else state.openCgDrawers.delete(group.id);
+      });
       const manual = Object.values(state.itemGroups).filter((v) => v === group.id).length;
-      list.append(h('div', { class: 'cg-card' },
+      const handle = h('span', { class: 'drag-handle', title: 'Glisser pour réordonner', 'aria-hidden': 'true', text: '⠿' });
+      const card = h('div', { class: 'cg-card' },
         h('div', { class: 'cg-head' },
+          handle,
           h('span', { class: 'pos', text: String(index + 1) }),
           name, count,
           h('button', { type: 'button', class: 'icon-btn', text: '↑', title: 'Monter', 'aria-label': `Monter ${group.name}`, disabled: index === 0, onclick: () => move(-1) }),
           h('button', { type: 'button', class: 'icon-btn', text: '↓', title: 'Descendre', 'aria-label': `Descendre ${group.name}`, disabled: index === ordered.length - 1, onclick: () => move(1) }),
+          index >= 2 ? h('button', { type: 'button', class: 'icon-btn', text: '⤒', title: 'Placer tout en haut', 'aria-label': `Placer ${group.name} en premier`, onclick: () => reorderCg(index, 0) }) : null,
           h('button', { type: 'button', class: 'icon-btn danger', text: '×', title: 'Supprimer ce groupe', 'aria-label': `Supprimer ${group.name}`,
             onclick: async () => {
               if (!await ask({ title: `Supprimer le groupe « ${group.name} » ?`, text: 'Ses chaînes retournent dans leur groupe d\'origine (rien n\'est retiré de la playlist).', okLabel: 'Supprimer', danger: true })) return;
               state.customGroups = state.customGroups.filter((g) => g !== group);
               state.groupOrder = state.groupOrder.filter((k) => k !== CG + group.id);
+              state.openCgDrawers.delete(group.id);
               for (const [sid, gid] of Object.entries(state.itemGroups)) if (gid === group.id) delete state.itemGroups[sid];
               refresh();
             } })),
-        h('div', { class: 'cg-body' }, match, patterns, preview, warn,
-          manual ? h('p', { class: 'hint', text: `${plural(manual, 'chaîne rangée', 'chaînes rangées')} à la main avec 📁.` }) : null)));
+        h('div', { class: 'cg-body' }, preview, warn,
+          manual ? h('p', { class: 'hint', text: `${plural(manual, 'chaîne rangée', 'chaînes rangées')} à la main avec 📁.` }) : null,
+          drawer));
+      wireDragReorder(card, handle, 'cg-list', index, reorderCg);
+      list.append(card);
     });
     if (!ordered.length) list.append(h('p', { class: 'empty', text: 'Aucun groupe pour le moment : choisis un modèle (TNT, Canal+…) ou crée un groupe vide puis range tes chaînes avec 📁.' }));
   }
@@ -1748,7 +1881,7 @@
     const value = $('rule-value').value.trim();
     if (!value) { $('rule-preview').textContent = ''; return; }
     const rule = { kind: state.kind, match: $('rule-match').value, value };
-    const matched = state.categories.filter((cat) => ruleMatches(cat.name, rule));
+    const matched = state.categories.filter((cat) => ruleMatches(cat.name, rule) && (!$('opt-adult').checked || !isAdultCategory(cat.name)));
     $('rule-preview').textContent = matched.length
       ? `Aperçu : ${plural(matched.length, 'catégorie', 'catégories')} — ${matched.slice(0, 6).map((c) => c.name).join(', ')}${matched.length > 6 ? '…' : ''}`
       : 'Aperçu : aucune catégorie actuelle ne correspond (la règle s\'appliquera aux futures catégories).';
@@ -1759,26 +1892,118 @@
     const current = select.value;
     select.replaceChildren(h('option', { value: '', text: 'Toutes les catégories' }));
     for (const cat of state.categories) {
+      if ($('opt-adult').checked && isAdultCategory(cat.name)) continue;
       select.append(h('option', { value: cat.category_id, text: `${cat.name} (${cat.count})` }));
     }
     select.value = state.categoryNames.has(current) ? current : '';
+  }
+
+  let tvPreviewTicket = 0;
+  const debouncedTvPreview = debounce(() => {
+    if (state.section === 'preview') loadTvPreview();
+  }, 220);
+
+  async function loadTvPreview() {
+    const ticket = ++tvPreviewTicket;
+    const box = $('tv-preview-groups');
+    $('tv-preview-meta').textContent = 'Calcul du rendu TV final…';
+    if (!state.tvPreview) box.replaceChildren(h('p', { class: 'empty', text: 'Génération de l\'aperçu en cours…' }));
+    try {
+      const data = await request('/api/playlists/preview', 'POST', payload());
+      if (ticket !== tvPreviewTicket) return;
+      state.tvPreview = data;
+      renderTvPreview();
+    } catch (error) {
+      if (ticket !== tvPreviewTicket) return;
+      $('tv-preview-meta').textContent = error.message;
+      box.replaceChildren(h('p', { class: 'empty', text: 'Aperçu indisponible.' }));
+    }
+  }
+
+  function renderTvPreview() {
+    const box = $('tv-preview-groups');
+    box.replaceChildren();
+    const data = state.tvPreview;
+    if (!data) {
+      $('tv-preview-meta').textContent = '';
+      return;
+    }
+    const c = data.counts || {};
+    const summaryParts = [];
+    if (c.groups) summaryParts.push(plural(c.groups, 'groupe', 'groupes'));
+    if (c.live) summaryParts.push(`${plural(c.live, 'chaîne', 'chaînes')}${c.backups ? ` (${c.backups} avec secours 🔁)` : ''}`);
+    if (c.vod) summaryParts.push(plural(c.vod, 'film', 'films'));
+    if (c.series) summaryParts.push(plural(c.series, 'série', 'séries'));
+    $('tv-preview-meta').textContent = summaryParts.length
+      ? `Résultat final : ${summaryParts.join(' · ')}`
+      : 'La playlist ne contient aucun élément pour le moment (coche des catégories dans Contenu).';
+    if (!data.groups || !data.groups.length) {
+      box.append(h('p', { class: 'empty', text: 'Aucun groupe à afficher dans l\'aperçu TV.' }));
+      return;
+    }
+    const q = norm($('tv-preview-search').value.trim());
+    const kindFilter = state.tvPreviewKind || 'all';
+    let shownGroups = 0;
+    data.groups.forEach((g) => {
+      if (kindFilter !== 'all' && g.kind !== kindFilter && !(g.kind === 'favorites' && g.items.some((it) => it.kind === kindFilter))) return;
+      const groupMatch = q && norm(g.name).includes(q);
+      const items = g.items.filter((it) => {
+        if (kindFilter !== 'all' && it.kind !== kindFilter) return false;
+        if (q && !groupMatch && !norm(`${it.name} ${it.num || ''}`).includes(q)) return false;
+        return true;
+      });
+      if (!items.length && (q || kindFilter !== 'all')) return;
+      const tagClass = g.kind === 'favorites' ? 'mine' : (g.custom ? 'mine' : g.kind);
+      const tagText = g.kind === 'favorites' ? '★ Favoris' : (g.custom ? '📁 Perso' : (KIND[g.kind]?.label || g.kind));
+      const rows = items.map((it) => {
+        const sub = [];
+        if (it.backups) sub.push(`🔁 ${it.backups} secours`);
+        if (it.epg) sub.push('EPG');
+        if (it.archive) sub.push(`Replay ${it.archive} j`);
+        if (it.year) sub.push(it.year);
+        return h('li', { class: 'tv-row' },
+          it.num ? h('span', { class: 'tv-chno', text: String(it.num) }) : null,
+          thumb({ stream_id: it.id, name: it.name, logo: it.logo }, it.kind === 'live' ? 'live' : it.kind),
+          h('span', { class: 'tv-info' },
+            h('strong', { text: it.name }),
+            sub.length ? h('span', { text: sub.join(' · ') }) : null),
+          it.kind === 'live' ? h('button', {
+            type: 'button', class: 'item-btn', text: '▶', title: 'Aperçu dans le navigateur',
+            'aria-label': `Aperçu de ${it.name}`, onclick: () => preview(it.id, it.name),
+          }) : null);
+      });
+      if (g.total > g.items.length && !q && kindFilter === 'all') {
+        rows.push(h('li', { class: 'empty', text: `… et ${g.total - g.items.length} autres dans ce groupe` }));
+      }
+      const open = Boolean(q) || shownGroups < 4;
+      shownGroups += 1;
+      box.append(h('details', { class: 'tv-group', open },
+        h('summary', null,
+          h('span', { class: `kind-tag ${tagClass}`, text: tagText }),
+          h('span', { class: 'tv-g-name', text: g.name }),
+          h('span', { class: 'badge', text: (q || kindFilter !== 'all' ? items.length : g.total).toLocaleString('fr-FR') })),
+        h('ul', { class: 'tv-items' }, ...rows)));
+    });
+    if (!shownGroups) box.append(h('p', { class: 'empty', text: 'Aucun élément ne correspond à ta recherche dans l\'aperçu.' }));
   }
 
   function refresh(options = {}) {
     const { channels = true, row = null, channel = null } = options;
     state.hiddenCache = null;
     state.groupCache = null;
+    state.tvPreview = null;
     renderStats();
     if (state.tab === 'categories' || channels === true) { renderCategories(); renderRules(); }
     if (channels === true) renderChannels();
     else if (channels === 'row') updateRow(row, channel);
     if (state.tab === 'summary' || state.section === 'organize') renderSummary();
+    if (state.section === 'preview') debouncedTvPreview();
     renderUrl();
     renderPlaylists();
   }
 
   // ------------------------------------------------- parties de l'éditeur
-  const SECTIONS = ['content', 'organize', 'options', 'guide'];
+  const SECTIONS = ['content', 'organize', 'preview', 'options', 'guide'];
   function selectSection(name) {
     state.section = name;
     for (const sec of SECTIONS) {
@@ -1788,6 +2013,7 @@
       $(`sec-${sec}`).hidden = !active;
     }
     if (name === 'organize') renderSummary();
+    if (name === 'preview') loadTvPreview();
     if (name === 'guide') loadEpg();
   }
 
@@ -1858,10 +2084,9 @@
       list.append(guideRow(c, h('span', { class: 'g-prog' },
         cur ? h('span', { class: 'g-time', text: `${hhmm(cur.start)} – ${hhmm(cur.stop)}` }) : null,
         h('strong', { text: cur ? cur.title : 'Pas de programme dans le guide' }),
-        cur ? h('span', { class: 'g-bar', 'aria-hidden': 'true' }, h('span', { style: null, class: 'g-fill', 'data-pct': String(Math.round(pct)) })) : null,
+        cur ? h('progress', { class: 'g-bar', max: '100', value: String(Math.round(pct)), 'aria-hidden': 'true' }) : null,
         c.next ? h('span', { class: 'g-next', text: `Ensuite ${hhmm(c.next.start)} : ${c.next.title}` }) : null)));
     }
-    for (const fill of list.querySelectorAll('.g-fill')) fill.style.width = `${fill.dataset.pct}%`;
     const when = guideWhen === 'now' ? 'en ce moment' : `${dayLabel(at)} à ${hhmm(at)}`;
     $('guide-status').textContent = rows.length
       ? `${plural(rows.length, 'chaîne', 'chaînes')} ${when}${data.total > data.channels.length ? ` (les ${data.channels.length} premières)` : ''} · ${withProgramme} avec programme`
@@ -2003,6 +2228,7 @@
     $('epg-groups').replaceChildren();
     $('opt-hq-logos').checked = !p || p.hq_logos !== false;
     $('opt-separators').checked = Boolean(p && p.hide_separators);
+    $('opt-adult').checked = Boolean(p && p.hide_adult);
     $('opt-fav-name').value = (p && p.favorites_name) || '★ Favoris';
     renderProviderSelect(providerChoice(p));
     reapplyCatalogs();
@@ -2015,6 +2241,7 @@
     state.itemXmltv = p && p.item_xmltv ? { ...p.item_xmltv } : {};
     state.epgSuggestions = null;
     state.hiddenCache = null;
+    state.tvPreview = null;
     renderOptionsPill();
     state.groupOrder = p && p.group_order ? [...p.group_order] : [];
     state.groupNames = p && p.group_names ? { ...p.group_names } : {};
@@ -2033,6 +2260,7 @@
     clearError();
     refresh();
     loadEpg();
+    if (state.section === 'preview') loadTvPreview();
     // Charger en arrière-plan les catalogues films / séries utilisés par cette playlist (compteurs, résumé).
     if (p) for (const kind of ['vod', 'series']) if (usesKind(p, kind)) ensureCatalog(kind);
   }
@@ -2144,9 +2372,8 @@
 
   function renderDevicePlaylistSelect(select, value) {
     select.replaceChildren();
-    // Profils : un nouvel appareil est lié à une playlist (« tout le catalogue » mélangerait les abonnements).
     if (!multiProfile()) select.append(h('option', { value: '', text: 'Tout le catalogue (sans séries en M3U)' }));
-    else if (!value && select.id !== 'device-playlist') select.append(h('option', { value: '', text: 'Tout le catalogue de tous les abonnements (déconseillé)' }));
+    else if (!value && select.id !== 'device-playlist') select.append(h('option', { value: '', text: 'Tout le catalogue de cet espace' }));
     for (const p of [...state.playlists].filter(inProfile).sort((a, b) => collator.compare(a.name, b.name))) {
       select.append(h('option', { value: p.slug, text: `${p.name} (/p/${p.slug}.m3u)` }));
     }
@@ -2185,6 +2412,8 @@
       catch (error) { toast(error.message, 'error'); }
     });
     const seen = d.last_seen ? `vu le ${new Date(d.last_seen * 1000).toLocaleString('fr-FR', { dateStyle: 'short', timeStyle: 'short' })}` : 'jamais utilisé depuis le démarrage';
+    const prioLabel = d.priority === 'high' ? 'priorité haute' : d.priority === 'low' ? 'priorité basse' : 'priorité normale';
+    const advSummary = `⚙️ Réglages (${prioLabel} · ${external ? 'externe' : 'réseau local'}${d.ip ? ` · IP ${d.ip}` : ''})`;
     return h('section', { class: 'card device-card' },
       h('div', { class: 'card-head' },
         h('div', null,
@@ -2206,12 +2435,15 @@
             if (!(await ask({ title: 'Supprimer l\'appareil ?', text: `« ${d.name} » perdra immédiatement l'accès.`, okLabel: 'Supprimer', danger: true }))) return;
             try { await request(`/api/devices/${d.id}`, 'DELETE'); toast('Appareil supprimé'); loadDevices(); } catch (error) { toast(error.message, 'error'); }
           } }))),
-      h('div', { class: 'device-settings' },
-        h('div', { class: 'field' }, h('label', { text: 'Playlist de cet appareil' }), select),
-        h('div', { class: 'field' }, h('label', { text: 'Priorité (limite de connexions)' }), prioritySelect(d)),
-        h('div', { class: 'field' }, h('label', { text: 'Adresse IP de la TV (facultatif)' }), ipInput(d)),
-        h('div', { class: 'field' }, h('label', { text: 'Liens' }), linksSelect(d))),
-      external && !externalBase() ? h('p', { class: 'hint warn-text', text: 'Aucune adresse publique : active le tunnel Cloudflare ou ajoute ton adresse de reverse proxy (Système → Accès à distance). Liens du réseau local affichés en attendant.' }) : null,
+      h('div', { class: 'dev-top-row' },
+        h('div', { class: 'field' }, h('label', { text: 'Playlist associée' }), select),
+        h('details', { class: 'dev-adv' },
+          h('summary', { text: advSummary }),
+          h('div', { class: 'device-settings' },
+            h('div', { class: 'field' }, h('label', { text: 'Priorité (limite de connexions)' }), prioritySelect(d)),
+            h('div', { class: 'field' }, h('label', { text: 'Adresse IP de la TV (facultatif)' }), ipInput(d)),
+            h('div', { class: 'field' }, h('label', { text: 'Réseau / liens' }), linksSelect(d))))),
+      external && !externalBase() ? h('p', { class: 'hint warn-text', text: 'Aucune adresse publique : active le tunnel Cloudflare ou ajoute ton adresse de reverse proxy (Système → Accès & Guides). Liens du réseau local affichés en attendant.' }) : null,
       h('div', { class: 'device-grid' },
         h('div', { class: 'device-mode' },
           h('h4', { text: '📺 Mode « Playlist M3U » (VLC, TiviMate, Android TV…)' }),
@@ -2219,9 +2451,10 @@
         h('div', { class: 'device-mode' },
           h('h4', { text: '🔐 Mode « Xtream Codes » (TiviMate, IPTV Smarters…)' }),
           credRow('Serveur', server), credRow('Identifiant', d.username), credRow('Mot de passe', d.password, { secret: true }),
-          h('p', { class: 'hint', text: 'Rubriques Direct / Films / Séries natives du lecteur, guide et replay inclus.' })),
+          h('p', { class: 'hint', text: 'Rubriques Direct / Films / Séries natives du lecteur, guide et replay inclus.' }))),
+      h('details', { class: 'hdhr-details' },
+        h('summary', { text: '📡 Tuner HDHomeRun avancé (Plex, Jellyfin, Emby)' }),
         h('div', { class: 'device-mode' },
-          h('h4', { text: '📡 Tuner HDHomeRun (Plex, Jellyfin, Emby)' }),
           credRow('Tuner', `${server}/hdhr/${d.username}/${d.password}`, { secret: true }),
           credRow('Guide (XMLTV)', `${server}/hdhr/${d.username}/${d.password}/guide.xml`, { secret: true }),
           h('p', { class: 'hint', text: `Jellyfin / Emby : ajoute un tuner HDHomeRun avec cette adresse. Plex : si seule « IP:port » est acceptée, mets ${server.replace(/^https?:\/\//, '')} et indique ci-dessus l'adresse IP du serveur Plex.` }))));
@@ -2247,7 +2480,7 @@
       h('option', { value: 'normal', text: 'Normale', selected: !d.priority || d.priority === 'normal' }),
       h('option', { value: 'low', text: 'Basse : cède toujours sa place', selected: d.priority === 'low' }));
     select.addEventListener('change', async () => {
-      try { await request(`/api/devices/${d.id}`, 'PUT', { priority: select.value }); toast('Priorité modifiée'); }
+      try { await request(`/api/devices/${d.id}`, 'PUT', { priority: select.value }); toast('Priorité modifiée'); loadDevices(); }
       catch (error) { toast(error.message, 'error'); loadDevices(); }
     });
     return select;
@@ -2257,7 +2490,7 @@
     const input = h('input', { type: 'text', value: d.ip || '', placeholder: d.last_ip ? `vue : ${d.last_ip}` : 'ex. 192.168.0.42', inputmode: 'decimal',
       'aria-label': `Adresse IP de ${d.name}`, title: 'Sert à reconnaître la TV même si sa playlist n\'utilise pas son code' });
     input.addEventListener('change', async () => {
-      try { await request(`/api/devices/${d.id}`, 'PUT', { ip: input.value.trim() }); toast('Adresse enregistrée'); }
+      try { await request(`/api/devices/${d.id}`, 'PUT', { ip: input.value.trim() }); toast('Adresse enregistrée'); loadDevices(); }
       catch (error) { toast(error.message, 'error'); input.value = d.ip || ''; }
     });
     return input;
@@ -2266,12 +2499,11 @@
   async function loadDevices() {
     try { devicesData = await request('/api/devices'); } catch (error) { showError(error.message); return; }
     renderDevicePlaylistSelect($('device-playlist'), $('device-playlist').value);
-    // Liens du nouvel appareil : réseau local ou une des adresses publiques (tunnel, reverse proxy).
     const links = $('device-links');
     const previous = links.value;
-    links.replaceChildren(h('option', { value: 'lan', text: 'Réseau local : à la maison' }),
+    links.replaceChildren(h('option', { value: 'lan', text: 'Maison (réseau local)' }),
       ...(publicAddresses().length ? publicAddresses().map((url) => h('option', { value: url, text: `Externe : ${url.replace('https://', '')}` }))
-        : [h('option', { value: 'external', text: 'Externe : hors de la maison' })]));
+        : [h('option', { value: 'external', text: 'Externe (hors domicile)' })]));
     if ([...links.options].some((o) => o.value === previous)) links.value = previous;
     $('require-token').checked = devicesData.require_token;
     $('require-token-hint').textContent = devicesData.access_token_env
@@ -2280,16 +2512,17 @@
         ? 'Les URL sans code (ou avec un code supprimé) sont refusées. Les liens générés reprennent le code de l\'appareil.'
         : 'Option désactivée : les playlists restent accessibles sans code sur ton réseau local. Les identifiants Xtream restent toujours nécessaires.';
     const list = $('devices-list');
-    // Profils : les appareils dont la playlist appartient au profil (sans playlist : profil principal).
     const visible = devicesData.devices.filter((d) => {
       if (!multiProfile()) return true;
       const p = state.playlists.find((x) => x.slug === d.playlist);
-      return p ? inProfile(p) : state.profile === '1';
+      if (p) return inProfile(p);
+      if (d.profile) return String(d.profile) === state.profile;
+      return state.profile === '1';
     });
     list.replaceChildren(...visible.map(deviceCard));
     refreshDeviceLive();
     if (!visible.length) list.append(h('p', { class: 'empty', text: multiProfile()
-      ? `Aucun appareil dans le profil « ${profileName(state.profile)} ». Ajoute sa TV ci-dessus, liée à une de ses playlists.`
+      ? `Aucun appareil dans l'espace « ${profileName(state.profile)} ». Ajoute sa TV ci-dessus, liée à une de ses playlists.`
       : 'Aucun appareil pour le moment. Ajoute ta première TV ci-dessus.' }));
   }
 
@@ -2303,16 +2536,20 @@
     for (const d of devicesData.devices) {
       const pill = $(`dev-live-${d.id}`);
       if (!pill) continue;
-      // Lecture de cet appareil (par son identifiant ; anciennes sessions : par son nom). Un aperçu HLS
-      // sans requête depuis 20 s n'est plus compté comme regardé.
-      const mine = ((data && data.streams) || []).filter((s) => (s.device_id ? s.device_id === d.id : s.device === d.name)
-        && !(s.kind === 'hls' && s.idle > 20));
+      const mine = ((data && data.streams) || []).filter((s) => {
+        if (s.kind === 'hls' && s.idle > 20) return false;
+        if (Array.isArray(s.device_ids) && s.device_ids.length) return s.device_ids.includes(d.id);
+        if (s.device_id) return s.device_id === d.id;
+        if (Array.isArray(s.devices) && s.devices.length) return s.devices.includes(d.name);
+        return s.device === d.name;
+      });
       pill.hidden = !mine.length;
       if (!mine.length) continue;
       const s = mine[mine.length - 1];
       const extra = mine.length > 1 ? ` (+${mine.length - 1})` : '';
+      const shared = s.viewers > 1 ? ' · 🔗 partagé' : '';
       pill.querySelector('.dev-live-text').textContent =
-        `En lecture : ${s.channel || s.label} · ${KIND_LABEL[s.kind] || s.kind} · depuis ${formatDuration(s.seconds)}${extra}`;
+        `En lecture : ${s.channel || s.label} · ${KIND_LABEL[s.kind] || s.kind} · depuis ${formatDuration(s.seconds)}${shared}${extra}`;
       pill.title = `${s.label}${s.switches ? ` · ${plural(s.switches, 'bascule', 'bascules')}` : ''} · ${formatBytes(s.bytes)}`;
     }
     deviceLiveTimer = setTimeout(refreshDeviceLive, 8000);
@@ -2346,7 +2583,10 @@
     state.localStreams = n;
     renderAccountPill();
     $('streams-pill').hidden = !n;
-    $('streams-pill-text').textContent = `${n} lecture${n > 1 ? 's' : ''}`;
+    const totalViewers = data.streams.reduce((acc, s) => acc + Math.max(1, Number(s.viewers) || 1), 0);
+    $('streams-pill-text').textContent = totalViewers > n
+      ? `${n} flux (${totalViewers} écrans)`
+      : `${n} lecture${n > 1 ? 's' : ''}`;
     const limitText = data.limit
       ? `Limite : ${plural(data.limit, 'connexion simultanée', 'connexions simultanées')}${data.auto ? ' (valeur de l\'abonnement)' : ' (MAX_CONNECTIONS)'}${data.takeover ? '' : ' · reprise automatique désactivée'}.`
       : 'Aucune limite de connexions appliquée (MAX_CONNECTIONS=0 ou valeur de l\'abonnement inconnue).';
@@ -2354,11 +2594,16 @@
     const list = $('streams-list');
     list.replaceChildren();
     for (const s of data.streams) {
+      const devicesLabel = Array.isArray(s.devices) && s.devices.length > 1
+        ? s.devices.join(', ')
+        : (s.device ? `${s.device}${s.priority === 'high' ? ' (prioritaire)' : s.priority === 'low' ? ' (priorité basse)' : ''}` : `appareil ${s.client}`);
       list.append(h('li', { class: 'stream-item' },
         h('span', { class: 'dot live-dot' }),
         h('span', { class: 'grow' },
-          h('span', { class: 's-title', text: s.label || s.item_id }),
-          h('span', { class: 's-meta', text: `${KIND_LABEL[s.kind] || s.kind} · ${s.device ? `${s.device}${s.priority === 'high' ? ' (prioritaire)' : s.priority === 'low' ? ' (priorité basse)' : ''}` : `appareil ${s.client}`} · depuis ${formatDuration(s.seconds)} · ${formatBytes(s.bytes)}${s.switches ? ` · ${plural(s.switches, 'bascule', 'bascules')}` : ''}${multiProfile() ? ` · ${profileName(s.provider)}` : ''}` })),
+          h('span', { class: 's-title' },
+            h('span', { text: s.label || s.item_id }),
+            s.viewers > 1 ? h('span', { class: 'badge ok', text: `🔗 Partagé (${s.viewers} écrans · 1 connexion)` }) : null),
+          h('span', { class: 's-meta', text: `${KIND_LABEL[s.kind] || s.kind} · ${devicesLabel} · depuis ${formatDuration(s.seconds)} · ${formatBytes(s.bytes)}${s.switches ? ` · ${plural(s.switches, 'bascule', 'bascules')}` : ''}${hasMultipleSources() ? ` · ${sourceName(s.provider)}` : ''}` })),
         h('button', { type: 'button', class: 'btn small danger', text: 'Arrêter', onclick: async (event) => {
           event.target.disabled = true;
           try { await request(`/api/streams/${s.id}/stop`, 'POST'); toast('Lecture arrêtée'); } catch (error) { toast(error.message, 'error'); }
@@ -2508,6 +2753,18 @@
   }
 
   // ---------------------------------------------------------- abonnements
+  const SYS_TABS = ['overview', 'providers', 'network', 'backup'];
+  function selectSysTab(name) {
+    if (!SYS_TABS.includes(name)) name = 'overview';
+    state.sysTab = name;
+    for (const tab of SYS_TABS) {
+      const active = tab === name;
+      $(`sys-btn-${tab}`).setAttribute('aria-selected', String(active));
+      $(`sys-btn-${tab}`).tabIndex = active ? 0 : -1;
+      $(`sys-${tab}`).hidden = !active;
+    }
+  }
+
   let providersData = null;
 
   async function loadProviders() {
@@ -2517,6 +2774,7 @@
       const meta = p.source === 'configuration'
         ? `${p.host} · configuration du conteneur`
         : `${p.host} · ${p.username} · ajouté dans l'interface`;
+      const role = p.index === 1 ? ' · 👤 espace principal' : (p.aux ? ' · 🛡️ complément / secours' : ' · 👤 espace membre');
       const agent = p.user_agent ? ` · user agent : ${p.user_agent}` : '';
       const mix = p.mixable ? ' · mélangeable avec les autres abonnements' : ' · isolé (jamais mélangé)';
       const creds = h('span', { class: 'prov-creds', hidden: true });
@@ -2530,7 +2788,7 @@
         h('button', { type: 'button', class: 'btn small danger', text: 'Supprimer', onclick: () => deleteProvider(p) }));
       return h('li', null,
         h('span', null, h('strong', { text: `${p.index}. ${p.name}` }), h('br'),
-          h('span', { class: p.error ? 'warn-text' : 'muted small', text: p.error || meta + mix + agent }), creds),
+          h('span', { class: p.error ? 'warn-text' : 'muted small', text: p.error || meta + role + mix + agent }), creds),
         actions);
     }));
     $('provider-form').hidden = !providersData.editable;
@@ -2538,13 +2796,15 @@
       : 'Ajout désactivé dans ce mode de démarrage : utilise les variables XTREAM_URL_2… puis redémarre le conteneur.';
   }
 
-  /** Après un changement d'abonnement : profils, barre « Profil », catalogues et badge à jour sans recharger la page. */
+  /** Après un changement d'abonnement : profils, barre « Espace membre », catalogues et badge à jour sans recharger la page. */
   async function afterProvidersChange() {
     try {
       const status = await request('/api/status');
       state.status = status;
+      state.sources = status.sources || status.profiles || [];
       state.profiles = status.profiles || [];
       if (!state.profiles.some((p) => p.id === state.profile)) state.profile = '1';
+      document.body.dataset.space = multiProfile() ? state.profile : '1';
       renderProfileBar();
     } catch (_) { /* affichage seulement */ }
     for (const kind of KINDS) state.cat[kind].raw = null;
@@ -2552,26 +2812,28 @@
     await loadCatalog(false, 'live');
     refresh();
     renderPlaylists();
+    loadSummary();
     loadAccount();
     loadProviders();
   }
 
-  const MIX_CHOICE = { label: 'Mélange avec les autres abonnements',
-    options: [['0', 'Non : reste isolé dans son profil'], ['1', 'Oui : proposé dans les playlists « mélange » des autres profils']] };
-
-  async function saveMix(p, choice) {
-    const mixable = choice === '1';
-    if (mixable === Boolean(p.mixable)) return;
-    await request(`/api/providers/${p.index}/mix`, 'PUT', { mixable });
-  }
-
-  /** Abonnement de la configuration du conteneur : seul le mélange se modifie ici. */
+  /** Abonnement de la configuration du conteneur : rôle (espace membre / complément) et mélange se modifient ici. */
   async function editMix(p) {
+    const options = [
+      ['0', 'Non : reste isolé dans son espace membre'],
+      ['1', 'Oui : espace membre + mélangeable avec les autres profils'],
+      ...(p.index > 1 ? [['2', 'Complément / secours : sans onglet en haut, mélange & débordement auto']] : []),
+    ];
+    const current = p.aux ? '2' : (p.mixable ? '1' : '0');
     const choice = await ask({ title: `Modifier « ${p.name} »`, okLabel: 'Enregistrer',
-      text: 'Adresse et identifiants se modifient dans la configuration du conteneur (Unraid).',
-      select: { ...MIX_CHOICE, value: p.mixable ? '1' : '0' } });
+      text: 'Adresse et identifiants se modifient dans la configuration du conteneur (Unraid / Docker).',
+      select: { label: 'Rôle et mélange avec les autres abonnements', options, value: current } });
     if (choice === null) return;
-    try { await saveMix(p, choice); toast('Abonnement enregistré'); afterProvidersChange(); } catch (error) { toast(error.message, 'error'); }
+    try {
+      await request(`/api/providers/${p.index}/mix`, 'PUT', { aux: choice === '2', mixable: choice !== '0' });
+      toast('Abonnement enregistré');
+      afterProvidersChange();
+    } catch (error) { toast(error.message, 'error'); }
   }
 
   /** Identifiants d'un abonnement, demandés au serveur seulement quand on clique (réseau local seulement). */
@@ -2597,7 +2859,6 @@
   async function editProvider(p) {
     const form = $('provider-form');
     form.dataset.edit = String(p.index);
-    form.dataset.mixable = p.mixable ? '1' : '0';
     $('provider-name').value = p.name;
     $('provider-url').value = p.url || '';
     $('provider-user').value = '';
@@ -2605,15 +2866,16 @@
     $('provider-pass').value = '';
     $('provider-pass').placeholder = 'inchangé';
     try {
-      // Identifiants actuels pré-remplis (mot de passe masqué, bouton œil pour le voir).
       const c = await fetchCredentials(p);
       $('provider-user').value = c.username;
       $('provider-pass').value = c.password;
     } catch (_) { /* vide = inchangé */ }
     $('provider-user').required = false;
     $('provider-pass').required = false;
+    $('provider-role').value = p.aux ? 'aux' : 'space';
     $('provider-ua').value = p.user_agent || '';
-    $('provider-mix').checked = Boolean(p.mixable);
+    $('provider-mix').checked = Boolean(p.mixable || p.aux);
+    $('provider-mix').disabled = Boolean(p.aux);
     $('provider-add').textContent = `Enregistrer « ${p.name} »`;
     $('provider-cancel').hidden = false;
     $('provider-edit-hint').hidden = false;
@@ -2625,14 +2887,15 @@
   function resetProviderForm() {
     const form = $('provider-form');
     delete form.dataset.edit;
-    delete form.dataset.mixable;
     for (const id of ['provider-name', 'provider-url', 'provider-user', 'provider-pass', 'provider-ua']) $(id).value = '';
     $('provider-user').placeholder = '';
     $('provider-pass').placeholder = '';
     $('provider-pass').type = 'password';
     $('provider-user').required = true;
     $('provider-pass').required = true;
+    $('provider-role').value = 'space';
     $('provider-mix').checked = false;
+    $('provider-mix').disabled = false;
     $('provider-add').textContent = '+ Ajouter l\'abonnement';
     $('provider-cancel').hidden = true;
     $('provider-edit-hint').hidden = true;
@@ -2704,7 +2967,7 @@
     tree.replaceChildren();
     results.replaceChildren();
     $('prov-actions').textContent = K().actions;
-    $('export').href = `/api/catalog/export?kind=${state.kind}`;
+    $('export').href = `/api/catalog/export?kind=${state.kind}${hasMultipleSources() ? `&profile=${encodeURIComponent(state.profile)}` : ''}`;
     $('export-raw').href = `/api/catalog?kind=${state.kind}&refresh=1`;
     if (!state.catalogLoaded) {
       $('catalog-stats').replaceChildren();
@@ -2856,8 +3119,7 @@
   }
 
   function renderAccountFacts(status) {
-    // Plusieurs profils : seulement l'abonnement du profil affiché.
-    const own = multiProfile() && status && (status.providers || []).find((p) => String(p.index) === state.profile);
+    const own = hasMultipleSources() && status && (status.providers || []).find((p) => String(p.index) === state.profile);
     const a = own ? own.account : status && status.account;
     const facts = $('account-facts');
     const rows = [];
@@ -2873,7 +3135,7 @@
       rows.push(['Fuseau du fournisseur', a.timezone || 'non communiqué (UTC)']);
       if (a.is_trial) rows.push(['Type', 'Essai']);
     }
-    if (own) rows.unshift(['Profil', own.name]);
+    if (own) rows.unshift(['Espace', own.name]);
     facts.replaceChildren(...rows.flatMap(([k, v]) => [h('dt', { text: k }), h('dd', { text: v })]));
     if (status) $('sys-version').textContent = `Xtream M3U Local ${status.version}`;
   }
@@ -2919,7 +3181,7 @@
       const result = await request('/api/restore', 'POST', { backup, mode, include_devices: withDevices });
       toast(`Restauration terminée : ${result.added} ajoutée(s), ${result.replaced} remplacée(s)`);
       state.playlists = await request('/api/playlists');
-      load(state.playlists.length ? [...state.playlists].sort((a, b) => collator.compare(a.name, b.name))[0] : null);
+      load(state.playlists.length ? [...state.playlists].filter(inProfile).sort((a, b) => collator.compare(a.name, b.name))[0] || null : null);
     } catch (error) { toast(error.message, 'error'); }
   }
 
@@ -2929,7 +3191,10 @@
       renderAccountFacts(status);
       state.account = status.account;
       state.accounts = status.providers || [];
-      renderExpiry(state.account);
+      const activeAccount = hasMultipleSources()
+        ? (((state.accounts.find((x) => String(x.index) === state.profile) || {}).account) ?? state.account)
+        : state.account;
+      renderExpiry(activeAccount);
       renderAccountPill();
     } catch (_) { /* facultatif */ }
   }
@@ -2937,8 +3202,8 @@
   /** Badge de l'abonnement. Connexions : le compteur du fournisseur n'est lu qu'à l'ouverture de la page
    *  (et il est souvent en retard) ; on prend le plus grand avec les lectures relayées par ce serveur. */
   function renderAccountPill() {
-    const a = multiProfile()
-      ? ((state.accounts.find((x) => String(x.index) === state.profile) || {}).account || null)
+    const a = hasMultipleSources()
+      ? (((state.accounts.find((x) => String(x.index) === state.profile) || {}).account) ?? state.account)
       : state.account;
     if (!a) return;
     const parts = [];
@@ -2960,10 +3225,11 @@
     if (status.status === 'fulfilled') {
       state.status = status.value;
       $('version').textContent = `version ${state.status.version}`;
+      state.sources = state.status.sources || state.status.profiles || [];
       state.profiles = state.status.profiles || [];
       const remembered = storage('xtream-m3u-profile');
       state.profile = state.profiles.some((p) => p.id === remembered) ? remembered : '1';
-      // Blocs dépliés mémorisés ; par défaut, seul l'abonnement du profil est déplié.
+      document.body.dataset.space = multiProfile() ? state.profile : '1';
       let open = null;
       try { open = JSON.parse(storage('xtream-m3u-open-providers') || 'null'); } catch (_) { open = null; }
       state.openGroups = new Set(Array.isArray(open) ? open.map(String) : [state.profile]);
@@ -2978,7 +3244,7 @@
     if (playlists.status === 'fulfilled') state.playlists = playlists.value;
     else showError(playlists.reason.message);
     const firstInProfile = [...state.playlists].sort((a, b) => collator.compare(a.name, b.name));
-    load(firstInProfile.find((p) => multiProfile() && playlistProfile(p) === state.profile) || firstInProfile.find(inProfile) || null);
+    load(firstInProfile.find((p) => hasMultipleSources() && playlistProfile(p) === state.profile) || firstInProfile.find(inProfile) || null);
     const fromHash = Object.keys(VIEWS).find((v) => VIEWS[v] === location.hash);
     if (fromHash && fromHash !== 'playlists') switchView(fromHash);
     loadStreams();
@@ -2994,11 +3260,16 @@
     $('name').focus();
   });
   $('save').addEventListener('click', save);
+  $('profile-manage').addEventListener('click', () => { switchView('system'); selectSysTab('providers'); });
+  $('full-card').addEventListener('toggle', (event) => {
+    if (event.isTrusted) state.fullCardTouched = true;
+  });
   $('opt-live-format').addEventListener('change', () => { renderOptionsPill(); renderStats(); });
   $('opt-catchup').addEventListener('change', () => { renderOptionsPill(); renderStats(); });
   $('opt-dedupe').addEventListener('change', () => { renderOptionsPill(); refresh(); });
   $('opt-failover').addEventListener('change', () => { renderOptionsPill(); refresh({ channels: false }); });
   $('opt-hq-logos').addEventListener('change', () => { renderOptionsPill(); refresh(); });
+  $('opt-adult').addEventListener('change', () => { renderOptionsPill(); refresh(); });
   $('opt-provider').addEventListener('change', () => { reapplyCatalogs(); refresh(); });
   $('tailscale-local').addEventListener('change', async (event) => {
     const on = event.target.checked;
@@ -3045,6 +3316,11 @@
       text: 'Les TV hors de chez toi n\'auront plus accès. L\'adresse reste dans les DNS de ton domaine : tu peux l\'effacer dans Cloudflare.' }))) return;
     try { renderTunnel(await request('/api/tunnel/remove', 'POST')); toast('Tunnel supprimé'); } catch (error) { toast(error.message, 'error'); }
   });
+  $('provider-role').addEventListener('change', () => {
+    const isAux = $('provider-role').value === 'aux';
+    if (isAux) $('provider-mix').checked = true;
+    $('provider-mix').disabled = isAux;
+  });
   $('provider-form').addEventListener('submit', async (event) => {
     event.preventDefault();
     const form = $('provider-form');
@@ -3053,19 +3329,22 @@
     const label = button.textContent;
     button.disabled = true;
     button.textContent = 'Test de la connexion…';
+    const isAux = $('provider-role').value === 'aux';
+    const mixable = isAux || $('provider-mix').checked;
     const body = {
       name: $('provider-name').value.trim(), url: $('provider-url').value.trim(),
       username: $('provider-user').value.trim(), password: $('provider-pass').value,
-      user_agent: $('provider-ua').value.trim() };
+      user_agent: $('provider-ua').value.trim(), aux: isAux };
     try {
       if (editing) {
-        // Vide = inchangé (utilisateur, mot de passe) ; le serveur teste la connexion si quelque chose change.
         const saved = await request(`/api/providers/${editing}`, 'PUT', body);
-        await saveMix({ index: Number(editing), mixable: form.dataset.mixable === '1' }, $('provider-mix').checked ? '1' : '0');
+        await request(`/api/providers/${editing}/mix`, 'PUT', { aux: isAux, mixable });
         toast(`Abonnement « ${saved.name} » enregistré`);
       } else {
-        const added = await request('/api/providers', 'POST', { ...body, mixable: $('provider-mix').checked });
-        toast(`Abonnement « ${added.name} » ajouté : choisis son profil en haut`);
+        const added = await request('/api/providers', 'POST', { ...body, mixable });
+        toast(isAux
+          ? `Abonnement « ${added.name} » ajouté en complément / secours`
+          : `Abonnement « ${added.name} » ajouté : choisis son espace en haut`);
       }
       resetProviderForm();
       await afterProvidersChange();
@@ -3102,24 +3381,42 @@
   $('rule-value').addEventListener('keydown', (event) => { if (event.key === 'Enter') { event.preventDefault(); addRule(); } });
   $('clear-favorites').addEventListener('click', () => { state.favorites = []; refresh(); });
   $('clear-custom').addEventListener('click', async () => {
-    if (!(await ask({ title: 'Effacer les personnalisations ?', text: 'Tous les noms et numéros personnalisés de cette playlist seront supprimés.', okLabel: 'Effacer', danger: true }))) return;
-    state.itemNames = {}; state.itemNumbers = {}; refresh();
+    if (!(await ask({ title: 'Effacer les personnalisations ?', text: 'Tous les noms, numéros, logos et guides personnalisés de cette playlist seront supprimés.', okLabel: 'Effacer', danger: true }))) return;
+    state.itemNames = {}; state.itemNumbers = {}; state.itemLogos = {}; state.itemEpg = {}; state.itemXmltv = {};
+    refresh();
   });
   $('auto-number').addEventListener('click', async () => {
     const groups = groupCounts();
     const order = orderedGroups(groups).filter((key) => groupInfo(key).kind === 'live');
     const sel = state.sel.live;
     const hidden = hiddenDuplicates();
+    const assign = groupAssignment();
+    const cgById = new Map(orderedCustomGroups().map((g) => [g.id, g]));
     const byGroup = new Map(order.map((g) => [g, []]));
     for (const c of state.cat.live.channels) {
-      if (sel.excluded.has(c.stream_id) || hidden.has(c.stream_id)) continue;
-      const g = c.category_ids.find((id) => catOn('live', id)) || (sel.included.has(c.stream_id) ? c.category_id : null);
+      if (sel.excluded.has(c.stream_id) || hidden.has(c.stream_id) || adultHidden(c, 'live')) continue;
+      const inCat = c.category_ids.find((id) => catOn('live', id));
+      if (!inCat && !sel.included.has(c.stream_id)) continue;
+      const custom = assign.get(c.stream_id);
+      const g = custom ? CG + custom : (inCat || c.category_id);
       if (g != null && byGroup.has(g)) byGroup.get(g).push(c);
     }
+    const patternRank = (c, gKey) => {
+      if (!gKey.startsWith(CG)) return 1e9;
+      const cg = cgById.get(gKey.slice(CG.length));
+      if (!cg || !cg._patterns.length || state.itemGroups[c.stream_id] === cg.id) return 1e8;
+      if (c._core === undefined) c._core = matchName(c.name);
+      const core = cg.region ? (c.regional?.[1] || '') : c._core;
+      if (cg.match === 'exact') return cg._exact.get(core) ?? 1e8;
+      const padded = ` ${core} `;
+      const idx = cg._patterns.findIndex((p) => padded.includes(` ${p} `));
+      return idx >= 0 ? idx : 1e8;
+    };
     const ordered = [];
     for (const g of order) {
       const list = byGroup.get(g);
-      list.sort((a, b) => (state.itemNumbers[a.stream_id] || 1e9) - (state.itemNumbers[b.stream_id] || 1e9));
+      list.sort((a, b) => (state.itemNumbers[a.stream_id] || 1e9) - (state.itemNumbers[b.stream_id] || 1e9)
+        || patternRank(a, g) - patternRank(b, g));
       ordered.push(...list);
     }
     if (!ordered.length) { toast('Aucune chaîne à numéroter', 'error'); return; }
@@ -3136,13 +3433,19 @@
   $('view-btn-catalog').addEventListener('click', () => switchView('catalog'));
   $('view-btn-system').addEventListener('click', () => switchView('system'));
   $('view-btn-devices').addEventListener('click', () => switchView('devices'));
+  for (const tab of SYS_TABS) $(`sys-btn-${tab}`).addEventListener('click', () => selectSysTab(tab));
+  document.querySelector('.sys-nav').addEventListener('keydown', (event) => {
+    const index = SYS_TABS.indexOf(state.sysTab);
+    const next = { ArrowRight: SYS_TABS[(index + 1) % SYS_TABS.length], ArrowLeft: SYS_TABS[(index + SYS_TABS.length - 1) % SYS_TABS.length] }[event.key];
+    if (next) { event.preventDefault(); selectSysTab(next); $(`sys-btn-${next}`).focus(); }
+  });
   $('device-form').addEventListener('submit', async (event) => {
     event.preventDefault();
     const name = $('device-name').value.trim();
     if (!name) { $('device-name').focus(); return; }
     try {
       const device = await request('/api/devices', 'POST', { name, playlist: $('device-playlist').value, priority: $('device-priority').value,
-        links: $('device-links').value });
+        links: $('device-links').value, profile: hasMultipleSources() ? state.profile : '' });
       $('device-name').value = '';
       toast(`Appareil « ${device.name} » ajouté`);
       loadDevices();
@@ -3164,7 +3467,7 @@
       loadDevices();
     } catch (error) { toast(error.message, 'error'); $('require-token').checked = !value; }
   });
-  $('streams-pill').addEventListener('click', () => switchView('system'));
+  $('streams-pill').addEventListener('click', () => { switchView('system'); selectSysTab('overview'); });
   $('streams-refresh').addEventListener('click', loadStreams);
   $('diag-run').addEventListener('click', runDiagnostic);
   $('diag-copy').addEventListener('click', () => {
@@ -3177,7 +3480,6 @@
   document.addEventListener('visibilitychange', () => { if (!document.hidden) loadStreams(); });
   $('prov-search').addEventListener('input', debounce(renderProvider, 200));
   $('prov-expand').addEventListener('click', () => {
-    // Les sous-groupes sont créés à l'ouverture du parent : plusieurs passes successives.
     let passes = 0;
     const pass = () => {
       const closed = [...document.querySelectorAll('#view-catalog details.tree-node:not([open])')];
@@ -3188,9 +3490,19 @@
   });
   $('prov-collapse').addEventListener('click', () => document.querySelectorAll('#view-catalog details.tree-node').forEach((d) => { d.open = false; }));
   $('cg-add').addEventListener('click', () => createGroup());
-  for (const preset of PRESETS) {
-    $('cg-presets').append(h('button', { type: 'button', class: 'btn small', text: `+ ${preset.name}`, title: preset.hint,
-      onclick: () => createGroup(preset) }));
+  const PRESET_FAMILIES = [
+    ['France', ['OTT', 'Bouquet Canal+', 'TNT', 'Chaînes Canal+']],
+    ['Maghreb & Arabe', ['Maroc', 'Nilesat', 'Sport AR']],
+    ['Belgique & Suisse', ['Belgique', 'Francophonie']],
+    ['Thématiques', ['Sport FR', 'Sport', 'Info', 'Cinéma', 'Jeunesse', 'Documentaires']],
+  ];
+  for (const [family, names] of PRESET_FAMILIES) {
+    const line = h('div', { class: 'preset-line' }, h('span', { class: 'preset-cat', text: family }));
+    for (const name of names) {
+      const preset = PRESETS.find((p) => p.name === name);
+      if (preset) line.append(h('button', { type: 'button', class: 'btn small', text: `+ ${preset.name}`, title: preset.hint, onclick: () => createGroup(preset) }));
+    }
+    $('cg-presets').append(line);
   }
   $('reset-groups').addEventListener('click', () => { state.groupOrder = []; state.groupNames = {}; renderSummary(); renderStats(); });
   $('delete').addEventListener('click', remove);
@@ -3201,7 +3513,7 @@
     clearError();
     setConnection('', 'Actualisation…');
     if (await loadCatalog(true, state.kind)) { refresh(); if (state.view === 'catalog') renderProvider(); }
-    loadSummary();
+    loadSummary(true);
     $('refresh').disabled = false;
   });
   $('name').addEventListener('input', () => {
@@ -3226,10 +3538,34 @@
 
   for (const tab of ['categories', 'channels', 'summary']) $(`tab-${tab}`).addEventListener('click', () => selectTab(tab));
   for (const sec of SECTIONS) $(`sec-btn-${sec}`).addEventListener('click', () => selectSection(sec));
-  document.querySelector('.section-nav').addEventListener('keydown', (event) => {
+  document.querySelector('#editor .section-nav').addEventListener('keydown', (event) => {
     const index = SECTIONS.indexOf(state.section);
     const next = { ArrowRight: SECTIONS[(index + 1) % SECTIONS.length], ArrowLeft: SECTIONS[(index + SECTIONS.length - 1) % SECTIONS.length] }[event.key];
     if (next) { event.preventDefault(); selectSection(next); $(`sec-btn-${next}`).focus(); }
+  });
+  $('tv-preview-refresh').addEventListener('click', () => loadTvPreview());
+  $('tv-preview-search').addEventListener('input', debounce(() => renderTvPreview(), 120));
+  document.querySelectorAll('[data-pvkind]').forEach((btn) => btn.addEventListener('click', () => {
+    state.tvPreviewKind = btn.dataset.pvkind;
+    document.querySelectorAll('[data-pvkind]').forEach((b) => b.setAttribute('aria-pressed', String(b === btn)));
+    renderTvPreview();
+  }));
+  $('clean-missing-included').addEventListener('click', async () => {
+    await Promise.all(KINDS.filter((k) => state.sel[k].included.size).map(ensureCatalog));
+    let removed = 0;
+    for (const kind of KINDS) {
+      if (!state.cat[kind].catalogLoaded) continue;
+      for (const id of [...state.sel[kind].included]) {
+        if (!state.cat[kind].channelById.has(id)) {
+          state.sel[kind].included.delete(id);
+          removed += 1;
+        }
+      }
+    }
+    if (removed) {
+      refresh();
+      toast(`${plural(removed, 'élément introuvable retiré', 'éléments introuvables retirés')} : pense à enregistrer`);
+    }
   });
   $('guide-playlist').addEventListener('change', loadGuide);
   $('guide-mine').addEventListener('change', loadGuide);

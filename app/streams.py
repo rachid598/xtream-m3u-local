@@ -18,6 +18,8 @@ import itertools
 import json
 import logging
 import os
+import queue
+import socket
 import tempfile
 import threading
 import time
@@ -49,6 +51,7 @@ class EvictedRecently(Exception):
 
 class StreamSession:
     _ids = itertools.count(1)
+    _vids = itertools.count(1)
 
     def __init__(self, *, kind: str, item_id: str, client: str, provider: str, label: str, virtual: bool,
                  device: str = "", priority: str = "normal", device_id: str = ""):
@@ -70,11 +73,42 @@ class StreamSession:
         self.cancelled = threading.Event()
         self.closed = threading.Event()
         self._closer: Callable[[], None] | None = None
+        self._vlock = threading.Lock()
+        self._viewers: dict[int, dict] = {}
 
     @property
     def key(self) -> tuple[str, str, str, str]:
         # Adresse + appareil : deux TV derrière la même adresse (box, reverse proxy) restent distinctes.
         return (self.client, self.device, self.kind, self.item_id)
+
+    def add_viewer(self, *, client: str, device: str = "", priority: str = "normal", device_id: str = "") -> int:
+        vid = next(self._vids)
+        prio = priority if priority in PRIORITY_RANK else "normal"
+        with self._vlock:
+            self._viewers[vid] = {"client": client, "device": device, "priority": prio, "device_id": device_id}
+            self._sync_viewers()
+        return vid
+
+    def remove_viewer(self, vid: int) -> int:
+        with self._vlock:
+            self._viewers.pop(vid, None)
+            if self._viewers:
+                self._sync_viewers()
+            return len(self._viewers)
+
+    def _sync_viewers(self) -> None:
+        viewers = list(self._viewers.values())
+        if not viewers:
+            return
+        self.client = viewers[0]["client"]
+        if len(viewers) == 1:
+            self.device = viewers[0]["device"]
+        else:
+            labels = list(dict.fromkeys(v["device"] or v["client"] for v in viewers))
+            self.device = " + ".join(labels)
+        best = min(viewers, key=lambda v: PRIORITY_RANK.get(v["priority"], 1))
+        self.priority = best["priority"]
+        self.device_id = next((v["device_id"] for v in viewers if v["device_id"]), "")
 
     def attach(self, closer: Callable[[], None]) -> None:
         """Fonction qui ferme la connexion fournisseur (appelée en cas de coupure)."""
@@ -101,12 +135,20 @@ class StreamSession:
         self.last_activity = time.monotonic()
 
     def as_dict(self) -> dict:
+        with self._vlock:
+            viewers = list(self._viewers.values())
+        viewer_count = max(1, len(viewers))
+        devices = list(dict.fromkeys(v["device"] for v in viewers if v["device"])) if viewers else (
+            [self.device] if self.device else [])
+        device_ids = list(dict.fromkeys(v["device_id"] for v in viewers if v["device_id"])) if viewers else (
+            [self.device_id] if self.device_id else [])
         return {
             "id": self.id, "kind": self.kind, "item_id": self.item_id, "label": self.label,
             "client": self.client, "provider": self.provider, "started_at": int(self.started),
             "seconds": int(time.time() - self.started), "bytes": self.bytes,
             "device": self.device, "priority": self.priority, "switches": self.switches,
             "device_id": self.device_id, "channel": self.channel,
+            "viewers": viewer_count, "devices": devices, "device_ids": device_ids,
             "idle": int(time.monotonic() - self.last_activity) if self.virtual else 0,
         }
 
@@ -310,3 +352,307 @@ class StreamManager:
         with self._lock:
             self._expire()
             return sum(1 for s in self._sessions.values() if provider is None or s.provider == provider)
+
+    def in_cooldown(self, client: str, device: str, kind: str, item_id: str) -> bool:
+        with self._lock:
+            self._expire()
+            return (client, device, kind, item_id) in self._cooldown
+
+
+def _ts_align(chunk: bytes) -> bytes:
+    """Aligne un bloc sur une frontière de paquet MPEG-TS (0x47 tous les 188 octets) si détectée."""
+    if len(chunk) >= 376:
+        limit = min(188, len(chunk) - 188)
+        for idx in range(limit):
+            if chunk[idx] == 0x47 and chunk[idx + 188] == 0x47:
+                return chunk[idx:]
+    return b""
+
+
+class LiveChannelPump:
+    """Pompe partagée pour un flux direct MPEG-TS : une seule connexion fournisseur sert plusieurs écrans."""
+
+    def __init__(self, sid: str, upstream, session: StreamSession, streams: StreamManager, hub: "LiveHub", *,
+                 stall_timeout: float | None = None, slow_ratio: float = 0.0,
+                 warmup: float = 25, slow_windows_limit: int = 3):
+        self.sid = sid
+        self.upstream = upstream
+        self.session = session
+        self.streams = streams
+        self.hub = hub
+        self._stall = stall_timeout
+        self._slow_ratio = slow_ratio
+        self._warmup = warmup
+        self._slow_windows_limit = slow_windows_limit
+        self.status = getattr(upstream, "status", 200)
+        up_headers = getattr(upstream, "headers", None)
+        self.headers = {
+            k: up_headers.get(k)
+            for k in ("Content-Type", "Content-Length", "Content-Range", "Accept-Ranges", "Last-Modified", "ETag")
+            if up_headers and up_headers.get(k)
+        }
+        self._lock = threading.Lock()
+        self._viewers: dict[int, dict] = {}
+        self._accepting = True
+        self._owns_session = False
+        self._released = False
+        self._started = False
+        self.outcome = ""
+        self._last_sync_chunk = b""
+        session.attach(self.force_close)
+
+    @property
+    def accepting(self) -> bool:
+        return self._accepting and not self.session.cancelled.is_set()
+
+    def subscribe(self, *, client: str, device: str = "", priority: str = "normal",
+                  device_id: str = "", primary: bool = False) -> dict | None:
+        with self._lock:
+            if not self._accepting or self.session.cancelled.is_set():
+                return None
+            vid = self.session.add_viewer(client=client, device=device, priority=priority, device_id=device_id)
+            q: queue.Queue[bytes | None] = queue.Queue(maxsize=64)
+            if not primary and self._last_sync_chunk:
+                q.put_nowait(self._last_sync_chunk)
+            entry = {"vid": vid, "q": q, "stop": threading.Event(), "done": threading.Event(),
+                     "client": client, "device": device, "primary": primary}
+            self._viewers[vid] = entry
+            return entry
+
+    def start(self) -> None:
+        with self._lock:
+            if self._started:
+                return
+            self._started = True
+        threading.Thread(target=self._run, name=f"livehub-{self.sid}", daemon=True).start()
+
+    def force_close(self) -> None:
+        self._accepting = False
+        self.hub._remove(self)
+        try:
+            self.upstream.close()
+        except Exception:
+            pass
+        with self._lock:
+            queues = [v["q"] for v in self._viewers.values()]
+        for q in queues:
+            _put_sentinel(q)
+
+    def _finish(self, outcome: str) -> None:
+        with self._lock:
+            self._accepting = False
+            if not self.outcome:
+                self.outcome = outcome
+            queues = [v["q"] for v in self._viewers.values()]
+            release_now = not self._viewers and self._owns_session and not self._released
+            if release_now:
+                self._released = True
+        self.hub._remove(self)
+        try:
+            self.upstream.close()
+        except Exception:
+            pass
+        for q in queues:
+            _put_sentinel(q)
+        if release_now:
+            self.streams.release(self.session)
+
+    def unsubscribe(self, entry: dict) -> bool:
+        with self._lock:
+            vid = entry["vid"]
+            self._viewers.pop(vid, None)
+            self.session.remove_viewer(vid)
+            entry["done"].set()
+            remaining = len(self._viewers)
+            transferred = False
+            if entry["primary"] and remaining > 0 and self._accepting and not self.session.cancelled.is_set():
+                self._owns_session = True
+                transferred = True
+            close_now = remaining == 0
+            release_now = remaining == 0 and self._owns_session and not self._released
+            if release_now:
+                self._released = True
+            if close_now:
+                self._accepting = False
+        if close_now:
+            self.hub._remove(self)
+            try:
+                self.upstream.close()
+            except Exception:
+                pass
+        if release_now:
+            self.streams.release(self.session)
+        return transferred
+
+    def _run(self) -> None:
+        if self._stall is not None:
+            try:
+                self.upstream.fp.raw._sock.settimeout(self._stall)
+            except AttributeError:
+                pass
+        reader = getattr(self.upstream, "read1", self.upstream.read)
+        window, window_start, slow_windows = 0, time.monotonic(), 0
+        rates: list[float] = []
+        started = window_start
+        outcome = "ended"
+        try:
+            while not self.session.cancelled.is_set():
+                with self._lock:
+                    if not self._viewers and self._started:
+                        outcome = "client"
+                        break
+                try:
+                    chunk = reader(64 * 1024)
+                except (socket.timeout, TimeoutError):
+                    outcome = "cancelled" if self.session.cancelled.is_set() else "stalled"
+                    break
+                except Exception:
+                    outcome = "cancelled" if self.session.cancelled.is_set() else "failed"
+                    break
+                if not chunk:
+                    outcome = "ended"
+                    break
+                aligned = _ts_align(chunk)
+                with self._lock:
+                    if aligned:
+                        self._last_sync_chunk = aligned
+                    queues = [v["q"] for v in self._viewers.values()]
+                if not queues:
+                    outcome = "client"
+                    break
+                for q in queues:
+                    try:
+                        q.put_nowait(chunk)
+                    except queue.Full:
+                        try:
+                            q.get_nowait()
+                            q.put_nowait(chunk)
+                        except queue.Empty:
+                            pass
+                self.session.touch(len(chunk))
+                window += len(chunk)
+                now = time.monotonic()
+                if self._slow_ratio and now - window_start >= 10:
+                    rate = window / (now - window_start)
+                    if now - started > self._warmup:
+                        baseline = sorted(rates)[len(rates) // 2] if len(rates) >= 2 else 0.0
+                        slow = bool(baseline and rate < baseline * self._slow_ratio)
+                        slow_windows = slow_windows + 1 if slow else 0
+                        if slow_windows >= self._slow_windows_limit:
+                            outcome = "slow"
+                            break
+                        if not slow:
+                            rates = (rates + [rate])[-6:]
+                    window, window_start = 0, now
+            else:
+                outcome = "cancelled"
+        finally:
+            self._finish(outcome)
+
+    def stream_to(self, wfile, entry: dict, *, on_start: Callable[["LiveChannelPump"], None] | None = None,
+                  return_after: float = 0.0) -> tuple[str, bool]:
+        if on_start is not None:
+            on_start(self)
+        self.start()
+        viewer_started = time.monotonic()
+        outcome = ""
+        try:
+            while not entry["stop"].is_set() and not self.session.cancelled.is_set():
+                if return_after and time.monotonic() - viewer_started >= return_after:
+                    outcome = "best"
+                    break
+                try:
+                    chunk = entry["q"].get(timeout=0.25)
+                except queue.Empty:
+                    continue
+                if chunk is None:
+                    break
+                try:
+                    wfile.write(chunk)
+                except (BrokenPipeError, ConnectionResetError, socket.timeout, OSError):
+                    outcome = "client"
+                    break
+            if not outcome:
+                if self.session.cancelled.is_set():
+                    outcome = "cancelled"
+                elif entry["stop"].is_set():
+                    outcome = "client"
+                else:
+                    outcome = self.outcome or "ended"
+        finally:
+            transferred = self.unsubscribe(entry)
+        return outcome, transferred
+
+
+def _put_sentinel(q: queue.Queue) -> None:
+    try:
+        q.put_nowait(None)
+    except queue.Full:
+        try:
+            q.get_nowait()
+            q.put_nowait(None)
+        except queue.Empty:
+            pass
+
+
+class LiveHub:
+    """Registre des flux directs MPEG-TS actifs : partage automatique entre écrans locaux."""
+
+    def __init__(self, streams: StreamManager):
+        self.streams = streams
+        self._lock = threading.Lock()
+        self._pumps: dict[str, LiveChannelPump] = {}
+
+    def _remove(self, pump: LiveChannelPump) -> None:
+        with self._lock:
+            if self._pumps.get(pump.sid) is pump:
+                del self._pumps[pump.sid]
+
+    def detach_viewer(self, client: str, device: str, *, except_sid: str = "") -> None:
+        """Quand un appareil zappe, le retire proprement d'un éventuel flux partagé précédent."""
+        targets: list[tuple[LiveChannelPump, dict, bool]] = []
+        with self._lock:
+            pumps = [p for sid, p in self._pumps.items() if sid != except_sid]
+        for pump in pumps:
+            with pump._lock:
+                matched = [v for v in pump._viewers.values() if v["client"] == client and v["device"] == device]
+                others_left = len(pump._viewers) - len(matched)
+            for entry in matched:
+                entry["stop"].set()
+                _put_sentinel(entry["q"])
+                targets.append((pump, entry, others_left == 0))
+        for pump, entry, sole_viewer in targets:
+            entry["done"].wait(1.0)
+            if sole_viewer:
+                pump.session.closed.wait(1.5)
+
+    def try_join(self, sid: str, *, client: str, device: str = "", priority: str = "normal",
+                 device_id: str = "") -> tuple[LiveChannelPump, dict] | None:
+        """Rejoint un flux direct déjà ouvert pour ``sid`` sans consommer de connexion supplémentaire."""
+        if self.streams.in_cooldown(client, device, "live", sid):
+            return None
+        with self._lock:
+            pump = self._pumps.get(sid)
+            if pump is None or not pump.accepting:
+                return None
+            entry = pump.subscribe(client=client, device=device, priority=priority, device_id=device_id, primary=False)
+            if entry is None:
+                return None
+        LOG.info("Flux direct partagé sur %s : « %s » rejoint la connexion en cours (0 connexion supplémentaire)",
+                 sid, device or client)
+        return pump, entry
+
+    def register(self, sid: str, upstream, session: StreamSession, *,
+                 client: str, device: str = "", priority: str = "normal", device_id: str = "",
+                 stall_timeout: float | None = None, slow_ratio: float = 0.0,
+                 warmup: float = 25, slow_windows_limit: int = 3) -> tuple[LiveChannelPump, dict]:
+        pump = LiveChannelPump(
+            sid, upstream, session, self.streams, self,
+            stall_timeout=stall_timeout, slow_ratio=slow_ratio,
+            warmup=warmup, slow_windows_limit=slow_windows_limit,
+        )
+        entry = pump.subscribe(client=client, device=device, priority=priority, device_id=device_id, primary=True)
+        with self._lock:
+            self._pumps[sid] = pump
+        return pump, entry
+

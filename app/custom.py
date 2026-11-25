@@ -280,6 +280,7 @@ def validate_playlist(payload: object, *, slug: str | None = None) -> dict:
     result["catchup"] = bool(payload.get("catchup", True))
     result["dedupe"] = bool(payload.get("dedupe", False))
     result["hide_separators"] = bool(payload.get("hide_separators", False))
+    result["hide_adult"] = bool(payload.get("hide_adult", False))
     result["failover"] = bool(payload.get("failover", False))
     result["hq_logos"] = bool(payload.get("hq_logos", True))
     # Profil = abonnement (1 = XTREAM_URL, 2 = XTREAM_URL_2…) : la playlist n'utilise que ce fournisseur.

@@ -1,7 +1,16 @@
 # Passation — Xtream M3U Local
 
-> **État au 24 novembre 2026 — version 3.32.0.** Document à transmettre tel quel à l'IA suivante avec le dépôt.
+> **État au 24 novembre 2026 — version 3.33.0.** Document à transmettre tel quel à l'IA suivante avec le dépôt.
 > Aucun mot de passe, token ni URL fournisseur réelle ne doit être copié ici ni commité sur GitHub.
+
+### Nouveautés et refonte en 3.33.0
+
+- **Rétrocompatibilité totale** : aucun abonnement (`providers.json`, `XTREAM_URL_*`), aucune playlist (`playlists.json`), aucun appareil (`devices.json`) ni réglage (`settings.json`) existant n'est altéré ou perdu lors de la montée de version.
+- **Partage d'un flux MPEG-TS entre écrans (`streams.LiveHub` / `LiveChannelPump`, `Config.share_streams` / `SHARE_STREAMS=true`)** : plusieurs lecteurs locaux regardant le même direct MPEG-TS (sans en-tête `Range`) partagent une seule connexion fournisseur (synchronisée sur l'octet `0x47` de 188 octets), avec transfert transparent de la session si le premier écran quitte la chaîne.
+- **Débordement automatique multi-abonnements (`server.open_session`, `relay`, `relay_live`, `_pump_live`)** : quand l'abonnement principal d'une chaîne est plein (`LimitReached`, `EvictedRecently`, `provider_busy`) ou répond `429/458/509` (`BUSY_CODES`), le serveur bascule immédiatement sur une variante équivalente d'un abonnement secondaire libre (playlist en mélange ou `failover_any_category`).
+- **Espaces membres vs Abonnements complémentaires / secours (`settings.aux_providers` / `set_aux`, `/api/status.sources` vs `profiles`)** : les abonnements secondaires (`2..9`) marqués `aux=True` n'apparaissent plus dans la barre d'espaces en haut mais restent disponibles pour le mélange et le débordement. `/api/catalog/summary?profile=` et `/api/catalog/export?profile=` sont isolés par espace, et `devices.json` stocke `profile` (`XtreamEmulator.everything(profile)`).
+- **Filtre contenus adultes (`hide_adult`) et Aperçu TV (`POST /api/playlists/preview`)** : `builder.is_adult_category` / `is_adult_item` (avec garde `(?!\s+swim)` pour préserver *Adult Swim*) filtrent direct, VOD, séries et variantes de secours. L'API `/api/playlists/preview` calcule le rendu exact d'un brouillon avant enregistrement.
+- **Refonte de l'interface (`index.html`, `app.css`, `app.js`, `favicon.svg`) et 4 correctifs** : thème Broadcast Slate & Ocean Cyan + thème clair + couleur d'accent par espace (`[data-space="2|3|4+"]`), 5 onglets d'éditeur (dont `👁 Aperçu TV`), glisser-déposer (`⠿`) + `⤒` sur les groupes, tiroirs repliables de motifs, nettoyage `#clean-missing-included`, cartes Appareils compactes, vue `Système` en 4 sous-onglets (`État & Diagnostic`, `Abonnements & Espaces`, `Accès & Guides`, `Sauvegarde`), et correction de `renderEpg` (compteur externe), `auto-number` (groupes perso), `loadAccount` (espace actif) et `clear-custom` (`item_logos`/`item_epg`/`item_xmltv`).
 
 ### Modèles de groupes en 3.29.0
 
@@ -191,13 +200,13 @@ Clés de groupes/éléments : direct sans préfixe, films `vod:`, séries `serie
 - **3.15.0** : `make_series` → `SeriesCache(min_interval=1/SERIES_PER_SECOND, summarize=True)`, `blocked` = `epg_api_blocked` (démarrage calme + mode prudent), `refresh_stale` = `in_nightly_window(config)`. `KeyedCache.refresh_stale` : hors fenêtre, une copie périmée est servie sans appel (`episodes`, `episodes_for`) ; `prefetch()` la force. `Config.nightly_refresh` (`NIGHTLY_REFRESH`, défaut (3, 6), plage qui peut passer minuit), `in_nightly_window()`. `XtreamAPI._refresh_in_background` : films/séries non rafraîchis en journée si la copie a moins de 48 h. `app/nightly.py` : thread démarré par `server.main()`, une passe par nuit (`run_once` : catalogues > 20 h puis `series.prefetch(playlists_series_ids())`, reportée si 429 < 1 h). Défaut `SERIES_CACHE_HOURS` 168. Tests : `tests/test_nightly.py`.
 - Faux échec intermittent corrigé en 2.3.0 : un test cherchait « pw » dans une réponse contenant un chemin temporaire aléatoire.
 
-## 6. Tests et vérifications (17/11/2026)
+## 6. Tests et vérifications (24/11/2026 — 3.33.0)
 
 | Vérification | Résultat |
 |---|---|
-| `python -m unittest discover -s tests -t .` | **292 tests OK** (fichiers : playlist_server, custom, web, epg, config, vod, http, streams, hls, catchup, xtream_emu, builder, system, providers, logos) |
+| `python3 -m unittest discover -s tests -t .` | **317 tests OK** (dont `tests/test_v333.py` : rétrocompatibilité v3.32, `LiveHub` multi-écrans + transfert de propriétaire + bypass `Range`, débordement multi-abonnements sur quota et HTTP 429, `aux_providers`, isolation `?profile=` & appareils, `hide_adult` sans faux positif `Adult Swim`, `POST /api/playlists/preview`) |
 | `node --check app/static/app.js` | OK |
-| Scénario Chromium `tests/e2e_browser.mjs` sur `python -m tools.demo` | OK : création, exclusion/ajout, groupes, règle, favori, renommage + numéro, séparateurs masqués, doublons, bascule automatique (URL `?alt=`), versions de secours dépliables et badge « Secours n/N », catégories liées par qualité (lien 🔗, avertissement « Mes groupes », secours hors catégories cochées, diagnostic « Bascule automatique »), groupes perso (modèles TNT et Bouquet Canal+ numéroté, nouveau groupe en premier, rangement 📁, vérification du M3U), numérotation, films/séries/épisodes, EPG, appareil (connexion `player_api.php` réelle puis révocation), diagnostic (≥ 9 tests OK), sauvegarde/restauration, catalogue, mise en page 390/768/1366/1920 px sans défilement horizontal, aucune erreur console |
+| Scénarios Chromium `tests/e2e_browser.mjs` & `tests/e2e_profiles.mjs` (`tools.demo` et `tools.demo --profiles`) | OK : création, exclusion/ajout, groupes, glisser-déposer, règle, favori, renommage + numéro, séparateurs masqués, filtre 18+, onglet Aperçu TV, doublons, bascule automatique, groupes perso (OTT, TNT, Bouquet Canal+, Nilesat, Sport FR/AR), films/séries/épisodes, EPG, appareils, espaces membres & abonnements de secours, diagnostic, sauvegarde/restauration, catalogue, mise en page 390/768/1366/1920 px sans débordement horizontal (`0px`), `0` erreur console/CSP |
 | Docker 3.0.0 (`docker build` + `run`, dossier `/data` créé par root) | OK : droits abandonnés (UID 99), playlist HLS + favori + replay, appareil → `player_api.php` auth 1 (fuseau Europe/Paris), manifeste HLS réécrit, gzip, replay converti à l'heure de Paris, diagnostic vert (faux flux TS en « warn »), `devices.json` 0600, appareil conservé après recréation du conteneur, healthcheck « healthy », aucun secret dans les journaux |
 | GitHub Actions | Vert à chaque push (run n° 7 pour 3.0.0 : build + tests + promotion `latest`) ; image `ghcr.io/rachid598/xtream-m3u-local:latest` publiée depuis la branche par défaut |
 

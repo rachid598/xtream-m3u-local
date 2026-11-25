@@ -2,6 +2,26 @@
 
 Format inspiré de « Keep a Changelog ». Les versions suivent le versionnage sémantique.
 
+## [3.33.0] — 2026-11-24
+
+### Ajouté
+- **Partage local d'un flux direct MPEG-TS entre écrans (`LiveHub`)** : deux TV ou téléphones du foyer qui regardent exactement la même chaîne en direct (`/stream/<id>.ts` ou mode Xtream) partagent automatiquement **une seule connexion fournisseur** (`0` connexion supplémentaire, alignement sur frontière de paquet MPEG-TS `0x47`), avec passation de relais transparente si le premier écran quitte la chaîne avant le second (`SHARE_STREAMS=true` par défaut).
+- **Débordement automatique multi-abonnements** : dans une playlist en mode « mélange & secours », si l'abonnement principal atteint sa limite de connexions ou renvoie « occupé » (`HTTP 429`, `458` ou `509`) et qu'une version de secours appartient à un second abonnement disponible, la lecture bascule immédiatement sur ce second abonnement au lieu d'échouer.
+- **Distinction claire entre « Espace membre séparé » et « Complément / secours »** (Système → Abonnements & Espaces) : un abonnement supplémentaire peut être un espace isolé pour un proche (onglet dédié en haut, avec sa propre couleur d'accent) ou un abonnement de complément/secours discret (aucun onglet inutile en haut, proposé directement dans les playlists « mélange & secours »). Compatibilité totale avec tous les abonnements, playlists et appareils existants (`/data/providers.json`, `XTREAM_URL_2…`, `/data/playlists.json`, `/data/devices.json`, `/data/settings.json`).
+- **Aperçu TV final instantané** (nouvel onglet `👁 Aperçu TV` de l'éditeur, `POST /api/playlists/preview`) : affiche le rendu exact tel que reçu par TiviMate / VLC (groupes, ordre, numéros de chaînes, logos HQ, nombre de secours `🔁`, bouton `▶`), même avant d'avoir enregistré la playlist.
+- **Filtre « Masquer les contenus adultes (18+ / XXX) »** par playlist (`hide_adult`, dans Options) : écarte automatiquement les catégories et contenus adultes (drapeau `is_adult` du fournisseur, noms et catégories 18+/XXX) dans le direct, les films, les séries, les règles automatiques et les versions de secours.
+- **Détection et nettoyage en un clic des ajouts manuels disparus** chez le fournisseur (Contenu → Ajouts et exclusions).
+- **Glisser-déposer (`⠿`) et bouton « Placer tout en haut » (`⤒`)** sur « Mes groupes » et « Ordre et noms des groupes », modèles de groupes classés par famille (France, Maghreb & Arabe, Belgique & Suisse, Thématiques) et tiroirs de motifs repliés par défaut sur les grands modèles (OTT, Bouquet Canal+, Nilesat).
+
+### Modifié
+- **Refonte visuelle complète de l'interface Web** : palette **Broadcast Slate & Ocean Cyan** (thèmes sombre et clair automatiques, identité visuelle distincte par espace membre), en-tête d'éditeur compact sur une seule ligne, barre latérale épurée dès la première playlist créée, fiches **Appareils** condensées (réglages avancés et tuner HDHomeRun en tiroirs repliables), vue **Système** structurée en 4 sous-onglets (`État & Diagnostic`, `Abonnements & Espaces`, `Accès & Guides`, `Sauvegarde`), et barres de progression `<progress>` natives conformes à la CSP stricte.
+
+### Corrigé
+- **Couverture EPG affichée dans l'éditeur** : le compteur « chaînes couvertes » additionne désormais `xmltv.php` + **guides externes** + API Xtream (au lieu d'omettre les chaînes couvertes par les guides XMLTV externes), avec un compteur dédié « via guides externes ».
+- **Numérotation automatique (`Numéroter 1…N`)** : numérote désormais aussi les chaînes rangées dans « Mes groupes » (`g:…`) dans l'ordre exact de leurs motifs en tête de playlist, et non plus uniquement les catégories brutes du fournisseur.
+- **Bandeau d'expiration par espace membre** : affiche l'expiration de l'abonnement de l'espace actif (et non plus toujours celle de l'abonnement n° 1), et isolation par espace sur `/api/catalog/summary?profile=`, `/api/catalog/export?profile=` et les appareils Xtream sans playlist dédiée (`profile`).
+- **Bouton « Tout effacer » des personnalisations** : efface bien les logos personnalisés, guides empruntés et choix XMLTV en plus des noms et numéros.
+
 ## [3.32.0] — 2026-11-24
 
 ### Corrigé
