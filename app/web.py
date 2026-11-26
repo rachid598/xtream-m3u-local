@@ -260,6 +260,26 @@ class WebHandler(BaseHTTPRequestHandler):
         from .providers import ApiHolder
         return isinstance(self.api, ApiHolder) and provider_store.current() is not None
 
+    def _provider_max_connections(self, index: int) -> int:
+        """Nombre de connexions simultanées autorisées pour l'abonnement ``index`` (0 si inconnu)."""
+        if self.config.max_connections > 0:
+            return self.config.max_connections
+        apis = getattr(self.api, "apis", None)
+        indices = getattr(self.api, "indices", None)
+        target = dict(zip(indices, apis)).get(index) if apis and indices else (self.api if index == 1 else None)
+        if target is not None:
+            try:
+                acct = target.account()
+                val = int((acct or {}).get("max_connections") or 0)
+                if val > 0:
+                    return val
+            except Exception:
+                pass
+            hint = target.max_connections_hint()
+            if hint > 0:
+                return hint
+        return self.streams.limit(str(index)) if self.streams is not None else 0
+
     def providers_status(self) -> dict:
         """Abonnements : ceux de la configuration (lecture seule) puis ceux de l'interface (sans secret)."""
         from urllib.parse import urlsplit as _split
@@ -285,9 +305,13 @@ class WebHandler(BaseHTTPRequestHandler):
             rows.append(row)
         mixable = settings.mixable()
         aux = settings.aux_providers()
+        res_map = settings.reservations()
         for row in rows:
-            row["mixable"] = mixable is None or str(row["index"]) in mixable
-            row["aux"] = str(row["index"]) in aux and row["index"] != 1
+            idx = row["index"]
+            row["mixable"] = mixable is None or str(idx) in mixable
+            row["aux"] = str(idx) in aux and idx != 1
+            row["max_connections"] = 0 if row.get("error") else self._provider_max_connections(idx)
+            row["reservation"] = res_map.get(str(idx))
         return {"editable": self.providers_editable(), "mix_editable": settings.current() is not None, "providers": rows}
 
     def reload_providers(self) -> None:
@@ -295,18 +319,90 @@ class WebHandler(BaseHTTPRequestHandler):
         from .server import make_api
         self.api.swap(make_api(self.config, provider_store.current(), self.api, migrate=False))
 
-    def test_provider(self, url: str, username: str, password: str, user_agent: str = "") -> str | None:
-        """Vérifie l'abonnement auprès du fournisseur ; retourne un message d'erreur ou ``None``."""
+    def test_provider(self, url: str, username: str, password: str,
+                      user_agent: str = "") -> tuple[str | None, dict | None]:
+        """Vérifie l'abonnement auprès du fournisseur ; retourne ``(erreur_ou_None, résumé_compte)``."""
         from dataclasses import replace
         from .server import XtreamAPI
         probe = XtreamAPI(replace(self.config, xtream_url=url, username=username, password=password, extra_providers=(),
                                   provider_user_agents=(), user_agent=user_agent or self.config.user_agent))
         account = probe.account()
         if not account:
-            return "Connexion refusée : vérifie l'adresse et les identifiants (aucune réponse valide du fournisseur)"
+            return "Connexion refusée : vérifie l'adresse et les identifiants (aucune réponse valide du fournisseur)", None
         if str(account.get("status") or "Active").lower() not in ("active", ""):
-            return f"Abonnement « {account.get('status')} » chez le fournisseur"
-        return None
+            return f"Abonnement « {account.get('status')} » chez le fournisseur", None
+        return None, account
+
+    def _apply_reservation(self, index: int, raw: object, max_connections: int = 0) -> None:
+        """Enregistre la réservation de connexions d'un abonnement (Option B garantie souple)."""
+        if settings.current() is None:
+            return
+        if raw is None or not isinstance(raw, dict):
+            settings.set_reservation(index, None, 0)
+            return
+        try:
+            count = int(raw.get("count") or 0)
+        except (TypeError, ValueError):
+            count = 0
+        if count <= 0:
+            settings.set_reservation(index, None, 0)
+            return
+        prof = str(raw.get("profile") or "").strip()
+        if not prof or prof == "self":
+            prof = str(index)
+        if not prof.isdigit() or int(prof) not in settings.INDICES:
+            raise ValueError("Espace bénéficiaire de la réservation invalide")
+        if max_connections > 0:
+            count = min(count, max_connections)
+        settings.set_reservation(index, prof, count)
+        # S'il reste des connexions libres pour le secours, activer automatiquement le mélange.
+        if max_connections > 0 and 0 < count < max_connections:
+            settings.set_mixable(index, True)
+
+    def provider_probe(self) -> None:
+        """Teste un abonnement sans l'enregistrer et renvoie son nombre de connexions simultanées."""
+        body = self.read_payload()
+        if body is None:
+            return
+        from .server import normalize_xtream_url
+        edit_idx = body.get("index")
+        current = None
+        if isinstance(edit_idx, (int, str)) and str(edit_idx).isdigit():
+            store = provider_store.current()
+            if store is not None:
+                try:
+                    current = next((p for p in store.list() if p["index"] == int(edit_idx)), None)
+                except RuntimeError:
+                    current = None
+        try:
+            raw_url = str(body.get("url") or "").strip()
+            url = normalize_xtream_url(raw_url) if raw_url else (current or {}).get("url", "")
+            username = str(body.get("username") or "").strip() or (current or {}).get("username", "")
+            password = str(body.get("password") or "") or (current or {}).get("password", "")
+            if not url or not username or not password:
+                return self.json(400, {"error": "Adresse, utilisateur et mot de passe obligatoires"})
+            agent = provider_store._clean(body["user_agent"], "User agent", required=False) \
+                if "user_agent" in body else (current or {}).get("user_agent", "")
+        except (provider_store.InvalidProvider, ValueError) as exc:
+            return self.json(400, {"error": str(exc)})
+        error, account = self.test_provider(url, username, password, agent)
+        if error:
+            return self.json(400, {"error": error})
+        try:
+            max_cons = int((account or {}).get("max_connections") or 0)
+        except (TypeError, ValueError):
+            max_cons = 0
+        try:
+            active_cons = int((account or {}).get("active_cons") or 0)
+        except (TypeError, ValueError):
+            active_cons = 0
+        return self.json(200, {
+            "ok": True,
+            "status": (account or {}).get("status") or "Active",
+            "max_connections": max_cons,
+            "active_cons": active_cons,
+            "exp_date": (account or {}).get("exp_date"),
+        })
 
     def provider_credentials(self, index: int) -> None:
         """Utilisateur et mot de passe d'un abonnement, à la demande (bouton « Afficher »).
@@ -339,7 +435,7 @@ class WebHandler(BaseHTTPRequestHandler):
         return self.json(200, {"index": index, "username": found[0], "password": found[1]})
 
     def provider_mix(self, index: int) -> None:
-        """Rôle d'un abonnement (espace membre séparé ou complément/secours) et autorisation de mélange."""
+        """Rôle d'un abonnement (espace membre séparé ou complément/secours), mélange et réservation."""
         body = self.read_payload()
         if body is None:
             return
@@ -352,6 +448,10 @@ class WebHandler(BaseHTTPRequestHandler):
                 settings.set_aux(index, bool(body["aux"]))
             if "mixable" in body:
                 settings.set_mixable(index, bool(body["mixable"]))
+            if "reservation" in body:
+                self._apply_reservation(index, body.get("reservation"), self._provider_max_connections(index))
+        except ValueError as exc:
+            return self.json(400, {"error": str(exc)})
         except OSError:
             return self.json(500, {"error": "Impossible d'enregistrer /data/settings.json"})
         mix_set = settings.mixable()
@@ -360,6 +460,7 @@ class WebHandler(BaseHTTPRequestHandler):
             "index": index,
             "mixable": mix_set is None or str(index) in mix_set,
             "aux": str(index) in aux_set and index != 1,
+            "reservation": settings.reservations().get(str(index)),
         })
 
     def provider_write(self, method: str, index: int | None) -> None:
@@ -382,6 +483,7 @@ class WebHandler(BaseHTTPRequestHandler):
                 if settings.current() is not None:
                     settings.set_mixable(index, False)   # numéro réutilisable : pas de réglage hérité
                     settings.set_aux(index, False)
+                    settings.clear_reservations_for(index)
                 self.reload_providers()
                 return self.json(200, {"deleted": True})
             current = next((p for p in store.list() if p["index"] == index), None) if index else None
@@ -400,10 +502,15 @@ class WebHandler(BaseHTTPRequestHandler):
             agent = provider_store._clean(body["user_agent"], "User agent", required=False) \
                 if "user_agent" in body else (current or {}).get("user_agent", "")
             changed = current is None or (url, username, password) != (current["url"], current["username"], current["password"])
+            probed_max = 0
             if changed or agent != (current or {}).get("user_agent", ""):
-                error = self.test_provider(url, username, password, agent)
+                error, account = self.test_provider(url, username, password, agent)
                 if error:
                     return self.json(400, {"error": error})
+                try:
+                    probed_max = int((account or {}).get("max_connections") or 0)
+                except (TypeError, ValueError):
+                    probed_max = 0
             if method == "POST":
                 entry = store.add(name=body.get("name"), url=url, username=username, password=password, reserved=reserved,
                                   user_agent=agent)
@@ -411,14 +518,24 @@ class WebHandler(BaseHTTPRequestHandler):
                     settings.set_mixable(entry["index"], bool(body.get("mixable")))
                     if "aux" in body:
                         settings.set_aux(entry["index"], bool(body.get("aux")))
+                    if "reservation" in body:
+                        self._apply_reservation(entry["index"], body.get("reservation"), probed_max)
             else:
                 entry = store.update(index, name=body.get("name"), url=url, username=username,
                                      password=password if changed else "", user_agent=agent)
-                if settings.current() is not None and "aux" in body:
-                    settings.set_aux(index, bool(body.get("aux")))
+                if settings.current() is not None:
+                    if "aux" in body:
+                        settings.set_aux(index, bool(body.get("aux")))
+                    if "mixable" in body:
+                        settings.set_mixable(index, bool(body.get("mixable")))
+                    if "reservation" in body:
+                        max_c = probed_max or self._provider_max_connections(index)
+                        self._apply_reservation(index, body.get("reservation"), max_c)
             self.reload_providers()
             pub = provider_store.public(entry)
             pub["aux"] = str(entry["index"]) in settings.aux_providers() and entry["index"] != 1
+            pub["max_connections"] = probed_max or self._provider_max_connections(entry["index"])
+            pub["reservation"] = settings.reservations().get(str(entry["index"]))
             return self.json(201 if method == "POST" else 200, pub)
         except (provider_store.InvalidProvider, ValueError) as exc:
             return self.json(400, {"error": str(exc)})
@@ -539,7 +656,8 @@ class WebHandler(BaseHTTPRequestHandler):
         if profile:
             streams = [s for s in streams if str(s.get("provider")) == profile]
         return {"limit": self.streams.limit(profile or "1"), "auto": self.config.max_connections < 0,
-                "takeover": self.streams.takeover, "streams": streams}
+                "takeover": self.streams.takeover, "streams": streams,
+                "reservation": settings.reservations().get(profile or "1")}
 
     def catalog_summary(self, *, refresh: bool, profile: str = "") -> dict:
         """Nombre d'éléments et de catégories par type (léger : ne renvoie pas les listes)."""
@@ -732,6 +850,8 @@ class WebHandler(BaseHTTPRequestHandler):
             return self.playlist_preview()
         if path == "/api/devices":
             return self.device_write("POST", None)
+        if path == "/api/providers/probe":
+            return self.provider_probe()
         if path == "/api/providers":
             return self.provider_write("POST", None)
         if path == "/api/restore":

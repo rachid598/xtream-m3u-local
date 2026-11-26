@@ -35,14 +35,16 @@ PRIORITY_RANK = {"high": 0, "normal": 1, "low": 2}
 
 
 class LimitReached(Exception):
-    """Limite atteinte sans lecture que l'on puisse couper (reprise désactivée ou appareil prioritaire).
+    """Limite atteinte sans lecture que l'on puisse couper (reprise désactivée, appareil prioritaire ou quota réservé).
 
-    ``args[0]`` = limite ; ``holder`` = lecture qui garde la connexion (si un appareil prioritaire la tient).
+    ``args[0]`` = limite ; ``holder`` = lecture qui garde la connexion (si un appareil prioritaire la tient) ;
+    ``reserved_profile`` = espace protégé par une réservation de connexions, si applicable.
     """
 
-    def __init__(self, limit: int, holder: "StreamSession | None" = None):
+    def __init__(self, limit: int, holder: "StreamSession | None" = None, *, reserved_profile: str = ""):
         super().__init__(limit)
         self.holder = holder
+        self.reserved_profile = str(reserved_profile or "")
 
 
 class EvictedRecently(Exception):
@@ -54,13 +56,14 @@ class StreamSession:
     _vids = itertools.count(1)
 
     def __init__(self, *, kind: str, item_id: str, client: str, provider: str, label: str, virtual: bool,
-                 device: str = "", priority: str = "normal", device_id: str = ""):
+                 device: str = "", priority: str = "normal", device_id: str = "", consumer_profile: str = ""):
         self.id = next(self._ids)
         self.device_id = device_id      # identifiant de l'appareil (fiche « Appareils » : en cours de lecture)
         self.kind = kind
         self.item_id = item_id
         self.client = client
-        self.provider = provider
+        self.provider = str(provider)
+        self.consumer_profile = str(consumer_profile or provider)
         self.label = label
         self.virtual = virtual          # HLS : pas de connexion persistante, actif tant que des requêtes arrivent
         self.device = device            # nom de l'appareil (vue Appareils), vide si inconnu
@@ -81,11 +84,24 @@ class StreamSession:
         # Adresse + appareil : deux TV derrière la même adresse (box, reverse proxy) restent distinctes.
         return (self.client, self.device, self.kind, self.item_id)
 
-    def add_viewer(self, *, client: str, device: str = "", priority: str = "normal", device_id: str = "") -> int:
+    def uses_profile(self, profile: str) -> bool:
+        """Indique si la lecture (ou l'un de ses écrans partagés) appartient à l'espace ``profile``."""
+        target = str(profile or "")
+        if not target:
+            return False
+        with self._vlock:
+            if self._viewers:
+                return any(str(v.get("consumer_profile") or self.provider) == target for v in self._viewers.values())
+        return (self.consumer_profile or self.provider) == target
+
+    def add_viewer(self, *, client: str, device: str = "", priority: str = "normal", device_id: str = "",
+                   consumer_profile: str = "") -> int:
         vid = next(self._vids)
         prio = priority if priority in PRIORITY_RANK else "normal"
+        cprof = str(consumer_profile or self.consumer_profile or self.provider)
         with self._vlock:
-            self._viewers[vid] = {"client": client, "device": device, "priority": prio, "device_id": device_id}
+            self._viewers[vid] = {"client": client, "device": device, "priority": prio,
+                                  "device_id": device_id, "consumer_profile": cprof}
             self._sync_viewers()
         return vid
 
@@ -101,6 +117,7 @@ class StreamSession:
         if not viewers:
             return
         self.client = viewers[0]["client"]
+        self.consumer_profile = str(viewers[0].get("consumer_profile") or self.provider)
         if len(viewers) == 1:
             self.device = viewers[0]["device"]
         else:
@@ -144,7 +161,8 @@ class StreamSession:
             [self.device_id] if self.device_id else [])
         return {
             "id": self.id, "kind": self.kind, "item_id": self.item_id, "label": self.label,
-            "client": self.client, "provider": self.provider, "started_at": int(self.started),
+            "client": self.client, "provider": self.provider, "consumer_profile": self.consumer_profile,
+            "started_at": int(self.started),
             "seconds": int(time.time() - self.started), "bytes": self.bytes,
             "device": self.device, "priority": self.priority, "switches": self.switches,
             "device_id": self.device_id, "channel": self.channel,
@@ -154,8 +172,10 @@ class StreamSession:
 
 
 class StreamManager:
-    def __init__(self, limit_for: Callable[[str], int], *, takeover: bool = True, history_path: str | None = None):
+    def __init__(self, limit_for: Callable[[str], int], *, takeover: bool = True, history_path: str | None = None,
+                 reservation_for: Callable[[str], tuple[str, int] | None] | None = None):
         self._limit_for = limit_for
+        self._reservation_for = reservation_for
         self.takeover = takeover
         self._lock = threading.Lock()
         self._sessions: dict[int, StreamSession] = {}
@@ -233,10 +253,28 @@ class StreamManager:
         except Exception:
             return 0
 
+    def reservation(self, provider: str = "1") -> tuple[str, int] | None:
+        """Retourne ``(espace_bénéficiaire, connexions_garanties)`` si cet abonnement a une réservation."""
+        fn = self._reservation_for
+        if fn is None:
+            from . import settings
+            fn = settings.reservation_for
+        try:
+            res = fn(str(provider))
+        except Exception:
+            return None
+        if not res:
+            return None
+        prof, count = str(res[0] or ""), int(res[1] or 0)
+        return (prof, count) if prof and count > 0 else None
+
     # ------------------------------------------------------------- public
     def acquire(self, *, kind: str, item_id: str, client: str, provider: str = "1", label: str = "",
-                virtual: bool = False, device: str = "", priority: str = "normal", device_id: str = "") -> StreamSession:
+                virtual: bool = False, device: str = "", priority: str = "normal", device_id: str = "",
+                consumer_profile: str = "") -> StreamSession:
         """Réserve une connexion fournisseur pour une lecture ; coupe une autre lecture si nécessaire."""
+        provider = str(provider)
+        caller = str(consumer_profile or provider)
         evicted: list[StreamSession] = []
         with self._lock:
             self._expire()
@@ -259,19 +297,10 @@ class StreamManager:
                 active = sorted((s for s in self._sessions.values() if s.provider == provider),
                                 key=lambda s: s.started)
                 rank = PRIORITY_RANK.get(priority, 1)
-                while len(active) >= limit:
-                    # Même appareil (même adresse et même appareil connu) : il change de chaîne, on remplace.
-                    same_client = [s for s in active if s.client == client and s.device == device]
-                    if not same_client and not self.takeover:
-                        # Reprise désactivée : on ne coupe jamais un autre appareil.
-                        raise LimitReached(limit)
-                    # Un autre appareil n'est coupé que s'il n'est pas plus prioritaire (le moins prioritaire,
-                    # puis le plus ancien) : la TV « haute » du salon n'est jamais coupée par la chambre.
-                    others = sorted((s for s in active if PRIORITY_RANK.get(s.priority, 1) >= rank),
-                                    key=lambda s: (-PRIORITY_RANK.get(s.priority, 1), s.started))
-                    if not same_client and not others:
-                        raise LimitReached(limit, active[0])
-                    victim = (same_client or others)[0]
+                res = self.reservation(provider)
+                res_profile, res_count = (res[0], min(res[1], limit)) if res else ("", 0)
+
+                def _evict(victim: StreamSession) -> None:
                     active.remove(victim)
                     victim.cancel()
                     del self._sessions[victim.id]
@@ -281,9 +310,80 @@ class StreamManager:
                         self._cooldown[victim.key] = time.monotonic() + COOLDOWN_SECONDS
                     LOG.info("Limite de %d connexion(s) : arrêt de « %s » (%s) pour « %s »",
                              limit, victim.label or victim.item_id, victim.client, label or item_id)
+
+                if res_count > 0:
+                    shared_cap = max(0, limit - res_count)
+                    is_owner = (caller == res_profile)
+                    if not is_owner:
+                        # Autre espace (secours / mélange) : plafonné à shared_cap, ne touche jamais aux
+                        # connexions réservées de res_profile (peut seulement reprendre un emprunt excédentaire).
+                        if shared_cap == 0:
+                            owner_now = [s for s in active if s.uses_profile(res_profile)]
+                            raise LimitReached(0, owner_now[0] if owner_now else None, reserved_profile=res_profile)
+                        while True:
+                            owner_now = [s for s in active if s.uses_profile(res_profile)]
+                            other_now = [s for s in active if not s.uses_profile(res_profile)]
+                            if len(other_now) < shared_cap and len(active) < limit:
+                                break
+                            same_client = [s for s in other_now if s.client == client and s.device == device]
+                            if same_client:
+                                _evict(same_client[0])
+                                continue
+                            if len(other_now) >= shared_cap:
+                                if not self.takeover:
+                                    raise LimitReached(shared_cap, reserved_profile=res_profile)
+                                others = sorted((s for s in other_now if PRIORITY_RANK.get(s.priority, 1) >= rank),
+                                                key=lambda s: (-PRIORITY_RANK.get(s.priority, 1), s.started))
+                                if not others:
+                                    raise LimitReached(shared_cap, other_now[0], reserved_profile=res_profile)
+                                _evict(others[0])
+                                continue
+                            # len(other_now) < shared_cap et len(active) >= limit ⇒ res_profile emprunte une
+                            # connexion du pool de secours (Option B) : le secours la reprend en protégeant la 1ʳᵉ.
+                            if not self.takeover:
+                                raise LimitReached(limit, owner_now[0] if owner_now else None,
+                                                   reserved_profile=res_profile)
+                            borrowed = sorted(owner_now, key=lambda s: (-PRIORITY_RANK.get(s.priority, 1), -s.started))
+                            _evict(borrowed[0])
+                    else:
+                        # Espace bénéficiaire (Option B : res_count garanties, peut emprunter les places libres
+                        # du secours, sans jamais couper une lecture du secours dans son quota).
+                        while len(active) >= limit:
+                            owner_now = [s for s in active if s.uses_profile(res_profile)]
+                            other_now = [s for s in active if not s.uses_profile(res_profile)]
+                            same_client = [s for s in owner_now if s.client == client and s.device == device]
+                            if same_client:
+                                _evict(same_client[0])
+                                continue
+                            if len(owner_now) < res_count and other_now:
+                                # Sa connexion garantie est encore occupée par le secours (réglage modifié à chaud).
+                                victims = sorted(other_now, key=lambda s: (-PRIORITY_RANK.get(s.priority, 1), s.started))
+                                _evict(victims[0])
+                                continue
+                            if not self.takeover:
+                                raise LimitReached(limit)
+                            others = sorted((s for s in owner_now if PRIORITY_RANK.get(s.priority, 1) >= rank),
+                                            key=lambda s: (-PRIORITY_RANK.get(s.priority, 1), s.started))
+                            if not others:
+                                raise LimitReached(limit, owner_now[0] if owner_now else active[0])
+                            _evict(others[0])
+                else:
+                    while len(active) >= limit:
+                        # Même appareil (même adresse et même appareil connu) : il change de chaîne, on remplace.
+                        same_client = [s for s in active if s.client == client and s.device == device]
+                        if not same_client and not self.takeover:
+                            # Reprise désactivée : on ne coupe jamais un autre appareil.
+                            raise LimitReached(limit)
+                        # Un autre appareil n'est coupé que s'il n'est pas plus prioritaire (le moins prioritaire,
+                        # puis le plus ancien) : la TV « haute » du salon n'est jamais coupée par la chambre.
+                        others = sorted((s for s in active if PRIORITY_RANK.get(s.priority, 1) >= rank),
+                                        key=lambda s: (-PRIORITY_RANK.get(s.priority, 1), s.started))
+                        if not same_client and not others:
+                            raise LimitReached(limit, active[0])
+                        _evict((same_client or others)[0])
             session = StreamSession(kind=kind, item_id=item_id, client=client, provider=provider,
                                     label=label, virtual=virtual, device=device, priority=priority,
-                                    device_id=device_id)
+                                    device_id=device_id, consumer_profile=caller)
             self._sessions[session.id] = session
         # Laisser le temps aux connexions coupées de se fermer avant d'en ouvrir une nouvelle.
         for victim in evicted:
@@ -302,13 +402,22 @@ class StreamManager:
     def move(self, session: StreamSession, provider: str) -> bool:
         """Bascule vers une version d'un autre fournisseur : la place est prise chez lui, sans couper personne.
 
-        Retourne ``False`` si ce fournisseur n'a plus de place (la version est alors sautée)."""
+        Retourne ``False`` si ce fournisseur n'a plus de place (ou si la place est réservée à un autre espace)."""
+        provider = str(provider)
         with self._lock:
             self._expire()
             limit = self.limit(provider)
-            used = sum(1 for s in self._sessions.values() if s.provider == provider and s is not session)
-            if limit and used >= limit:
+            active = [s for s in self._sessions.values() if s.provider == provider and s is not session]
+            if limit and len(active) >= limit:
                 return False
+            res = self.reservation(provider)
+            if limit and res:
+                res_profile, res_count = res[0], min(res[1], limit)
+                if res_count > 0 and not session.uses_profile(res_profile):
+                    shared_cap = max(0, limit - res_count)
+                    other_used = sum(1 for s in active if not s.uses_profile(res_profile))
+                    if other_used >= shared_cap:
+                        return False
             session.provider = provider
             return True
 
@@ -406,11 +515,12 @@ class LiveChannelPump:
         return self._accepting and not self.session.cancelled.is_set()
 
     def subscribe(self, *, client: str, device: str = "", priority: str = "normal",
-                  device_id: str = "", primary: bool = False) -> dict | None:
+                  device_id: str = "", primary: bool = False, consumer_profile: str = "") -> dict | None:
         with self._lock:
             if not self._accepting or self.session.cancelled.is_set():
                 return None
-            vid = self.session.add_viewer(client=client, device=device, priority=priority, device_id=device_id)
+            vid = self.session.add_viewer(client=client, device=device, priority=priority,
+                                          device_id=device_id, consumer_profile=consumer_profile)
             q: queue.Queue[bytes | None] = queue.Queue(maxsize=64)
             if not primary and self._last_sync_chunk:
                 q.put_nowait(self._last_sync_chunk)
@@ -627,7 +737,7 @@ class LiveHub:
                 pump.session.closed.wait(1.5)
 
     def try_join(self, sid: str, *, client: str, device: str = "", priority: str = "normal",
-                 device_id: str = "") -> tuple[LiveChannelPump, dict] | None:
+                 device_id: str = "", consumer_profile: str = "") -> tuple[LiveChannelPump, dict] | None:
         """Rejoint un flux direct déjà ouvert pour ``sid`` sans consommer de connexion supplémentaire."""
         if self.streams.in_cooldown(client, device, "live", sid):
             return None
@@ -635,7 +745,8 @@ class LiveHub:
             pump = self._pumps.get(sid)
             if pump is None or not pump.accepting:
                 return None
-            entry = pump.subscribe(client=client, device=device, priority=priority, device_id=device_id, primary=False)
+            entry = pump.subscribe(client=client, device=device, priority=priority, device_id=device_id,
+                                   primary=False, consumer_profile=consumer_profile)
             if entry is None:
                 return None
         LOG.info("Flux direct partagé sur %s : « %s » rejoint la connexion en cours (0 connexion supplémentaire)",
@@ -644,6 +755,7 @@ class LiveHub:
 
     def register(self, sid: str, upstream, session: StreamSession, *,
                  client: str, device: str = "", priority: str = "normal", device_id: str = "",
+                 consumer_profile: str = "",
                  stall_timeout: float | None = None, slow_ratio: float = 0.0,
                  warmup: float = 25, slow_windows_limit: int = 3) -> tuple[LiveChannelPump, dict]:
         pump = LiveChannelPump(
@@ -651,7 +763,8 @@ class LiveHub:
             stall_timeout=stall_timeout, slow_ratio=slow_ratio,
             warmup=warmup, slow_windows_limit=slow_windows_limit,
         )
-        entry = pump.subscribe(client=client, device=device, priority=priority, device_id=device_id, primary=True)
+        entry = pump.subscribe(client=client, device=device, priority=priority, device_id=device_id,
+                               primary=True, consumer_profile=consumer_profile or session.consumer_profile)
         with self._lock:
             self._pumps[sid] = pump
         return pump, entry

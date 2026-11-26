@@ -1,7 +1,14 @@
 # Passation — Xtream M3U Local
 
-> **État au 25 novembre 2026 — version 3.33.1.** Document à transmettre tel quel à l'IA suivante avec le dépôt.
+> **État au 26 novembre 2026 — version 3.34.0.** Document à transmettre tel quel à l'IA suivante avec le dépôt.
 > Aucun mot de passe, token ni URL fournisseur réelle ne doit être copié ici ni commité sur GitHub.
+
+### Répartition souple des connexions en 3.34.0 (Option B)
+
+- **Stockage (`settings.json["reservations"]`)** : `{ "<provider_id>": { "profile": "<space_id>", "count": N } }`, helpers `settings.reservations()`, `reservation_for()`, `set_reservation()`, `clear_reservations_for()`. 100 % rétrocompatible avec les anciens fichiers `settings.json`.
+- **Application dans `StreamManager` (`app/streams.py`)** : `StreamSession.consumer_profile` (+ suivi par écran dans `_viewers` et `uses_profile()`) et `LimitReached(reserved_profile=...)`. Sur un abonnement de limite `L` avec `res_count` connexions réservées à `res_profile` (`shared_cap = L - res_count`) : les autres espaces ne dépassent jamais `shared_cap` et ne coupent jamais une connexion réservée ; `res_profile` peut emprunter les places libres du secours (Option B) et le secours ne reprend qu'un emprunt excédentaire (en protégeant toujours les `res_count` connexions garanties). `StreamManager.move()` respecte aussi le quota réservé.
+- **Identification de l'espace appelant (`server.Handler._caller_profile`)** : appareil (`device.playlist` → `saved.provider`, ou `device.profile`), paramètre `?p=<space>` sur les liens M3U (émis uniquement quand des réservations sont actives), ou fournisseur de la chaîne demandée en premier (débordement).
+- **API & UI (`app/web.py`, `index.html`, `app.css`, `app.js`)** : `POST /api/providers/probe` retourne `max_connections` avant enregistrement ; `GET /api/providers`, `POST/PUT /api/providers`, `PUT /api/providers/<n>/mix` gèrent `max_connections` et `reservation` (avec `"profile": "self"` à la création et auto-activation de `mixable` quand `0 < count < max_connections`). Panneau `#provider-split-box` masqué si `max_connections <= 1`, ouvert automatiquement si `> 1` avec choix libre de l'espace bénéficiaire + dialogue `#provider-mix-dialog` pour les abonnements de la configuration du conteneur.
 
 ### Nouveautés et refonte en 3.33.0
 
