@@ -2587,8 +2587,15 @@
     $('streams-pill-text').textContent = totalViewers > n
       ? `${n} flux (${totalViewers} écrans)`
       : `${n} lecture${n > 1 ? 's' : ''}`;
+    const resInfo = data.reservation && data.limit > 1 && data.reservation.count > 0
+      ? (() => {
+          const rc = Math.min(Number(data.reservation.count) || 0, data.limit);
+          const bk = Math.max(0, data.limit - rc);
+          return ` · 🔒 ${plural(rc, 'connexion garantie', 'connexions garanties')} pour « ${sourceName(data.reservation.profile)} »${bk ? ` · 🛡️ ${bk} secours` : ''}`;
+        })()
+      : '';
     const limitText = data.limit
-      ? `Limite : ${plural(data.limit, 'connexion simultanée', 'connexions simultanées')}${data.auto ? ' (valeur de l\'abonnement)' : ' (MAX_CONNECTIONS)'}${data.takeover ? '' : ' · reprise automatique désactivée'}.`
+      ? `Limite : ${plural(data.limit, 'connexion simultanée', 'connexions simultanées')}${data.auto ? ' (valeur de l\'abonnement)' : ' (MAX_CONNECTIONS)'}${data.takeover ? '' : ' · reprise automatique désactivée'}${resInfo}.`
       : 'Aucune limite de connexions appliquée (MAX_CONNECTIONS=0 ou valeur de l\'abonnement inconnue).';
     $('streams-limit').textContent = limitText;
     const list = $('streams-list');
@@ -2597,12 +2604,14 @@
       const devicesLabel = Array.isArray(s.devices) && s.devices.length > 1
         ? s.devices.join(', ')
         : (s.device ? `${s.device}${s.priority === 'high' ? ' (prioritaire)' : s.priority === 'low' ? ' (priorité basse)' : ''}` : `appareil ${s.client}`);
+      const isBackup = s.consumer_profile && String(s.consumer_profile) !== String(s.provider);
       list.append(h('li', { class: 'stream-item' },
         h('span', { class: 'dot live-dot' }),
         h('span', { class: 'grow' },
           h('span', { class: 's-title' },
             h('span', { text: s.label || s.item_id }),
-            s.viewers > 1 ? h('span', { class: 'badge ok', text: `🔗 Partagé (${s.viewers} écrans · 1 connexion)` }) : null),
+            s.viewers > 1 ? h('span', { class: 'badge ok', text: `🔗 Partagé (${s.viewers} écrans · 1 connexion)` }) : null,
+            isBackup ? h('span', { class: 'badge', text: `🛡️ Secours (${sourceName(s.consumer_profile)})` }) : null),
           h('span', { class: 's-meta', text: `${KIND_LABEL[s.kind] || s.kind} · ${devicesLabel} · depuis ${formatDuration(s.seconds)} · ${formatBytes(s.bytes)}${s.switches ? ` · ${plural(s.switches, 'bascule', 'bascules')}` : ''}${hasMultipleSources() ? ` · ${sourceName(s.provider)}` : ''}` })),
         h('button', { type: 'button', class: 'btn small danger', text: 'Arrêter', onclick: async (event) => {
           event.target.disabled = true;
@@ -2766,6 +2775,142 @@
   }
 
   let providersData = null;
+  let providerProbe = { key: '', max: 0 };
+
+  function providerSpaceName(id) {
+    const sid = String(id || '');
+    const fromData = providersData && providersData.providers.find((x) => String(x.index) === sid);
+    if (fromData) return fromData.name;
+    return sourceName(sid);
+  }
+
+  function reservationSummaryText(maxCons, count, profileLabel) {
+    if (!count || count <= 0) {
+      return `🔓 Les ${maxCons} connexions sont partagées librement sans réservation particulière.`;
+    }
+    const backup = Math.max(0, maxCons - count);
+    const resLabel = plural(count, 'connexion garantie', 'connexions garanties');
+    if (backup === 0) {
+      return `🔒 Toutes les ${maxCons} connexions sont réservées à « ${profileLabel} » (0 secours pour les autres espaces).`;
+    }
+    return `🔒 ${resLabel} pour « ${profileLabel} » · 🛡️ ${plural(backup, 'connexion de secours / mélange', 'connexions de secours / mélange')} pour les autres espaces.`;
+  }
+
+  function buildSpaceChoices({ isAux, editingIndex, currentName }) {
+    const items = [];
+    const selfId = editingIndex ? String(editingIndex) : 'self';
+    const selfLabel = `${currentName || 'Nouvel abonnement'} (cet espace)`;
+    if (!isAux && !editingIndex) items.push({ value: 'self', label: selfLabel });
+    const rows = (providersData && providersData.providers) || [];
+    const seen = new Set();
+    for (const p of rows) {
+      if (p.error) continue;
+      const pid = String(p.index);
+      if (pid === selfId) {
+        if (!isAux) { items.push({ value: pid, label: `${p.index}. ${selfLabel}` }); seen.add(pid); }
+        continue;
+      }
+      if (p.index === 1 || !p.aux) {
+        items.push({ value: pid, label: `${p.index}. ${p.name}` });
+        seen.add(pid);
+      }
+    }
+    for (const p of state.profiles || []) {
+      const pid = String(p.id);
+      if (seen.has(pid) || (isAux && pid === selfId)) continue;
+      items.push({ value: pid, label: `${pid}. ${p.name}` });
+      seen.add(pid);
+    }
+    if (!items.length) items.push({ value: '1', label: `1. ${providerSpaceName('1')}` });
+    return items;
+  }
+
+  function fillSplitPanel(box, badgeEl, profSel, countSel, summaryEl, maxCons, opts) {
+    const { isAux, editingIndex, currentName, initialRes, defaultCount = 0 } = opts;
+    if (!maxCons || maxCons <= 1) {
+      box.hidden = true;
+      return;
+    }
+    box.hidden = false;
+    badgeEl.textContent = `${maxCons} connexions détectées`;
+    const prevProf = initialRes ? String(initialRes.profile || '') : profSel.value;
+    const prevCount = initialRes ? Number(initialRes.count || 0)
+      : (countSel.options.length ? Number(countSel.value || 0) : defaultCount);
+    const choices = buildSpaceChoices({ isAux, editingIndex, currentName });
+    profSel.replaceChildren(...choices.map((c) => h('option', { value: c.value, text: c.label })));
+    profSel.value = choices.some((c) => c.value === prevProf) ? prevProf : choices[0].value;
+    const counts = [];
+    for (let k = 0; k <= maxCons; k++) {
+      const bk = maxCons - k;
+      const text = k === 0
+        ? `0 — aucune réservation (${maxCons} partagées)`
+        : (bk === 0 ? `${k} réservée${k > 1 ? 's' : ''} (0 secours)` : `${k} réservée${k > 1 ? 's' : ''} · ${bk} secours / mélange`);
+      counts.push(h('option', { value: String(k), text }));
+    }
+    countSel.replaceChildren(...counts);
+    const clamped = Math.max(0, Math.min(maxCons, Number.isFinite(prevCount) ? prevCount : defaultCount));
+    countSel.value = String(clamped);
+    const selectedLabel = (choices.find((c) => c.value === profSel.value) || choices[0]).label.replace(/^\d+\.\s*/, '').replace(/\s*\(cet espace\)$/, '');
+    summaryEl.textContent = reservationSummaryText(maxCons, clamped, selectedLabel);
+    profSel.disabled = clamped === 0;
+  }
+
+  function providerProbeKey() {
+    const form = $('provider-form');
+    return [
+      $('provider-url').value.trim(), $('provider-user').value.trim(),
+      $('provider-pass').value, $('provider-ua').value.trim(), form.dataset.edit || '',
+    ].join('|');
+  }
+
+  function refreshProviderSplit(initialRes = null, defaultCount = 0) {
+    const form = $('provider-form');
+    const editing = form.dataset.edit ? Number(form.dataset.edit) : null;
+    const isAux = $('provider-role').value === 'aux';
+    const maxCons = providerProbe.max || 0;
+    fillSplitPanel(
+      $('provider-split-box'), $('provider-split-badge'), $('provider-res-profile'),
+      $('provider-res-count'), $('provider-split-summary'), maxCons,
+      { isAux, editingIndex: editing, currentName: $('provider-name').value.trim(), initialRes, defaultCount },
+    );
+    const count = Number($('provider-res-count').value || 0);
+    const forceMix = isAux || (maxCons > 1 && count > 0 && count < maxCons);
+    if (forceMix) $('provider-mix').checked = true;
+    $('provider-mix').disabled = forceMix;
+  }
+
+  function readProviderReservation() {
+    if ($('provider-split-box').hidden || providerProbe.max <= 1) return null;
+    const count = Number($('provider-res-count').value || 0);
+    if (!count || count <= 0) return null;
+    return { profile: $('provider-res-profile').value || 'self', count };
+  }
+
+  async function probeProviderForm({ quiet = false } = {}) {
+    const form = $('provider-form');
+    const editing = form.dataset.edit ? Number(form.dataset.edit) : null;
+    const payload = {
+      url: $('provider-url').value.trim(),
+      username: $('provider-user').value.trim(),
+      password: $('provider-pass').value,
+      user_agent: $('provider-ua').value.trim(),
+      ...(editing ? { index: editing } : {}),
+    };
+    const res = await request('/api/providers/probe', 'POST', payload);
+    const maxCons = Number(res.max_connections || 0);
+    providerProbe = { key: providerProbeKey(), max: maxCons };
+    if (maxCons > 1) {
+      const existing = editing && providersData
+        ? (providersData.providers.find((x) => x.index === editing) || {}).reservation || null
+        : null;
+      refreshProviderSplit(existing, existing ? Number(existing.count || 0) : 1);
+      if (!quiet) toast(`Connexion OK — ${maxCons} connexions simultanées détectées`);
+    } else {
+      $('provider-split-box').hidden = true;
+      if (!quiet) toast('Connexion OK — 1 connexion simultanée');
+    }
+    return maxCons;
+  }
 
   async function loadProviders() {
     try { providersData = await request('/api/providers'); } catch (error) { $('providers-hint').textContent = error.message; return; }
@@ -2775,8 +2920,19 @@
         ? `${p.host} · configuration du conteneur`
         : `${p.host} · ${p.username} · ajouté dans l'interface`;
       const role = p.index === 1 ? ' · 👤 espace principal' : (p.aux ? ' · 🛡️ complément / secours' : ' · 👤 espace membre');
+      let conns = '';
+      if (!p.error && p.max_connections > 1) {
+        if (p.reservation && p.reservation.count > 0) {
+          const rc = Math.min(Number(p.reservation.count), p.max_connections);
+          const bk = Math.max(0, p.max_connections - rc);
+          const who = providerSpaceName(p.reservation.profile);
+          conns = ` · ${p.max_connections} connexions (🔒 ${rc} réservée${rc > 1 ? 's' : ''} « ${who} »${bk ? ` · 🛡️ ${bk} secours` : ''})`;
+        } else {
+          conns = ` · ${p.max_connections} connexions (partagées)`;
+        }
+      }
       const agent = p.user_agent ? ` · user agent : ${p.user_agent}` : '';
-      const mix = p.mixable ? ' · mélangeable avec les autres abonnements' : ' · isolé (jamais mélangé)';
+      const mix = p.mixable ? ' · mélangeable' : ' · isolé';
       const creds = h('span', { class: 'prov-creds', hidden: true });
       const show = h('button', { type: 'button', class: 'btn small', text: 'Afficher', title: 'Afficher l\'utilisateur et le mot de passe',
         onclick: () => toggleCredentials(p, creds, show) });
@@ -2788,7 +2944,7 @@
         h('button', { type: 'button', class: 'btn small danger', text: 'Supprimer', onclick: () => deleteProvider(p) }));
       return h('li', null,
         h('span', null, h('strong', { text: `${p.index}. ${p.name}` }), h('br'),
-          h('span', { class: p.error ? 'warn-text' : 'muted small', text: p.error || meta + role + mix + agent }), creds),
+          h('span', { class: p.error ? 'warn-text' : 'muted small', text: p.error || meta + role + conns + mix + agent }), creds),
         actions);
     }));
     $('provider-form').hidden = !providersData.editable;
@@ -2817,20 +2973,44 @@
     loadProviders();
   }
 
-  /** Abonnement de la configuration du conteneur : rôle (espace membre / complément) et mélange se modifient ici. */
+  /** Abonnement de la configuration du conteneur : rôle, mélange et répartition des connexions se modifient ici. */
   async function editMix(p) {
+    const dialog = $('provider-mix-dialog');
+    $('pmix-title').textContent = `Modifier « ${p.name} »`;
+    const modeSel = $('pmix-mode');
     const options = [
       ['0', 'Non : reste isolé dans son espace membre'],
       ['1', 'Oui : espace membre + mélangeable avec les autres profils'],
       ...(p.index > 1 ? [['2', 'Complément / secours : sans onglet en haut, mélange & débordement auto']] : []),
     ];
-    const current = p.aux ? '2' : (p.mixable ? '1' : '0');
-    const choice = await ask({ title: `Modifier « ${p.name} »`, okLabel: 'Enregistrer',
-      text: 'Adresse et identifiants se modifient dans la configuration du conteneur (Unraid / Docker).',
-      select: { label: 'Rôle et mélange avec les autres abonnements', options, value: current } });
-    if (choice === null) return;
+    modeSel.replaceChildren(...options.map(([v, label]) => h('option', { value: v, text: label })));
+    modeSel.value = p.aux ? '2' : (p.mixable ? '1' : '0');
+    const maxCons = Number(p.max_connections || 0);
+    const updateModalSplit = (initialRes = null) => {
+      fillSplitPanel(
+        $('pmix-split-box'), $('pmix-split-badge'), $('pmix-res-profile'),
+        $('pmix-res-count'), $('pmix-split-summary'), maxCons,
+        { isAux: modeSel.value === '2', editingIndex: p.index, currentName: p.name, initialRes, defaultCount: 0 },
+      );
+      const count = Number($('pmix-res-count').value || 0);
+      if (maxCons > 1 && count > 0 && count < maxCons && modeSel.value === '0') modeSel.value = '1';
+    };
+    updateModalSplit(p.reservation || null);
+    modeSel.onchange = () => updateModalSplit(null);
+    $('pmix-res-profile').onchange = () => updateModalSplit(null);
+    $('pmix-res-count').onchange = () => updateModalSplit(null);
+    const confirmed = await new Promise((resolve) => {
+      dialog.returnValue = 'cancel';
+      dialog.addEventListener('close', () => resolve(dialog.returnValue === 'ok'), { once: true });
+      dialog.showModal();
+    });
+    if (!confirmed) return;
+    const isAux = modeSel.value === '2';
+    const resCount = maxCons > 1 ? Number($('pmix-res-count').value || 0) : 0;
+    const reservation = resCount > 0 ? { profile: $('pmix-res-profile').value || String(p.index), count: resCount } : null;
+    const mixable = isAux || modeSel.value === '1' || (maxCons > 1 && resCount > 0 && resCount < maxCons);
     try {
-      await request(`/api/providers/${p.index}/mix`, 'PUT', { aux: choice === '2', mixable: choice !== '0' });
+      await request(`/api/providers/${p.index}/mix`, 'PUT', { aux: isAux, mixable, reservation });
       toast('Abonnement enregistré');
       afterProvidersChange();
     } catch (error) { toast(error.message, 'error'); }
@@ -2876,6 +3056,8 @@
     $('provider-ua').value = p.user_agent || '';
     $('provider-mix').checked = Boolean(p.mixable || p.aux);
     $('provider-mix').disabled = Boolean(p.aux);
+    providerProbe = { key: providerProbeKey(), max: Number(p.max_connections || 0) };
+    refreshProviderSplit(p.reservation || null, 0);
     $('provider-add').textContent = `Enregistrer « ${p.name} »`;
     $('provider-cancel').hidden = false;
     $('provider-edit-hint').hidden = false;
@@ -2887,6 +3069,7 @@
   function resetProviderForm() {
     const form = $('provider-form');
     delete form.dataset.edit;
+    providerProbe = { key: '', max: 0 };
     for (const id of ['provider-name', 'provider-url', 'provider-user', 'provider-pass', 'provider-ua']) $(id).value = '';
     $('provider-user').placeholder = '';
     $('provider-pass').placeholder = '';
@@ -2896,6 +3079,10 @@
     $('provider-role').value = 'space';
     $('provider-mix').checked = false;
     $('provider-mix').disabled = false;
+    $('provider-split-box').hidden = true;
+    $('provider-res-profile').replaceChildren();
+    $('provider-res-count').replaceChildren();
+    $('provider-split-summary').textContent = '';
     $('provider-add').textContent = '+ Ajouter l\'abonnement';
     $('provider-cancel').hidden = true;
     $('provider-edit-hint').hidden = true;
@@ -3320,6 +3507,30 @@
     const isAux = $('provider-role').value === 'aux';
     if (isAux) $('provider-mix').checked = true;
     $('provider-mix').disabled = isAux;
+    if (providerProbe.max > 1) refreshProviderSplit(null, 1);
+  });
+  $('provider-name').addEventListener('input', () => {
+    if (providerProbe.max > 1) refreshProviderSplit(null, 1);
+  });
+  $('provider-res-profile').addEventListener('change', () => refreshProviderSplit(null, 1));
+  $('provider-res-count').addEventListener('change', () => refreshProviderSplit(null, 1));
+  $('provider-probe').addEventListener('click', async () => {
+    const btn = $('provider-probe');
+    const prev = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = 'Vérification…';
+    try {
+      const maxCons = await probeProviderForm({ quiet: false });
+      if (maxCons > 1 && !$('provider-form').dataset.edit) {
+        $('provider-add').textContent = 'Confirmer et ajouter';
+        $('provider-split-box').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      }
+    } catch (error) {
+      toast(error.message, 'error');
+    } finally {
+      btn.disabled = false;
+      btn.textContent = prev;
+    }
   });
   $('provider-form').addEventListener('submit', async (event) => {
     event.preventDefault();
@@ -3329,19 +3540,30 @@
     const label = button.textContent;
     button.disabled = true;
     button.textContent = 'Test de la connexion…';
-    const isAux = $('provider-role').value === 'aux';
-    const mixable = isAux || $('provider-mix').checked;
-    const body = {
-      name: $('provider-name').value.trim(), url: $('provider-url').value.trim(),
-      username: $('provider-user').value.trim(), password: $('provider-pass').value,
-      user_agent: $('provider-ua').value.trim(), aux: isAux };
     try {
+      // À l'ajout : on détecte d'abord le nombre de connexions. Si > 1, on propose la répartition avant d'enregistrer.
+      if (!editing && providerProbe.key !== providerProbeKey()) {
+        const maxCons = await probeProviderForm({ quiet: true });
+        if (maxCons > 1) {
+          button.textContent = 'Confirmer et ajouter';
+          $('provider-split-box').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+          toast(`${maxCons} connexions détectées : choisis la répartition ci-dessous puis confirme`);
+          return;
+        }
+      }
+      const isAux = $('provider-role').value === 'aux';
+      const reservation = readProviderReservation();
+      const mixable = isAux || $('provider-mix').checked
+        || Boolean(reservation && providerProbe.max > 1 && reservation.count < providerProbe.max);
+      const body = {
+        name: $('provider-name').value.trim(), url: $('provider-url').value.trim(),
+        username: $('provider-user').value.trim(), password: $('provider-pass').value,
+        user_agent: $('provider-ua').value.trim(), aux: isAux, mixable, reservation };
       if (editing) {
         const saved = await request(`/api/providers/${editing}`, 'PUT', body);
-        await request(`/api/providers/${editing}/mix`, 'PUT', { aux: isAux, mixable });
         toast(`Abonnement « ${saved.name} » enregistré`);
       } else {
-        const added = await request('/api/providers', 'POST', { ...body, mixable });
+        const added = await request('/api/providers', 'POST', body);
         toast(isAux
           ? `Abonnement « ${added.name} » ajouté en complément / secours`
           : `Abonnement « ${added.name} » ajouté : choisis son espace en haut`);

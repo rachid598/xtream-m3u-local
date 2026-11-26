@@ -2,6 +2,16 @@
 
 Format inspiré de « Keep a Changelog ». Les versions suivent le versionnage sémantique.
 
+## [3.34.0] — 2026-11-26
+
+### Ajouté
+- **Répartition souple des connexions sur les abonnements multi-connexions** (`max_connections > 1`) :
+  - Détection automatique dès le test ou l'ajout/modification d'un abonnement (`POST /api/providers/probe`) : si l'abonnement remonte plus d'1 connexion simultanée (ex. 3 connexions), l'interface propose de réserver `N` connexion(s) pour **l'espace membre de ton choix** (ex. `1` pour *Ma sœur*) et de dédier les autres (`2`) au **secours / mélange** des autres espaces (option masquée automatiquement pour les abonnements à 1 connexion).
+  - **Garantie souple (Option B)** dans `StreamManager` : les connexions réservées restent toujours disponibles pour l'espace bénéficiaire (les autres espaces en mélange / débordement ne peuvent jamais dépasser le quota de secours ni couper une connexion réservée). Si les connexions de secours sont libres, l'espace bénéficiaire peut en emprunter une, et le secours la reprend proprement en cas de besoin tout en laissant la connexion garantie intacte.
+  - Disponible aussi pour les abonnements de la configuration du conteneur (`XTREAM_URL*`) via le dialogue **Modifier** dans **Système → Abonnements & Espaces**.
+  - Affichage du détail de la répartition dans la liste des abonnements et dans **Système → État & Diagnostic** (avec badge `🛡️ Secours` sur les lectures empruntant un autre abonnement).
+  - 100 % rétrocompatible : aucun abonnement, playlist, appareil ou réglage existant n'est altéré.
+
 ## [3.33.0] — 2026-11-24
 
 ### Ajouté

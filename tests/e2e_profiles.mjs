@@ -121,10 +121,10 @@ try {
   await page.click('#view-btn-system');
   const row = page.locator('#providers-list li', { hasText: 'Sœur' });
   await row.getByRole('button', { name: 'Modifier' }).click();
-  await page.selectOption('#dialog-select', '1');
-  await page.click('#dialog-ok');
+  await page.selectOption('#pmix-mode', '1');
+  await page.click('#pmix-ok');
   await waitFor(async () => (await providers()).find((p) => p.index === 2).mixable === true, 'Sœur mélangeable');
-  await waitFor(async () => /mélangeable avec les autres/.test(await row.innerText()), 'état affiché');
+  await waitFor(async () => /mélangeable/.test(await row.innerText()), 'état affiché');
   await page.click('#view-btn-playlists');
   await waitFor(async () => (await page.locator('#opt-provider option').count()) === 2, 'choix « mélange » proposé');
   assert(/Moi \+ Sœur/.test((await page.locator('#opt-provider option').allInnerTexts())[1]), 'mélange = Moi + Sœur seulement');

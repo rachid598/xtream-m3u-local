@@ -965,13 +965,20 @@ def playlist(config: Config, entries: list[tuple[dict, str]], categories: dict[s
              *, mode: str = "proxy", fmt: str = "ts", epg_path: str | None = "/epg.xml",
              group_names: dict[str, str] | None = None, api_epg_ids: bool = False,
              live_format: str = "ts", catchup: bool = True, token: str | None = None,
-             direct_url=None, failover: bool = False) -> bytes:
+             direct_url=None, failover: bool = False, profile: str = "") -> bytes:
     """Build an M3U (extended) document.
 
     ``entries`` = ``[(élément, clé_de_groupe), ...]`` où l'élément est une chaîne (``kind`` absent ou ``live``),
     un film (``movie``) ou un épisode (``episode``) ; ``epg_path`` = chemin local du guide XMLTV.
     """
     token = config.access_token if token is None else token
+    tag_profile = str(profile or "") if (profile and settings.reservations()) else ""
+
+    def decorate(url: str) -> str:
+        if tag_profile:
+            url = url + ("&" if "?" in url else "?") + urlencode({"p": tag_profile})
+        return with_token(url, token)
+
     header = "#EXTM3U"
     if config.enable_epg and epg_path:
         epg = escape_attribute(with_token(f"{base}{epg_path}", token))
@@ -997,7 +1004,7 @@ def playlist(config: Config, entries: list[tuple[dict, str]], categories: dict[s
             attrs.append(f'tvg-chno="{escape_attribute(channel["num"])}"')
         if catchup and kind == "live" and channel.get("archive") and mode == "proxy":
             # Replay : le lecteur remplace {utc}/{utcend} par le début et la fin du programme (secondes UTC).
-            source = with_token(f"{base}/timeshift/{stream_id}.ts?start={{utc}}&end={{utcend}}", token)
+            source = decorate(f"{base}/timeshift/{stream_id}.ts?start={{utc}}&end={{utcend}}")
             attrs.append(f'catchup="default" catchup-days="{channel["archive"]}" '
                          f'catchup-source="{escape_attribute(source)}" tvg-rec="{channel["archive"]}"')
         attrs.append(f'group-title="{escape_attribute(group)}"')
@@ -1012,7 +1019,7 @@ def playlist(config: Config, entries: list[tuple[dict, str]], categories: dict[s
                     local += "?alt=" + ",".join(channel["alternates"])
             else:
                 local = f"{path}/{stream_id}.{ext}"
-            target = with_token(f"{base}/{local}", token)
+            target = decorate(f"{base}/{local}")
         elif direct_url is not None:
             target = direct_url(path, stream_id, ext)
         else:
@@ -1355,6 +1362,25 @@ class Handler(BaseHTTPRequestHandler):
     def _viewer_identity(self) -> tuple[str, dict]:
         return self.client_ip or self.client_address[0], self.current_device() or {}
 
+    def _caller_profile(self, item_id: str, *, primary_id: str | None = None, device: dict | None = None) -> str:
+        """Détermine l'espace membre à l'origine de la lecture (appareil, playlist, paramètre ?p= ou chaîne initiale)."""
+        dev = device if device is not None else (self.current_device() or {})
+        slug = dev.get("playlist") or ""
+        if slug and self.store is not None:
+            try:
+                saved = self.store.get(slug)
+                if saved is not None:
+                    return str(saved.get("provider") or "1")
+            except RuntimeError:
+                pass
+        if dev.get("profile") and str(dev["profile"]).isdigit():
+            return str(dev["profile"])
+        qs = parse_qs(urlsplit(self.path).query)
+        raw_p = (qs.get("p") or [""])[0].strip()
+        if raw_p.isdigit() and 1 <= int(raw_p) <= 9:
+            return str(int(raw_p))
+        return self.api.provider_of(primary_id or item_id)
+
     def _send_pump_headers(self, pump, default_type: str = "video/mp2t") -> None:
         self.send_response(pump.status)
         for key, value in pump.headers.items():
@@ -1365,7 +1391,7 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def open_session(self, kind: str, item_id: str, label: str, *, virtual: bool = False,
-                     provider: str | None = None, silent: bool = False):
+                     provider: str | None = None, silent: bool = False, consumer_profile: str = ""):
         """Réserve une connexion fournisseur. Retourne la session, ou ``None`` (après 409/503 sauf ``silent``)."""
         provider = provider or self.api.provider_of(item_id)
         wait = self.busy_wait(provider)
@@ -1374,11 +1400,12 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_busy(wait)
             return None
         client, device = self._viewer_identity()
+        caller = consumer_profile or self._caller_profile(item_id, device=device)
         try:
             return self.streams.acquire(kind=kind, item_id=item_id, client=client,
                                         label=label, virtual=virtual, provider=provider,
                                         device=device.get("name", ""), priority=device.get("priority", "normal"),
-                                        device_id=device.get("id", ""))
+                                        device_id=device.get("id", ""), consumer_profile=caller)
         except EvictedRecently:
             if not silent:
                 self._error(409, "Lecture arrêtée : la connexion au fournisseur a été donnée à un autre appareil "
@@ -1386,7 +1413,11 @@ class Handler(BaseHTTPRequestHandler):
         except LimitReached as exc:
             if not silent:
                 holder = exc.holder
-                if holder is not None:
+                if exc.reserved_profile and holder is None:
+                    self._error(503, f"Limite de secours atteinte ({exc.args[0]} connexion(s) partagée(s) sur cet "
+                                     "abonnement, le reste est réservé à un espace membre) : arrête une autre "
+                                     "lecture (interface Web, onglet Système)", head_only=False)
+                elif holder is not None:
                     who = f"« {holder.device} »" if holder.device else "un appareil prioritaire"
                     self._error(503, f"Connexion occupée : {who} regarde « {holder.channel or holder.label} » et passe en "
                                      "priorité (interface Web, onglet Appareils)", head_only=False)
@@ -1409,13 +1440,17 @@ class Handler(BaseHTTPRequestHandler):
         has_range = bool(self.headers.get("Range") or self.headers.get("If-Range"))
         use_hub = bool(self.hub is not None and track and track[0] == "live" and not head_only and not has_range)
         client, device = ("", {})
-        if self.hub is not None and track and not head_only:
+        caller = ""
+        if track and not head_only:
             client, device = self._viewer_identity()
-            self.hub.detach_viewer(client, device.get("name", ""), except_sid=track[1] if track[0] == "live" else "")
+            caller = self._caller_profile(track[1], device=device)
+            if self.hub is not None:
+                self.hub.detach_viewer(client, device.get("name", ""), except_sid=track[1] if track[0] == "live" else "")
         if use_hub:
             joined = self.hub.try_join(
                 track[1], client=client, device=device.get("name", ""),
                 priority=device.get("priority", "normal"), device_id=device.get("id", ""),
+                consumer_profile=caller,
             )
             if joined is not None:
                 pump, entry = joined
@@ -1426,7 +1461,7 @@ class Handler(BaseHTTPRequestHandler):
 
         session = None
         if track and not head_only:
-            session = self.open_session(track[0], track[1], self.item_label(*track))
+            session = self.open_session(track[0], track[1], self.item_label(*track), consumer_profile=caller)
             if session is None:
                 return
         headers = {"User-Agent": self.user_agent_for(upstream_url), "Accept": "*/*"}
@@ -1442,6 +1477,7 @@ class Handler(BaseHTTPRequestHandler):
                 pump, entry = self.hub.register(
                     track[1], upstream, session, client=client, device=device.get("name", ""),
                     priority=device.get("priority", "normal"), device_id=device.get("id", ""),
+                    consumer_profile=caller,
                 )
 
                 def send_initial_headers(p) -> None:
@@ -1540,12 +1576,14 @@ class Handler(BaseHTTPRequestHandler):
         index = ids.index(remembered["sid"]) if remembered else 0
 
         client, device = self._viewer_identity()
+        caller = self._caller_profile(ids[0], primary_id=ids[0], device=device)
         if self.hub is not None:
             self.hub.detach_viewer(client, device.get("name", ""), except_sid=ids[index])
             for candidate_sid in (ids[index], *(s for s in ids if s != ids[index])):
                 joined = self.hub.try_join(
                     candidate_sid, client=client, device=device.get("name", ""),
                     priority=device.get("priority", "normal"), device_id=device.get("id", ""),
+                    consumer_profile=caller,
                 )
                 if joined is not None:
                     pump, entry = joined
@@ -1556,7 +1594,7 @@ class Handler(BaseHTTPRequestHandler):
 
         initial_provider = providers_in_ids[index]
         session = self.open_session("live", ids[0], names[ids[0]], provider=initial_provider,
-                                    silent=multi_provider)
+                                    silent=multi_provider, consumer_profile=caller)
         if session is None and multi_provider:
             # L'abonnement initial est plein ou en pause : chercher un secours sur un autre abonnement libre.
             for step in range(1, len(ids)):
@@ -1564,7 +1602,8 @@ class Handler(BaseHTTPRequestHandler):
                 cand_provider = providers_in_ids[cand_idx]
                 if cand_provider == initial_provider:
                     continue
-                session = self.open_session("live", ids[0], names[ids[0]], provider=cand_provider, silent=True)
+                session = self.open_session("live", ids[0], names[ids[0]], provider=cand_provider,
+                                            silent=True, consumer_profile=caller)
                 if session is not None:
                     LOG.info("Débordement multi-abonnements : abonnement %s occupé, bascule immédiate sur l'abonnement %s (%s)",
                              initial_provider, cand_provider, ids[cand_idx])
@@ -1572,7 +1611,8 @@ class Handler(BaseHTTPRequestHandler):
                     break
             if session is None:
                 # Aucun abonnement de secours n'a de place : renvoyer la réponse normale du fournisseur initial.
-                self.open_session("live", ids[0], names[ids[0]], provider=initial_provider, silent=False)
+                self.open_session("live", ids[0], names[ids[0]], provider=initial_provider,
+                                  silent=False, consumer_profile=caller)
                 return
         elif session is None:
             return
@@ -1749,7 +1789,8 @@ class Handler(BaseHTTPRequestHandler):
                            group_names=saved.get("group_names"),
                            api_epg_ids=self.config.guide_ids,
                            live_format=live_format, catchup=saved.get("catchup", True),
-                           token=self.request_token, failover=bool(saved.get("failover")))
+                           token=self.request_token, failover=bool(saved.get("failover")),
+                           profile=str(saved.get("provider") or "1"))
         return content, incomplete
 
     # ------------------------------------------------------- Xtream local

@@ -636,10 +636,29 @@
             <label for="provider-ua">User-Agent (facultatif)</label>
             <input id="provider-ua" type="text" maxlength="200" autocomplete="off" placeholder="par défaut">
           </div>
-          <label class="check-row provider-mix-row"><input type="checkbox" id="provider-mix"> <span><strong>Autoriser le mélange</strong> avec les playlists des espaces membres (activé d'office en mode Complément / secours)</span></label>
+          <label class="check-row provider-mix-row"><input type="checkbox" id="provider-mix"> <span><strong>Autoriser le mélange</strong> avec les playlists des espaces membres (activé d'office en mode Complément / secours ou si des connexions sont partagées)</span></label>
+          <div class="provider-split-box" id="provider-split-box" hidden>
+            <div class="provider-split-head">
+              <strong>Répartition des connexions simultanées</strong>
+              <span class="badge ok" id="provider-split-badge"></span>
+            </div>
+            <p class="muted small provider-split-desc">Garantie souple : les connexions réservées restent toujours disponibles pour l'espace choisi, et les autres servent de secours / mélange (l'espace choisi peut emprunter une connexion libre si le secours ne l'utilise pas).</p>
+            <div class="provider-split-grid">
+              <div class="field">
+                <label for="provider-res-profile">Espace bénéficiaire</label>
+                <select id="provider-res-profile"></select>
+              </div>
+              <div class="field">
+                <label for="provider-res-count">Connexions réservées / secours</label>
+                <select id="provider-res-count"></select>
+              </div>
+            </div>
+            <p class="provider-split-summary" id="provider-split-summary"></p>
+          </div>
           <p class="provider-edit-hint hint" id="provider-edit-hint" hidden></p>
           <div class="btn-row provider-buttons">
             <button type="submit" class="btn primary" id="provider-add">+ Ajouter l'abonnement</button>
+            <button type="button" class="btn" id="provider-probe">Vérifier les connexions</button>
             <button type="button" class="btn" id="provider-cancel" hidden>Annuler</button>
           </div>
         </form>
@@ -797,6 +816,37 @@
     <div class="btn-row end">
       <button type="submit" class="btn ghost" value="cancel">Annuler</button>
       <button type="submit" class="btn primary" value="ok" id="item-ok">Appliquer</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="provider-mix-dialog">
+  <form method="dialog">
+    <h2 id="pmix-title">Modifier l'abonnement</h2>
+    <p class="hint">Adresse et identifiants se modifient dans la configuration du conteneur (Unraid / Docker).</p>
+    <div class="field">
+      <label for="pmix-mode">Rôle et mélange avec les autres abonnements</label>
+      <select id="pmix-mode"></select>
+    </div>
+    <div class="provider-split-box" id="pmix-split-box" hidden>
+      <div class="provider-split-head">
+        <strong>Répartition des connexions</strong>
+        <span class="badge ok" id="pmix-split-badge"></span>
+      </div>
+      <p class="muted small provider-split-desc">Garantie souple : connexions réservées toujours disponibles pour l'espace choisi ; le reste sert au secours / mélange.</p>
+      <div class="field">
+        <label for="pmix-res-profile">Espace bénéficiaire</label>
+        <select id="pmix-res-profile"></select>
+      </div>
+      <div class="field">
+        <label for="pmix-res-count">Connexions réservées / secours</label>
+        <select id="pmix-res-count"></select>
+      </div>
+      <p class="provider-split-summary" id="pmix-split-summary"></p>
+    </div>
+    <div class="btn-row end">
+      <button type="submit" class="btn ghost" value="cancel">Annuler</button>
+      <button type="submit" class="btn primary" value="ok" id="pmix-ok">Enregistrer</button>
     </div>
   </form>
 </dialog>

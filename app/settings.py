@@ -53,6 +53,24 @@ def _indices(value) -> list[int]:
     return sorted({int(v) for v in value if isinstance(v, (int, str)) and str(v).isdigit() and int(v) in INDICES})
 
 
+def _reservations(value) -> dict[str, dict]:
+    """Réservations de connexions par abonnement : ``{"2": {"profile": "2", "count": 1}}``."""
+    if not isinstance(value, dict):
+        return {}
+    result: dict[str, dict] = {}
+    for raw_k, raw_v in value.items():
+        if not str(raw_k).isdigit() or int(raw_k) not in INDICES or not isinstance(raw_v, dict):
+            continue
+        prof = str(raw_v.get("profile") or "").strip()
+        try:
+            count = int(raw_v.get("count") or 0)
+        except (TypeError, ValueError):
+            continue
+        if prof.isdigit() and int(prof) in INDICES and 1 <= count <= 99:
+            result[str(int(raw_k))] = {"profile": str(int(prof)), "count": count}
+    return result
+
+
 class Settings:
     def __init__(self, data_dir: str, *, default_epg_sources: tuple[str, ...] = ()) -> None:
         self.path = Path(data_dir) / "settings.json"
@@ -65,11 +83,12 @@ class Settings:
             try:
                 stamp = self.path.stat().st_mtime
             except OSError:
-                return {**DEFAULTS, "mixable": [], "aux_providers": [], "public_hosts": [],
+                return {**DEFAULTS, "mixable": [], "aux_providers": [], "reservations": {}, "public_hosts": [],
                         "epg_sources": list(self._default_epg_sources)}
             if self._cache and self._cache[0] == stamp:
                 return {**self._cache[1], "mixable": list(self._cache[1]["mixable"]),
                         "aux_providers": list(self._cache[1]["aux_providers"]),
+                        "reservations": {k: dict(v) for k, v in self._cache[1]["reservations"].items()},
                         "public_hosts": list(self._cache[1]["public_hosts"]),
                         "epg_sources": list(self._cache[1]["epg_sources"])}
             try:
@@ -83,13 +102,15 @@ class Settings:
                 list(INDICES) if data.get("allow_mix") else [])
             # Abonnements « complément / secours » : n'apparaissent pas comme espace membre séparé en haut.
             values["aux_providers"] = [i for i in _indices(data.get("aux_providers")) if i != 1]
+            # Réservations de connexions (Option B garantie souple) par abonnement multi-connexions.
+            values["reservations"] = _reservations(data.get("reservations"))
             values["public_hosts"] = _hosts(data.get("public_hosts"))
             sources = _urls(data.get("epg_sources"))
             if self._default_epg_sources and not data.get("epg_sources_initialized"):
                 sources = _urls([url for url in sources if url != RETIRED_EPG_SOURCE] + list(self._default_epg_sources))
             values["epg_sources"] = sources
             self._cache = (stamp, values)
-            return dict(values)
+            return {**values, "reservations": {k: dict(v) for k, v in values["reservations"].items()}}
 
     def update(self, changes: dict) -> dict:
         values = {**self.get(), **{k: bool(v) for k, v in changes.items() if k in DEFAULTS}}
@@ -97,6 +118,8 @@ class Settings:
             values["mixable"] = _indices(changes["mixable"])
         if "aux_providers" in changes:
             values["aux_providers"] = [i for i in _indices(changes["aux_providers"]) if i != 1]
+        if "reservations" in changes:
+            values["reservations"] = _reservations(changes["reservations"])
         if "public_hosts" in changes:
             values["public_hosts"] = _hosts(changes["public_hosts"])
         if "epg_sources" in changes:
@@ -141,6 +164,50 @@ def aux_providers() -> set[str]:
     if _SETTINGS is None:
         return set()
     return {str(i) for i in _SETTINGS.get()["aux_providers"] if i != 1}
+
+
+def reservations() -> dict[str, dict]:
+    """Réservations de connexions : ``{provider_id: {"profile": space_id, "count": N}}``."""
+    if _SETTINGS is None:
+        return {}
+    return _SETTINGS.get()["reservations"]
+
+
+def reservation_for(provider: str | int) -> tuple[str, int] | None:
+    """Retourne ``(espace_bénéficiaire, nb_connexions_garanties)`` pour cet abonnement, ou ``None``."""
+    entry = reservations().get(str(provider))
+    if not entry:
+        return None
+    return str(entry["profile"]), int(entry["count"])
+
+
+def set_reservation(index: int, profile: str | int | None, count: int) -> dict[str, dict]:
+    """Enregistre ou efface la réservation de connexions d'un abonnement (1 à 9)."""
+    if _SETTINGS is None:
+        raise RuntimeError("Réglages non modifiables dans ce mode de démarrage")
+    if index not in INDICES:
+        raise ValueError("Numéro d'abonnement invalide")
+    cur = dict(_SETTINGS.get()["reservations"])
+    key = str(index)
+    try:
+        num = int(count or 0)
+    except (TypeError, ValueError):
+        num = 0
+    prof = str(profile or "").strip()
+    if num <= 0 or not prof.isdigit() or int(prof) not in INDICES:
+        cur.pop(key, None)
+    else:
+        cur[key] = {"profile": str(int(prof)), "count": min(99, num)}
+    return _SETTINGS.update({"reservations": cur})["reservations"]
+
+
+def clear_reservations_for(index: int) -> dict[str, dict]:
+    """Nettoie toute réservation portée par ou pointant vers un abonnement supprimé."""
+    if _SETTINGS is None:
+        return {}
+    key = str(index)
+    cur = {k: v for k, v in _SETTINGS.get()["reservations"].items() if k != key and v.get("profile") != key}
+    return _SETTINGS.update({"reservations": cur})["reservations"]
 
 
 def epg_sources() -> list[str]:
