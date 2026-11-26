@@ -1,7 +1,12 @@
 # Passation — Xtream M3U Local
 
-> **État au 26 novembre 2026 — version 3.34.0.** Document à transmettre tel quel à l'IA suivante avec le dépôt.
+> **État au 26 novembre 2026 — version 3.34.1.** Document à transmettre tel quel à l'IA suivante avec le dépôt.
 > Aucun mot de passe, token ni URL fournisseur réelle ne doit être copié ici ni commité sur GitHub.
+
+### Modèle « Maroc » et mise à jour des modèles en 3.34.1
+
+- Modèle **Maroc** passé en `region: "ar"` et complété avec les variantes réelles (`2M Natioanl/National`, `Arryadia Live/1/2/3/TNT Local/Olympics`, `Assadissa Moroc`, `Aflam 7`, `Tamazight Moroc`, `MBC 5`, `M24 Maroc`, `Medi 1 Maghreb/Arabic TV`, `Tele Moroc`, `Al Ons TV`, `TV5`, `Omar Peche 24/7`), plus alias dans `builder._REGIONAL_ALIASES` et `epg.DEFAULT_EPG_GUIDES` (`Open-EPG Maroc`). Test : `tests/test_builder.py::MarocPresetTests`.
+- `app.js::createGroup(preset)` : cliquer sur un modèle déjà présent (ex. `+ Maroc`) fusionne les nouveaux motifs manquants, applique `region` et appelle `includeRegionalChannels` sans recréer le groupe ni perdre sa position.
 
 ### Répartition souple des connexions en 3.34.0 (Option B)
 

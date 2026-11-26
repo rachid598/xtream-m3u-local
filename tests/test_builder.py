@@ -316,6 +316,53 @@ class OttPresetTests(unittest.TestCase):
                 self.assertIsNotNone(group_matches(match_name(name), group), name)
 
 
+class MarocPresetTests(unittest.TestCase):
+    """Le modèle « Maroc » couvre toutes les variantes réelles d'un fournisseur AR| MOROCCO sans faux positifs."""
+
+    @staticmethod
+    def _maroc_patterns() -> list[str]:
+        import ast, re
+        from pathlib import Path
+        js = Path(__file__).resolve().parents[1].joinpath("app/static/app.js").read_text(encoding="utf-8")
+        match = re.search(r"\{\s*name:\s*'Maroc'[^\[]*patterns:\s*\[(.*?)\]\s*\}", js, re.S)
+        assert match, "Modèle Maroc introuvable dans app.js"
+        return [ast.literal_eval(s) for s in re.findall(r"'(?:\\'|[^'])*'", match.group(1))]
+
+    def test_all_real_morocco_provider_channels_match_and_non_arab_tv5_excluded(self):
+        cat = "AR| MOROCCO ᴿᴬᵂ ▶ المغرب"
+        real_names = [
+            "AR: Al Aoula Inter ᴿᴬᵂ ◉", "AR: Al Aoula Inter ᴴᴰ", "AR: Al Aoula Inter SD",
+            "AR: Al Aoula Laayoune ◉", "AR: 2M Natioanl ◉", "AR: 2M Monde",
+            "AR: Arryadia Live ᴿᴬᵂ", "AR: Arryadia Live ᴴᴰ ◉", "AR: Arryadia Live SD",
+            "AR: Arryadia 1 ᴿᴬᵂ", "AR: Arryadia 1 ᴴᴰ", "AR: Arryadia 2 ᴿᴬᵂ", "AR: Arryadia 2 ᴴᴰ",
+            "AR: Arryadia 3 ᴿᴬᵂ", "AR: Arryadia 3 ᴴᴰ",
+            "AR: ARRYADIA TNT ᴿᴬᵂ *LOCAL*", "AR: ARRYADIA TNT ᴴᴰ *LOCAL*",
+            "AR: ARRYADIA OLYMPICS ᴿᴬᵂ", "AR: ARRYADIA OLYMPICS ᴴᴰ",
+            "AR: Al Maghribia ᴿᴬᵂ ◉", "AR: Al Maghribia", "AR: Athaqafia ᴿᴬᵂ ◉",
+            "AR: Assadissa Moroc ᴿᴬᵂ", "AR: Assadissa Moroc ᴴᴰ", "AR: Assadissa Moroc",
+            "AR: Al Ons TV", "AR: AFLAM 7 ᴿᴬᵂ *LOCAL*", "AR: AFLAM 7 ᴴᴰ *LOCAL*",
+            "AR: Tamazight ᴿᴬᵂ ◉", "AR: Tamazight Moroc",
+            "AR: MBC 5 ᴴᴰ", "AR: MBC 5 SD", "AR: MBC 5 ᴿᴬᵂ",
+            "AR: M24 MAROC", "AR: Medi 1 Maghreb TV ᴿᴬᵂ ◉", "AR: Medi 1 Arabic TV",
+            "AR: Tele Moroc ᴿᴬᵂ", "AR: Chada TV", "AR: TV5", "AR: OMAR PECHE 24/7 4K",
+        ]
+        items = [ch(100 + i, name, "1") for i, name in enumerate(real_names)]
+        items += [ch(901, "FR: TV5", "2"), ch(902, "PH: TV5", "3")]
+        cats = {"1": cat, "2": "FR | Généralistes", "3": "PH | Philippines"}
+        saved = validate_playlist({
+            "slug": "maroc", "name": "Maroc", "category_ids": ["1", "2", "3"],
+            "custom_groups": [{"id": "maroc", "name": "Maroc", "match": "exact", "region": "ar",
+                               "patterns": self._maroc_patterns()}],
+        })
+        entries, _ = select_items(StubAPI(items, cats), saved, "live")
+        by_name = {item["name"]: grp for item, grp in entries}
+        for name in real_names:
+            with self.subTest(name=name):
+                self.assertEqual(by_name[name], "g:maroc", f"{name} devrait être dans g:maroc")
+        self.assertEqual(by_name["FR: TV5"], "2")
+        self.assertEqual(by_name["PH: TV5"], "3")
+
+
 class FailoverAnyCategoryTests(unittest.TestCase):
     """Option ``failover_any_category`` : secours cherchés aussi hors des catégories cochées."""
 

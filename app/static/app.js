@@ -410,17 +410,25 @@
         'LCP', 'Public Sénat', 'France 4', 'BFM TV', 'BFMTV', 'CNews', 'CStar', 'C Star', 'Gulli', 'TF1 Séries Films',
         'L\'Équipe', 'La chaîne L\'Équipe', '6ter', 'RMC Story', 'RMC Découverte', 'Chérie 25', 'LCI', 'franceinfo',
         'France Info', 'T18', 'Novo19', 'Novo 19'] },
-    { name: 'Maroc', match: 'exact', hint: 'Chaînes marocaines dans l\'ordre de la numérotation SNRT : Al Aoula, 2M, Arryadia, Athaqafia, Al Maghribia, Assadissa, Tamazight, Laâyoune, Medi 1 TV, Chada TV…',
-      patterns: ['1: Al Aoula', 'Al Aoula HD', 'Al Aoula Inter', 'Al Aoula International', 'TVM',
-        '2: 2M', '2M Maroc', '2M Monde', '2M TV', '2M HD',
-        '3: Arryadia', 'Arryadia HD', 'Arriadia', 'Arryadia TNT',
+    { name: 'Maroc', match: 'exact', region: 'ar', hint: 'Chaînes marocaines dans l\'ordre SNRT (Al Aoula, 2M, Arryadia, Athaqafia, Al Maghribia, Assadissa, Aflam 7, Tamazight, Laâyoune, Medi 1 TV, Chada TV, Télé Maroc, M24, MBC 5…)',
+      patterns: [
+        '1: Al Aoula', 'Al Aoula HD', 'Al Aoula Inter', 'Al Aoula International', 'Al Aoula Maroc', 'TVM',
+        '2: 2M', '2M Maroc', '2M Monde', '2M National', '2M Natioanl', '2M TV', '2M HD',
+        '3: Arryadia', 'Arryadia HD', 'Arriadia', 'Arryadia Live', 'Arryadia TNT', 'Arryadia TNT Local',
+        'Arryadia 1', 'Arryadia 2', 'Arryadia 3', 'Arryadia Olympics', 'Arryadia TV Maroc',
         '4: Athaqafia', 'Assaqafia', 'Attakafia', 'Arrabia',
         '5: Al Maghribia', 'Al Maghribia HD', 'Maghribia',
-        '6: Assadissa', 'Mohammed VI', 'Assadissa Mohammed VI',
-        '7: Tamazight', 'Tamazight TV', 'Tamazighte',
-        '8: Laayoune', 'Laayoune TV', 'Al Aoula Laayoune', 'Laâyoune TV',
-        '9: Medi 1 TV', 'Medi1 TV', 'Medi 1 TV Maghreb', 'Medi1 TV Maghreb', 'Medi 1 TV Afrique', 'Medi 1 TV Europe',
-        '10: Chada TV', 'Chada', '11: Télé Maroc', 'Tele Maroc', 'M24', 'Medi 1 News'] },
+        '6: Assadissa', 'Assadissa Maroc', 'Assadissa Moroc', 'Mohammed VI', 'Assadissa Mohammed VI',
+        '7: Aflam 7', 'Aflam 7 Local', 'Aflam TV',
+        '8: Tamazight', 'Tamazight TV', 'Tamazighte', 'Tamazight Maroc', 'Tamazight Moroc',
+        '9: Laayoune', 'Laayoune TV', 'Al Aoula Laayoune', 'Laâyoune TV',
+        '10: Medi 1 TV', 'Medi1 TV', 'Medi 1 TV Maghreb', 'Medi1 TV Maghreb', 'Medi 1 Maghreb TV',
+        'Medi 1 Arabic TV', 'Medi 1 TV Arabic', 'Medi 1 TV Afrique', 'Medi 1 Afrique TV', 'Medi 1 TV Europe', 'Medi 1 News',
+        '11: Chada TV', 'Chada',
+        '12: Télé Maroc', 'Tele Maroc', 'Tele Moroc',
+        '13: M24', 'M24 Maroc', 'M24 TV',
+        'MBC 5', 'MBC5', 'Al Ons TV', 'Al Ons', 'TV5', 'Omar Peche 24/7',
+      ] },
     { name: 'Nilesat', match: 'exact', region: 'ar', hint: 'Chaînes du monde arabe disponibles dans le catalogue, avec MBC et Rotana en tête',
       patterns: NILESAT },
     { name: 'Sport FR', match: 'exact', region: 'fr', hint: 'Sport francophone, avec beIN Sports 1, 2 et 3 en tête',
@@ -1643,7 +1651,34 @@
     const draft = state.customGroups;
     if (preset?.region && (!(await ensureCatalog('live')) || draft !== state.customGroups)) return null;
     const existing = state.customGroups.find((g) => norm(g.name) === norm(name));
-    if (existing) { toast(`Le groupe « ${existing.name} » existe déjà.`, 'warn'); return existing; }
+    if (existing) {
+      if (!preset) { toast(`Le groupe « ${existing.name} » existe déjà.`, 'warn'); return existing; }
+      const stripNum = (p) => matchName(String(p).replace(NUMBERED, (m, n, rest) => rest));
+      const known = new Set((existing.patterns || []).map(stripNum).filter(Boolean));
+      const added = (preset.patterns || []).filter((p) => {
+        const core = stripNum(p);
+        if (!core || known.has(core)) return false;
+        known.add(core);
+        return true;
+      });
+      const regionAdded = Boolean(preset.region && existing.region !== preset.region);
+      if (regionAdded) existing.region = preset.region;
+      if (added.length) existing.patterns = [...(existing.patterns || []), ...added].slice(0, 300);
+      const beforeInc = state.sel.live.included.size;
+      if (existing.region) includeRegionalChannels(orderedCustomGroups().find((g) => g.id === existing.id));
+      const addedChannels = state.sel.live.included.size - beforeInc;
+      if (added.length || regionAdded || addedChannels > 0) {
+        refresh();
+        const details = [
+          added.length ? `+${plural(added.length, 'nom', 'noms')}` : '',
+          addedChannels > 0 ? `+${plural(addedChannels, 'chaîne ajoutée', 'chaînes ajoutées')}` : '',
+        ].filter(Boolean).join(', ');
+        toast(`Groupe « ${existing.name} » mis à jour${details ? ` (${details})` : ''} — pense à enregistrer.`);
+      } else {
+        toast(`Le groupe « ${existing.name} » est déjà à jour.`);
+      }
+      return existing;
+    }
     if (state.customGroups.length >= 50) { toast('50 groupes maximum.', 'warn'); return null; }
     const base = slugify(name).replace(/[^a-z0-9_-]/g, '').slice(0, 36) || 'groupe';
     let id = base;

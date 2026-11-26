@@ -48,11 +48,15 @@ DEFAULT_EPG_GUIDES = {
     EPGSHARE_FR: None,
     "https://www.open-epg.com/files/morocco.xml.gz": {
         "alaoula": "alaoulaar.ma",
+        "alaoulainter": "alaoulaar.ma",
+        "alaoulainternational": "alaoulaar.ma",
         "almaghribia": "almaghribiaar.ma",
         "maghribia": "almaghribiaar.ma",
         "tamazight": "tamazightar.ma",
         "tamazighttv": "tamazightar.ma",
         "tamazighte": "tamazightar.ma",
+        "tamazightmoroc": "tamazightar.ma",
+        "tamazightmaroc": "tamazightar.ma",
     },
     "https://raw.githubusercontent.com/iimnm/arabic-epg/output/guide.xml.gz": {
         "2mmonde": "2mmonde.ma@sd",
