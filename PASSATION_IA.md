@@ -1,7 +1,18 @@
 # Passation — Xtream M3U Local
 
-> **État au 27 novembre 2026 — version 3.35.0.** Document à transmettre tel quel à l'IA suivante avec le dépôt.
+> **État au 27 novembre 2026 — version 3.36.0.** Document à transmettre tel quel à l'IA suivante avec le dépôt.
 > Aucun mot de passe, token ni URL fournisseur réelle ne doit être copié ici ni commité sur GitHub.
+
+### Nouveautés en 3.36.0 (Refonte UI, Tableau de bord, Pause/QR appareils, Test versions & Épinglage, Fiabilité adaptative, Telegram enrichi, Export multi-abonnements)
+
+- **Refonte UI & Tableau de bord (`index.html`, `app.css`, `app.js`)** : barre latérale fixe `.nav-rail` (`236 px` desktop, header compact mobile `≤ 900 px`), bascule thème Sombre/Clair (`data-theme="dark|light"` + `localStorage`), vue d'accueil `#view-dashboard` (KPIs temps réel, lectures actives, abonnement actif, historique 30 j filtrable ; ouverte par défaut dès qu'il y a au moins 1 playlist, sinon `playlists` pour les nouvelles installations), tiroirs repliables `.add-drawer` sur Appareils & Abonnements, *Catalogue brut* déplacé en lien discret sous *Système*.
+- **Historique des lectures filtrable par abonnement et par personne** : `StreamManager._record()` enregistre `"profile"`, `GET /api/history` accepte `?provider=all|<id>&device=<clé>&sort=seconds|count|recent`, `history_payload()` renvoie `by_provider` et `by_device` + effacement ciblé `clear_history(provider=..., device=...)`.
+- **Pause en 1 clic & QR code local par appareil (`devices.py`, `streams.py`, `server.py`, `web.py`)** : champ rétrocompatible `paused: bool = False` dans `devices.json` ; `PUT /api/devices/<id>` avec `{"paused": true}` coupe aussitôt via `StreamManager.stop_device()` et les routes `/stream/` et Xtream `/live|movie|series|timeshift/` renvoient `403`. `GET /api/devices/<id>/qr?mode=m3u|xtream` retourne un QR code SVG local (`qrcode_svg.qr_svg`).
+- **Test comparatif de versions & version épinglée (`custom.py`, `builder.py`, `xtream_emu.py`, `server.py`, `web.py`)** : `POST /api/channels/probe` teste séquentiellement jusqu'à 6 `stream_ids` (statut HTTP, latence, fournisseur, quarantaine) ; `item_pinned: {id_canonique: id_préféré}` met la version épinglée en tête (M3U + `XtreamEmulator.stream_plan`) tout en conservant `stream_id` canonique (EPG/favoris préservés).
+- **Fiabilité adaptative temporaire (`streams.VersionHealth`, `custom.adaptive_failover`)** : quarantaine courte (`30 min` → `2 h` max après 2 échecs en 15 min) avec retour automatique sur la HD à expiration + `POST /api/streams/health/reset`. Activé via `&af=1` en M3U et `stream_plan` en Xtream.
+- **Alertes Telegram enrichies (`alerts.py`, `server.py`, `web.py`)** : événements `unstable` (déclenché à `session.switches == 5`) et `weekly` (dimanche 20 h via watchdog + `POST /api/alerts/weekly` manuel).
+- **Export brut des chaînes multi-abonnements (`web.py::export_all_channels`)** : `GET /api/catalog/channels-export?format=csv|json|txt&kind=live|all` exporte tous les noms bruts de tous les abonnements (`provider_index`, `provider_name`, `category`, `name`, `clean_name`, `epg_id`, `stream_id`) sans aucun identifiant ni URL fournisseur (accessible dans **Réglages → Sauvegarde & Exports**).
+- Tests : `tests/test_v336.py` + `tests/test_v335.py::HistoryFilterTests`.
 
 ### Nouveautés en 3.35.0 (Mode Décodeur, XMLTV multi-abonnements, Alertes Telegram + QR code)
 

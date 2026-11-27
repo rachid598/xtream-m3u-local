@@ -1,3 +1,3 @@
 """Xtream -> M3U local gateway."""
 
-__version__ = "3.35.0"
+__version__ = "3.36.0"

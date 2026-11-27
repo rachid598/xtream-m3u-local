@@ -28,7 +28,10 @@ CHAT_ID_RE = re.compile(r"^-?\d{4,20}$")
 PAIRING_TTL = 300          # 5 min pour scanner le QR code et appuyer sur « Démarrer »
 WATCHDOG_INTERVAL = 300    # vérifications légères (tunnel) toutes les 5 min ; expiration toutes les 6 h
 EXPIRY_CHECK_EVERY = 6 * 3600
-DEFAULT_EVENTS = {"expiry": True, "provider": True, "tunnel": True, "security": True}
+DEFAULT_EVENTS = {
+    "expiry": True, "provider": True, "tunnel": True, "security": True,
+    "unstable": True, "weekly": False,
+}
 
 
 class AlertError(Exception):
@@ -414,7 +417,79 @@ class AlertManager:
             )
         return False
 
-    def start_watchdog(self, api, tunnel_mgr=None, *, initial_delay: float = 120) -> None:
+    def build_weekly_summary(self, api, streams=None) -> str:
+        """Construit un récapitulatif lisible des 7 derniers jours (temps, top chaînes, bascules, expirations)."""
+        now = time.time()
+        entries = streams.history() if streams is not None else []
+        recent = [h for h in entries if now - h.get("started_at", 0) <= 7 * 86400]
+        total_sec = sum(int(h.get("seconds", 0) or 0) for h in recent)
+        total_switches = sum(int(h.get("switches", 0) or 0) for h in recent)
+
+        def fmt_dur(sec: int) -> str:
+            h, rem = divmod(max(0, sec), 3600)
+            m = rem // 60
+            return f"{h} h {m:02d}" if h else f"{m} min"
+
+        lines = [f"📊 Récapitulatif Xtream M3U Local (7 derniers jours)"]
+        lines.append(f"• {len(recent)} lecture(s) · {fmt_dur(total_sec)} cumulées · {total_switches} bascule(s)")
+
+        by_dev: dict[str, int] = {}
+        by_ch: dict[str, int] = {}
+        unstable: dict[str, int] = {}
+        for h in recent:
+            dev = str(h.get("device") or "").strip() or (f"IP {h.get('client')}" if h.get("client") else "Sans code")
+            secs = int(h.get("seconds", 0) or 0)
+            by_dev[dev] = by_dev.get(dev, 0) + secs
+            lbl = h.get("label") or h.get("item_id") or "?"
+            if secs >= 20:
+                by_ch[lbl] = by_ch.get(lbl, 0) + secs
+            if h.get("switches"):
+                unstable[lbl] = unstable.get(lbl, 0) + int(h["switches"])
+
+        if by_dev:
+            top_devs = sorted(by_dev.items(), key=lambda kv: -kv[1])[:4]
+            lines.append("👤 Par personne : " + " · ".join(f"{k} ({fmt_dur(v)})" for k, v in top_devs))
+        if by_ch:
+            top_chs = sorted(by_ch.items(), key=lambda kv: -kv[1])[:3]
+            lines.append("📺 Top chaînes : " + " · ".join(f"{k} ({fmt_dur(v)})" for k, v in top_chs))
+        if unstable:
+            top_un = sorted(unstable.items(), key=lambda kv: -kv[1])[:3]
+            lines.append("🔁 Plus de bascules : " + " · ".join(f"{k} ({v})" for k, v in top_un))
+
+        if api is not None:
+            try:
+                accounts_fn = getattr(api, "accounts", None)
+                rows = accounts_fn() if accounts_fn is not None else [{"index": 1, "name": "Abonnement 1", "account": api.account()}]
+                exp_bits = []
+                for r in rows:
+                    raw_exp = (r.get("account") or {}).get("exp_date")
+                    try:
+                        exp = int(str(raw_exp))
+                    except (TypeError, ValueError):
+                        continue
+                    if exp > 0:
+                        days_left = int((exp - now) / 86400)
+                        name = r.get("name") or f"Abo {r.get('index', 1)}"
+                        exp_bits.append(f"{name} ({'expiré' if days_left <= 0 else f'J-{days_left}'})")
+                if exp_bits:
+                    lines.append("🔑 Abonnements : " + " · ".join(exp_bits))
+            except Exception:
+                pass
+        return "\n".join(lines)
+
+    def send_weekly_summary(self, api, streams=None) -> dict:
+        self.send_message(self.build_weekly_summary(api, streams))
+        return self.status()
+
+    def check_weekly(self, api, streams=None) -> bool:
+        """Envoie le récapitulatif hebdomadaire le dimanche à partir de 20 h (une seule fois par semaine)."""
+        lt = time.localtime()
+        if lt.tm_wday != 6 or lt.tm_hour < 20:
+            return False
+        week_key = f"weekly:{time.strftime('%G-W%V', lt)}"
+        return self.notify("weekly", week_key, self.build_weekly_summary(api, streams), cooldown=0, persist=True)
+
+    def start_watchdog(self, api, tunnel_mgr=None, streams=None, *, initial_delay: float = 120) -> None:
         def _loop() -> None:
             if self._stop.wait(initial_delay):
                 return
@@ -424,6 +499,7 @@ class AlertManager:
                         self._last_expiry_check = time.monotonic()
                         self.check_expiries(api)
                     self.check_tunnel(tunnel_mgr)
+                    self.check_weekly(api, streams)
                 except Exception as exc:  # ne doit jamais interrompre le serveur
                     LOG.debug("Surveillance alertes ignorée : %s", exc)
                 self._stop.wait(WATCHDOG_INTERVAL)

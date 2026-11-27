@@ -135,6 +135,20 @@ class XtreamEmulator:
             return []
         return next((list(item.get("alternates") or []) for item, _ in entries if item["stream_id"] == item_id), [])
 
+    def stream_plan(self, device: dict, item_id: str) -> tuple[list[str], bool]:
+        """Ordre de lecture d'une chaîne (version épinglée en tête + secours) et option adaptive_failover."""
+        try:
+            entries, _, saved = self.entries(device, "live")
+        except Exception:
+            return [item_id], False
+        item = next((it for it, _ in entries if it["stream_id"] == item_id), None)
+        if item is None:
+            return [item_id], False
+        primary = item.get("pinned_stream") or item_id
+        alts = list(item.get("alternates") or []) if saved.get("failover") else []
+        ordered = list(dict.fromkeys([primary, *alts]))
+        return ordered, bool(saved.get("adaptive_failover"))
+
     # --------------------------------------------------------------- réponses
     def categories(self, device: dict, kind: str) -> list[dict]:
         entries, groups, saved = self.entries(device, kind)

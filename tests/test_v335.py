@@ -536,5 +536,110 @@ class TelegramAlertsTests(unittest.TestCase):
         self.assertEqual(self.mgr.secrets(), [])
 
 
+class HistoryFilterTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.data = Path(self.tmp.name)
+        self.xtream = ThreadingHTTPServer(("127.0.0.1", 0), FakeXtream)
+        threading.Thread(target=self.xtream.serve_forever, daemon=True).start()
+        self.settings_obj = settings.Settings(str(self.data))
+        settings.install(self.settings_obj)
+
+        now = int(time.time())
+        # Simule un historique mixte (dont des entrées anciennes sans champ "profile")
+        seed = [
+            {"started_at": now - 3600, "seconds": 3600, "kind": "live", "item_id": "10", "label": "beIN SPORTS 3",
+             "device": "TV Salon", "client": "192.168.0.10", "switches": 2, "bytes": 100, "provider": "1"},
+            {"started_at": now - 2400, "seconds": 1800, "kind": "live", "item_id": "11", "label": "TF1 HD",
+             "device": "TV Salon", "client": "192.168.0.10", "switches": 5, "bytes": 100, "provider": "2", "profile": "1"},
+            {"started_at": now - 1200, "seconds": 2700, "kind": "live", "item_id": "12", "label": "Al Maghribia",
+             "device": "TV Ma soeur", "client": "192.168.0.22", "switches": 0, "bytes": 100, "provider": "2", "profile": "2"},
+            {"started_at": now - 600, "seconds": 600, "kind": "live", "item_id": "12", "label": "Al Maghribia",
+             "device": "TV Ma soeur", "client": "192.168.0.22", "switches": 0, "bytes": 100, "provider": "2", "profile": "2"},
+            {"started_at": now - 300, "seconds": 900, "kind": "live", "item_id": "13", "label": "France 24",
+             "device": "", "client": "192.168.0.45", "switches": 1, "bytes": 100, "provider": "1"},
+        ]
+        (self.data / "history.json").write_text(json.dumps(seed), encoding="utf-8")
+
+        self.cfg = Config(
+            xtream_url=f"http://127.0.0.1:{self.xtream.server_address[1]}",
+            username=USERNAME, password=PASSWORD,
+            provider_name="Moi",
+            data_dir=str(self.data), epg_startup_quiet=0, port=0, web_port=0,
+        )
+        self.api = make_api(self.cfg)
+        self.holder = ApiHolder(self.api)
+        self.epg = make_epg(self.cfg, self.holder)
+        self.playlists = PlaylistStore(str(self.data))
+        self.devices = DeviceStore(str(self.data))
+        self.streams = make_streams(self.cfg, self.holder)
+        self.web = make_web_server(
+            self.cfg, self.holder, self.playlists, host="127.0.0.1", port=0,
+            epg=self.epg, streams=self.streams, devices=self.devices,
+        )
+        threading.Thread(target=self.web.serve_forever, daemon=True).start()
+        self.web_url = f"http://127.0.0.1:{self.web.server_address[1]}"
+
+    def tearDown(self):
+        settings.install(None)
+        self.web.shutdown()
+        self.web.server_close()
+        self.xtream.shutdown()
+        self.xtream.server_close()
+        self.tmp.cleanup()
+
+    def _get(self, path: str) -> dict:
+        with urlopen(f"{self.web_url}{path}", timeout=5) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+
+    def test_breakdown_filtering_sorting_and_scoped_clear(self):
+        # 1. Vue globale : répartitions par abonnement ET par personne/appareil
+        all_data = self._get("/api/history?provider=all")
+        self.assertEqual(all_data["total"], 5)
+        prov_ids = {p["id"]: p for p in all_data["by_provider"]}
+        self.assertEqual(set(prov_ids), {"1", "2"})
+        self.assertEqual(prov_ids["1"]["name"], "Moi")
+        self.assertEqual(prov_ids["2"]["sessions"], 3)
+
+        dev_ids = {d["id"]: d for d in all_data["by_device"]}
+        self.assertIn("TV Salon", dev_ids)
+        self.assertIn("TV Ma soeur", dev_ids)
+        self.assertIn("ip:192.168.0.45", dev_ids)
+        self.assertEqual(dev_ids["ip:192.168.0.45"]["label"], "Sans code (192.168.0.45)")
+
+        # Détection du drapeau secours (profile=1 sur provider=2)
+        tf1 = next(e for e in all_data["entries"] if e["label"] == "TF1 HD")
+        self.assertTrue(tf1["backup"])
+
+        # 2. Filtre par personne (« TV Ma soeur »)
+        sis = self._get("/api/history?provider=all&device=TV+Ma+soeur")
+        self.assertEqual(sis["total"], 2)
+        self.assertEqual([t["label"] for t in sis["top"]], ["Al Maghribia"])
+        self.assertEqual(sis["top"][0]["count"], 2)
+        self.assertEqual(sis["unstable"], [])
+
+        # 3. Filtre combiné abonnement 2 + TV Salon
+        combo = self._get("/api/history?provider=2&device=TV+Salon")
+        self.assertEqual(combo["total"], 1)
+        self.assertEqual(combo["top"][0]["label"], "TF1 HD")
+
+        # 4. Tri par nombre de lectures
+        by_count = self._get("/api/history?provider=all&sort=count")
+        self.assertEqual(by_count["top"][0]["label"], "Al Maghribia")
+
+        # 5. Effacement ciblé par personne : ne supprime que « TV Salon »
+        req = Request(
+            f"{self.web_url}/api/history/clear?provider=all&device=TV+Salon",
+            data=b"{}", method="POST",
+            headers={"X-Requested-With": "XtreamM3ULocal", "Content-Type": "application/json"},
+        )
+        with urlopen(req, timeout=5) as resp:
+            self.assertEqual(resp.status, 200)
+        after = self._get("/api/history?provider=all")
+        self.assertEqual(after["total"], 3)
+        self.assertNotIn("TV Salon", {d["id"] for d in after["by_device"]})
+        self.assertIn("TV Ma soeur", {d["id"] for d in after["by_device"]})
+
+
 if __name__ == "__main__":
     unittest.main()

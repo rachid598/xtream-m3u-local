@@ -11,7 +11,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
-from . import __version__, access, alerts, logos, provider_store, settings, tunnel
+from . import __version__, access, alerts, logos, provider_store, qrcode_svg, settings, tunnel
 from .httputil import encode_body
 from .custom import InvalidPlaylist, PlaylistStore, validate_playlist
 from .epg import EpgCache
@@ -40,6 +40,7 @@ STATIC_FILES = {
 SLUG_API = re.compile(r"^/api/playlists/([a-z0-9][a-z0-9_-]{0,59})$")
 SERIES_API = re.compile(r"^/api/series/([0-9]{1,12})$")
 DEVICE_API = re.compile(r"^/api/devices/([A-Za-z0-9_-]{1,16})$")
+DEVICE_QR_API = re.compile(r"^/api/devices/([A-Za-z0-9_-]{1,16})/qr$")
 STREAM_STOP_API = re.compile(r"^/api/streams/([0-9]{1,9})/stop$")
 PROVIDER_API = re.compile(r"^/api/providers/([2-9])$")
 MIX_API = re.compile(r"^/api/providers/([1-9])/mix$")
@@ -201,6 +202,10 @@ class WebHandler(BaseHTTPRequestHandler):
             return self.json(200, self.catalog_summary(refresh=refresh, profile=profile))
         if path == "/api/catalog/export":
             return self.export_catalog(refresh=refresh, kind=kind, profile=profile)
+        if path == "/api/catalog/channels-export":
+            fmt = qs.get("format", ["csv"])[0].strip().lower()
+            export_kind = qs.get("kind", ["live"])[0].strip().lower()
+            return self.export_all_channels(fmt=fmt, kind=export_kind, refresh=refresh)
         if path == "/api/catalog":
             try:
                 items, categories = self.api.catalog(refresh=refresh, kind=kind)
@@ -210,12 +215,26 @@ class WebHandler(BaseHTTPRequestHandler):
         if path == "/api/streams":
             return self.json(200, self.streams_status(profile))
         if path == "/api/history":
-            entries = self.streams.history() if self.streams is not None else []
-            if profile:  # profil : seulement les lectures de son abonnement (anciennes entrées : profil 1)
-                entries = [e for e in entries if str(e.get("provider") or "1") == profile]
-            return self.json(200, history_payload(entries))
+            all_entries = self.streams.history() if self.streams is not None else []
+            prov_param = qs.get("provider", [""])[0].strip()
+            dev_param = qs.get("device", [""])[0].strip()
+            sort_param = qs.get("sort", ["seconds"])[0].strip()
+            # Rétrocompatibilité : sans ?provider=, ?profile= filtre cet abonnement ; ?provider=all affiche tout.
+            active_prov = "" if prov_param == "all" else (prov_param if prov_param.isdigit() else (profile if not prov_param else ""))
+            entries = all_entries
+            if active_prov:
+                entries = [e for e in entries if str(e.get("provider") or "1") == active_prov]
+            if dev_param:
+                entries = [e for e in entries if _history_device_key(e) == dev_param]
+            provider_names = {s["id"]: s["name"] for s in sources(self.api, self.config)}
+            return self.json(200, history_payload(
+                entries, all_history=all_entries, provider_names=provider_names, sort=sort_param,
+            ))
         if path == "/api/devices":
             return self.devices_status()
+        dev_qr = DEVICE_QR_API.fullmatch(path)
+        if dev_qr:
+            return self.device_qr(dev_qr.group(1), qs)
         if path == "/api/providers":
             return self.json(200, self.providers_status())
         if path == "/api/settings":
@@ -585,13 +604,52 @@ class WebHandler(BaseHTTPRequestHandler):
                     body.get("priority", "normal"), body.get("ip", ""), body.get("links", "lan"),
                     body.get("profile", ""),
                 ))
-            return self.json(200, self.devices.update(device_id, body))
+            updated = self.devices.update(device_id, body)
+            if updated.get("paused") and self.streams is not None:
+                self.streams.stop_device(device_id)
+            return self.json(200, updated)
         except KeyError:
             return self.json(404, {"error": "Appareil introuvable"})
         except InvalidDevice as exc:
             return self.json(400, {"error": str(exc)})
         except RuntimeError as exc:
             return self.json(500, {"error": str(exc)})
+
+    def device_qr(self, device_id: str, qs: dict) -> None:
+        """Génère un QR code SVG local pour configurer rapidement un appareil (URL M3U ou serveur Xtream)."""
+        if self.devices is None:
+            return self.json(404, {"error": "Gestion des appareils indisponible"})
+        try:
+            dev = next((d for d in self.devices.list() if d["id"] == device_id), None)
+        except RuntimeError:
+            return self.json(500, {"error": "devices.json illisible"})
+        if dev is None:
+            return self.json(404, {"error": "Appareil introuvable"})
+        raw_url = (qs.get("url") or [""])[0].strip()
+        if not raw_url or not raw_url.startswith(("http://", "https://")) or len(raw_url) > 106:
+            # Construire l'URL M3U ou serveur Xtream local si non fournie / trop longue pour le QR
+            host = (self.headers.get("Host") or "127.0.0.1").split(":")[0]
+            base = f"http://{host}:{self.config.port}"
+            links = dev.get("links") or "lan"
+            if isinstance(links, str) and links.startswith("https://"):
+                base = links.rstrip("/")
+            elif links == "external":
+                t = tunnel.current()
+                t_host = (t.status().get("hostname") if t is not None else "") or ""
+                if t_host:
+                    base = f"https://{t_host}"
+            mode = (qs.get("mode") or ["m3u"])[0]
+            if mode == "xtream":
+                raw_url = base
+            else:
+                slug = dev.get("playlist") or ""
+                path_part = f"/p/{slug}.m3u" if slug else "/playlist.m3u"
+                raw_url = f"{base}{path_part}?token={dev['password']}"
+        try:
+            svg = qrcode_svg.qr_svg(raw_url)
+        except ValueError:
+            return self.json(400, {"error": "Adresse trop longue pour un QR code (106 caractères max)"})
+        return self.json(200, {"url": raw_url, "qr_svg": svg, "device": dev["name"]})
 
     # -------------------------------------------------- sauvegarde et diagnostic
     def backup(self) -> None:
@@ -659,7 +717,8 @@ class WebHandler(BaseHTTPRequestHandler):
             streams = [s for s in streams if str(s.get("provider")) == profile]
         return {"limit": self.streams.limit(profile or "1"), "auto": self.config.max_connections < 0,
                 "takeover": self.streams.takeover, "streams": streams,
-                "reservation": settings.reservations().get(profile or "1")}
+                "reservation": settings.reservations().get(profile or "1"),
+                "health_quarantined": self.streams.health.snapshot() if hasattr(self.streams, "health") else {}}
 
     def catalog_summary(self, *, refresh: bool, profile: str = "") -> dict:
         """Nombre d'éléments et de catégories par type (léger : ne renvoie pas les listes)."""
@@ -712,6 +771,103 @@ class WebHandler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Content-Disposition", f'attachment; filename="catalogue-xtream-{kind}-{stamp}.json"')
+        self.end_headers()
+        if self.command != "HEAD":
+            self.wfile.write(data)
+
+    def export_all_channels(self, *, fmt: str = "csv", kind: str = "live", refresh: bool = False) -> None:
+        """Exporte tous les noms bruts de chaînes de tous les abonnements avec leur provenance (1, 2, 3…).
+
+        Aucun identifiant, mot de passe ni URL fournisseur n'est inclus : sert aux rapprochements et regex.
+        """
+        import csv
+        import io
+        from .builder import clean_channel_name
+
+        if fmt not in ("csv", "json", "txt"):
+            return self.json(400, {"error": "format doit valoir csv, json ou txt"})
+        kinds = ("live", "vod", "series") if kind == "all" else (kind,)
+        if any(k not in KINDS for k in kinds):
+            return self.json(400, {"error": "kind doit valoir live, vod, series ou all"})
+
+        prov_names = {s["id"]: s["name"] for s in sources(self.api, self.config)}
+        rows: list[dict] = []
+        counts_by_provider: dict[str, int] = {}
+        for k in kinds:
+            try:
+                items, categories = self.api.catalog(refresh=refresh, kind=k)
+            except UpstreamError as exc:
+                if len(kinds) == 1:
+                    return self.json(502, {"error": str(exc)})
+                continue
+            for item in items:
+                sid = str(item.get("stream_id") or "")
+                pid = str(item.get("provider") or self.api.provider_of(sid) or "1")
+                pname = prov_names.get(pid) or f"Abonnement {pid}"
+                cat_id = str(item.get("category_id") or "")
+                cat_name = categories.get(cat_id) or ("Sans catégorie" if cat_id == "none" else cat_id)
+                raw_name = str(item.get("name") or "")
+                rows.append({
+                    "provider_index": int(pid) if pid.isdigit() else pid,
+                    "provider_name": pname,
+                    "kind": k,
+                    "category": cat_name,
+                    "name": raw_name,
+                    "clean_name": clean_channel_name(raw_name) if k == "live" else raw_name,
+                    "epg_id": str(item.get("epg_id") or ""),
+                    "stream_id": sid,
+                })
+                counts_by_provider[pid] = counts_by_provider.get(pid, 0) + 1
+
+        rows.sort(key=lambda r: (
+            int(r["provider_index"]) if isinstance(r["provider_index"], int) else 99,
+            r["kind"], r["category"].lower(), r["name"].lower(),
+        ))
+        stamp = time.strftime("%Y%m%d-%H%M%S", time.localtime(time.time()))
+        if fmt == "json":
+            prov_summary = [
+                {"index": int(pid) if pid.isdigit() else pid, "name": prov_names.get(pid) or f"Abonnement {pid}", "count": cnt}
+                for pid, cnt in sorted(counts_by_provider.items(), key=lambda kv: int(kv[0]) if kv[0].isdigit() else 99)
+            ]
+            doc = {
+                "generator": f"Xtream M3U Local {__version__}",
+                "exported_at": int(time.time()),
+                "kind": kind,
+                "total": len(rows),
+                "providers": prov_summary,
+                "channels": rows,
+            }
+            data = json.dumps(doc, ensure_ascii=False, indent=1).encode("utf-8")
+            ctype = "application/json; charset=utf-8"
+            ext = "json"
+        elif fmt == "txt":
+            lines = [
+                f"# Xtream M3U Local {__version__} — Export brut multi-abonnements ({len(rows)} entrées)",
+                "# Format : [Compte N - Nom] Catégorie :: Nom brut  (-> Nom nettoyé)",
+            ]
+            for r in rows:
+                suffix = f"  (-> {r['clean_name']})" if r["clean_name"] and r["clean_name"] != r["name"] else ""
+                lines.append(f"[{r['provider_index']} - {r['provider_name']}] {r['category']} :: {r['name']}{suffix}")
+            data = ("\n".join(lines) + "\n").encode("utf-8")
+            ctype = "text/plain; charset=utf-8"
+            ext = "txt"
+        else:
+            buf = io.StringIO()
+            writer = csv.writer(buf)
+            writer.writerow(["provider_index", "provider_name", "kind", "category", "name", "clean_name", "epg_id", "stream_id"])
+            for r in rows:
+                writer.writerow([r["provider_index"], r["provider_name"], r["kind"], r["category"],
+                                 r["name"], r["clean_name"], r["epg_id"], r["stream_id"]])
+            data = ("\ufeff" + buf.getvalue()).encode("utf-8")
+            ctype = "text/csv; charset=utf-8"
+            ext = "csv"
+
+        self.send_response(200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Content-Disposition", f'attachment; filename="chaines-tous-abonnements-{kind}-{stamp}.{ext}"')
         self.end_headers()
         if self.command != "HEAD":
             self.wfile.write(data)
@@ -864,12 +1020,30 @@ class WebHandler(BaseHTTPRequestHandler):
             return self.tunnel_action(path.rsplit("/", 1)[-1])
         if path.startswith("/api/alerts/"):
             return self.alerts_action(path.rsplit("/", 1)[-1])
+        if path == "/api/channels/probe":
+            return self.probe_channels()
+        if path == "/api/streams/health/reset":
+            body = self.read_payload()
+            if body is None:
+                return
+            if self.streams is not None and hasattr(self.streams, "health"):
+                sid = str(body.get("stream_id") or "").strip() or None
+                self.streams.health.reset(sid)
+            return self.json(200, {"reset": True, "health_quarantined": (
+                self.streams.health.snapshot() if self.streams is not None and hasattr(self.streams, "health") else {}
+            )})
         if path == "/api/history/clear":
             if not self.same_origin():
                 return
-            profile = parse_qs(urlsplit(self.path).query).get("profile", [""])[0]
+            q = parse_qs(urlsplit(self.path).query)
+            prov_param = q.get("provider", [""])[0].strip()
+            prof_param = q.get("profile", [""])[0].strip()
+            dev_param = q.get("device", [""])[0].strip()
+            target_prov = None if prov_param == "all" else (
+                prov_param if prov_param.isdigit() else (prof_param if prof_param.isdigit() else None)
+            )
             if self.streams is not None:
-                self.streams.clear_history(profile if profile.isdigit() else None)
+                self.streams.clear_history(target_prov, device=dev_param or None)
             return self.json(200, {"cleared": True})
         stop = STREAM_STOP_API.fullmatch(path)
         if stop:
@@ -1065,6 +1239,8 @@ class WebHandler(BaseHTTPRequestHandler):
                     body.get("bot_token", ""), body.get("chat_id", ""))})
             if action == "test":
                 return self.json(200, {"available": True, **mgr.send_test()})
+            if action == "weekly":
+                return self.json(200, {"available": True, **mgr.send_weekly_summary(self.api, self.streams)})
             if action == "disconnect":
                 return self.json(200, {"available": True, **mgr.disconnect()})
             return self.json(404, {"error": "Action inconnue"})
@@ -1072,6 +1248,77 @@ class WebHandler(BaseHTTPRequestHandler):
             return self.json(400, {"error": str(exc)})
         except OSError:
             return self.json(500, {"error": "Impossible d'enregistrer /data/alerts.json"})
+
+    def probe_channels(self) -> None:
+        """Teste séquentiellement jusqu'à 6 versions d'une chaîne (statut HTTP, latence, quarantaine)."""
+        from urllib.error import HTTPError, URLError
+        from urllib.request import Request, urlopen
+
+        body = self.read_payload()
+        if body is None:
+            return
+        raw_ids = body.get("stream_ids")
+        if not isinstance(raw_ids, list) or not raw_ids:
+            return self.json(400, {"error": "Liste de stream_ids attendue"})
+        ids = []
+        for raw in raw_ids:
+            sid = str(raw).strip()
+            if sid.isdigit() and len(sid) <= 15 and sid not in ids:
+                ids.append(sid)
+            if len(ids) >= 6:
+                break
+        if not ids:
+            return self.json(400, {"error": "Aucun identifiant de chaîne valide"})
+
+        prov_names = {s["id"]: s["name"] for s in sources(self.api, self.config)}
+        health = getattr(self.streams, "health", None)
+        lookup = getattr(self.api, "lookup", None)
+        results = []
+        for sid in ids:
+            item = lookup("live", sid) if lookup else None
+            pid = self.api.provider_of(sid)
+            try:
+                url = self.api.direct_stream(sid)
+            except ValueError:
+                results.append({
+                    "stream_id": sid,
+                    "name": (item or {}).get("name") or f"Flux #{sid}",
+                    "provider": pid,
+                    "provider_name": prov_names.get(pid) or f"Abonnement {pid}",
+                    "ok": False, "status": 0, "latency_ms": 0,
+                    "error": "Abonnement introuvable",
+                    "quarantined_for": health.quarantined_seconds(sid) if health is not None else 0,
+                })
+                continue
+            ua = self.api.user_agent_for_url(url) if hasattr(self.api, "user_agent_for_url") else self.config.user_agent
+            t0 = time.monotonic()
+            ok, status, err = False, 0, ""
+            try:
+                req = Request(url, headers={"User-Agent": ua}, method="GET")
+                with urlopen(req, timeout=4) as resp:
+                    status = int(getattr(resp, "status", 200) or 200)
+                    chunk = resp.read(512)
+                    ok = 200 <= status < 300 and len(chunk) > 0
+                    if not ok and 200 <= status < 300:
+                        err = "Flux vide"
+            except HTTPError as exc:
+                status = int(exc.code)
+                err = f"HTTP {status}"
+            except (URLError, TimeoutError, OSError) as exc:
+                err = "Injoignable / délai dépassé"
+            latency_ms = int((time.monotonic() - t0) * 1000)
+            results.append({
+                "stream_id": sid,
+                "name": (item or {}).get("name") or f"Flux #{sid}",
+                "provider": pid,
+                "provider_name": prov_names.get(pid) or f"Abonnement {pid}",
+                "ok": ok,
+                "status": status,
+                "latency_ms": latency_ms,
+                "error": err,
+                "quarantined_for": health.quarantined_seconds(sid) if health is not None else 0,
+            })
+        return self.json(200, {"results": results})
 
     def alerts_update(self) -> None:
         body = self.read_payload()
@@ -1410,29 +1657,151 @@ def catalog_payload(channels: list[dict], categories: dict[str, str], api: Xtrea
     }
 
 
-def history_payload(history: list[dict], *, days: int = 30, now: float | None = None) -> dict:
-    """Historique des lectures : 100 dernières, chaînes les plus regardées et chaînes qui basculent (30 jours).
+def _history_device_key(entry: dict) -> str:
+    dev = str(entry.get("device") or "").strip()
+    if dev:
+        return dev
+    client = str(entry.get("client") or "").strip()
+    return f"ip:{client}" if client else "unknown"
 
-    Les lectures de moins de 20 s (zapping) ne comptent pas dans le classement.
+
+def _history_device_label(entry: dict) -> str:
+    dev = str(entry.get("device") or "").strip()
+    if dev:
+        return dev
+    client = str(entry.get("client") or "").strip()
+    return f"Sans code ({client})" if client else "Appareil inconnu"
+
+
+def history_payload(history: list[dict], *, days: int = 30, now: float | None = None,
+                    all_history: list[dict] | None = None,
+                    provider_names: dict[str, str] | None = None,
+                    sort: str = "seconds") -> dict:
+    """Historique des lectures : 100 dernières, classements (30 j) et répartitions par abonnement / personne.
+
+    Les lectures de moins de 20 s (zapping) ne comptent pas dans le classement « Les plus regardées ».
     """
     now = now or time.time()
+    names = provider_names or {}
     recent = [h for h in history if now - h.get("started_at", 0) <= days * 86400]
+    scope = [h for h in (all_history if all_history is not None else history)
+             if now - h.get("started_at", 0) <= days * 86400]
+
+    def prov_label(pid: str) -> str:
+        return names.get(pid) or f"Abonnement {pid}"
+
+    # Répartitions globales (30 j) par abonnement et par personne / appareil
+    prov_agg: dict[str, dict] = {}
+    dev_agg: dict[str, dict] = {}
+    for h in scope:
+        pid = str(h.get("provider") or "1")
+        secs = int(h.get("seconds", 0) or 0)
+        sw = int(h.get("switches", 0) or 0)
+        lbl = h.get("label") or h.get("item_id") or "?"
+        started = int(h.get("started_at", 0) or 0)
+
+        p = prov_agg.setdefault(pid, {
+            "id": pid, "name": prov_label(pid), "sessions": 0, "seconds": 0,
+            "switches": 0, "last_at": 0, "_channels": {},
+        })
+        p["sessions"] += 1
+        p["seconds"] += secs
+        p["switches"] += sw
+        p["last_at"] = max(p["last_at"], started)
+        if secs >= 20:
+            p["_channels"][lbl] = p["_channels"].get(lbl, 0) + secs
+
+        dk = _history_device_key(h)
+        d = dev_agg.setdefault(dk, {
+            "id": dk, "label": _history_device_label(h), "sessions": 0, "seconds": 0,
+            "switches": 0, "last_at": 0, "_providers": set(), "_channels": {},
+        })
+        d["sessions"] += 1
+        d["seconds"] += secs
+        d["switches"] += sw
+        d["last_at"] = max(d["last_at"], started)
+        d["_providers"].add(pid)
+        if secs >= 20:
+            d["_channels"][lbl] = d["_channels"].get(lbl, 0) + secs
+
+    by_provider = []
+    for row in sorted(prov_agg.values(), key=lambda r: (-r["seconds"], -r["sessions"], r["id"])):
+        ch = row.pop("_channels")
+        row["top_label"] = max(ch.items(), key=lambda kv: kv[1])[0] if ch else ""
+        by_provider.append(row)
+
+    by_device = []
+    for row in sorted(dev_agg.values(), key=lambda r: (-r["seconds"], -r["sessions"], r["label"].lower())):
+        ch = row.pop("_channels")
+        provs = sorted(row.pop("_providers"), key=lambda x: int(x) if x.isdigit() else 99)
+        row["providers"] = [{"id": p, "name": prov_label(p)} for p in provs]
+        row["top_label"] = max(ch.items(), key=lambda kv: kv[1])[0] if ch else ""
+        by_device.append(row)
+
     top: dict[str, dict] = {}
     unstable: dict[str, dict] = {}
     for h in recent:
         label = h.get("label") or h.get("item_id") or "?"
+        pid = str(h.get("provider") or "1")
+        dlabel = _history_device_label(h)
+        started = int(h.get("started_at", 0) or 0)
         if h.get("seconds", 0) >= 20:
-            entry = top.setdefault(label, {"label": label, "kind": h.get("kind"), "count": 0, "seconds": 0})
+            entry = top.setdefault(label, {
+                "label": label, "kind": h.get("kind"), "count": 0, "seconds": 0,
+                "last_at": 0, "_providers": set(), "_devices": set(),
+            })
             entry["count"] += 1
             entry["seconds"] += h.get("seconds", 0)
+            entry["last_at"] = max(entry["last_at"], started)
+            entry["_providers"].add(pid)
+            entry["_devices"].add(dlabel)
         if h.get("switches"):
-            entry = unstable.setdefault(label, {"label": label, "count": 0, "switches": 0})
+            entry = unstable.setdefault(label, {
+                "label": label, "count": 0, "switches": 0,
+                "last_at": 0, "_providers": set(), "_devices": set(),
+            })
             entry["count"] += 1
             entry["switches"] += h["switches"]
+            entry["last_at"] = max(entry["last_at"], started)
+            entry["_providers"].add(pid)
+            entry["_devices"].add(dlabel)
+
+    def _finalize(rows: list[dict]) -> list[dict]:
+        out = []
+        for r in rows:
+            provs = sorted(r.pop("_providers"), key=lambda x: int(x) if x.isdigit() else 99)
+            devs = sorted(r.pop("_devices"), key=str.lower)
+            r["providers"] = [{"id": p, "name": prov_label(p)} for p in provs]
+            r["devices"] = devs
+            out.append(r)
+        return out
+
+    if sort == "count":
+        top_key = lambda e: (-e["count"], -e["seconds"], e["label"])
+    elif sort == "recent":
+        top_key = lambda e: (-e["last_at"], -e["seconds"], e["label"])
+    else:
+        top_key = lambda e: (-e["seconds"], -e["count"], e["label"])
+
+    enriched_entries = []
+    for h in history[:100]:
+        pid = str(h.get("provider") or "1")
+        prof = str(h.get("profile") or pid)
+        enriched_entries.append({
+            **h,
+            "provider": pid,
+            "provider_name": prov_label(pid),
+            "device_key": _history_device_key(h),
+            "device_label": _history_device_label(h),
+            "backup": bool(h.get("profile") and prof != pid),
+        })
+
     return {
-        "entries": history[:100],
-        "top": sorted(top.values(), key=lambda e: (-e["seconds"], e["label"]))[:15],
-        "unstable": sorted(unstable.values(), key=lambda e: (-e["switches"], e["label"]))[:15],
+        "entries": enriched_entries,
+        "top": _finalize(sorted(top.values(), key=top_key)[:15]),
+        "unstable": _finalize(sorted(unstable.values(), key=lambda e: (-e["switches"], -e["last_at"], e["label"]))[:15]),
+        "by_provider": by_provider,
+        "by_device": by_device,
         "total": len(recent),
     }
 

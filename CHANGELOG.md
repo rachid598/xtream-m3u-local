@@ -2,6 +2,29 @@
 
 Format inspiré de « Keep a Changelog ». Les versions suivent le versionnage sémantique.
 
+## [3.36.0] — 2026-11-27
+
+### Ajouté
+- **Nouvelle interface moderne, épurée et réorganisée** :
+  - **Barre de navigation latérale fixe** (`236 px` sur ordinateur, barre compacte sur mobile) avec badges de compteurs (*Mes playlists*, *Appareils*), bouton de bascule **Thème Sombre / Clair** (`☀ / ☾`) mémorisé localement, et *Catalogue brut* rangé discrètement dans la section *Système*.
+  - **Nouvelle page d'accueil « Tableau de bord »** (`#tableau-de-bord`, ouverte automatiquement dès qu'une playlist existe) : 4 tuiles KPI en temps réel (*En direct*, *Abonnements*, *Appareils*, *Alertes Telegram*), *Lectures en cours*, *Abonnement actif*, et *Historique des lectures (30 jours)*.
+  - **Formulaires repliables** (`+ Ajouter un appareil`, `+ Ajouter un abonnement`) pour garder les listes lisibles et aérées, et onglet **Réglages** réorganisé avec *Abonnements & Espaces* et *Alertes* en tête.
+- **Historique des lectures (30 jours) filtrable et triable par abonnement et par personne / appareil** :
+  - Filtres **Abonnement**, **Personne / Appareil** et **Trier par** (*Temps de visionnage*, *Nombre de lectures*, *Plus récentes*), synthèse cliquable **Par abonnement** et **Par personne / appareil**, étiquettes discrètes (`👤`, `🔑`, `🛡️ Secours`), bouton rapide **`🧪`** sur les chaînes à bascules, et effacement ciblé respectant le filtre actif.
+- **Pause en 1 clic & QR code local par appareil** (**Appareils**) :
+  - Bouton **`⏸️ Pause` / `▶ Reprendre`** sur chaque appareil : suspend immédiatement son accès (HTTP `403` sur M3U et Xtream) et coupe instantanément sa lecture en cours sans supprimer ni changer son mot de passe.
+  - Bouton **`📱 QR`** : affiche un QR code SVG généré 100 % localement pour scanner l'URL M3U ou l'adresse serveur Xtream sur téléphone / TV.
+- **Test comparatif des versions d'une chaîne & version préférée épinglée** (**Mes playlists → Chaînes** et **Tableau de bord**) :
+  - Bouton **`🧪`** (`POST /api/channels/probe`) : teste séquentiellement jusqu'à 6 versions d'une chaîne (statut HTTP, latence en ms, abonnement source, éventuelle quarantaine).
+  - Bouton **`📌 Épingler n° 1`** (`item_pinned`) : force ta version préférée en tête sans changer l'identifiant canonique (l'EPG, les favoris et TiviMate restent intacts).
+- **Fiabilité adaptative temporaire (en option)** (`adaptive_failover`, sous **Options → Bascule automatique**) :
+  - Met temporairement de côté (**30 min à 2 h max**) une version qui décroche plusieurs fois de suite, puis **revient automatiquement sur la HD** dès la fin de la quarantaine (jamais bloqué sur une version basse qualité). Bouton **↺ Réinitialiser la stabilité** (`POST /api/streams/health/reset`) disponible en 1 clic.
+- **Alertes Telegram enrichies** (**Réglages → 🔔 Alertes**) :
+  - Alerte **Chaîne instable** (si une chaîne bascule 5 fois ou plus pendant une lecture).
+  - **Récapitulatif hebdomadaire** automatique chaque dimanche à 20 h (temps cumulé, répartition par personne, top chaînes, bascules et expirations) + bouton **`📊 Récap 7 j`** (`POST /api/alerts/weekly`) pour l'envoyer immédiatement à la demande.
+- **Export brut des noms de chaînes de tous les abonnements** (**Réglages → 💾 Sauvegarde & Exports**, `GET /api/catalog/channels-export`) :
+  - Exporte en **CSV** (UTF-8 Excel/Python), **JSON** ou **TXT** toutes les chaînes de tous les abonnements configurés (compte 1, 2, 3…) avec `provider_index`, `provider_name`, `category`, `name` brut, `clean_name` (Mode Décodeur), `epg_id` et `stream_id` — sans aucun identifiant, mot de passe ni URL privée. Idéal pour faire des rapprochements et affiner des regex de tri.
+
 ## [3.35.0] — 2026-11-27
 
 ### Ajouté

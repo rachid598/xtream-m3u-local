@@ -157,6 +157,22 @@ def _item_epg(value: object) -> dict[str, str]:
     return result
 
 
+def _item_pinned(value: object) -> dict[str, str]:
+    """Version préférée épinglée ``{id_canonique: id_version_préférée}``."""
+    if value is None:
+        return {}
+    if not isinstance(value, dict) or len(value) > MAX_ITEMS_CUSTOM:
+        raise InvalidPlaylist("Versions épinglées : objet attendu")
+    result = {}
+    for key, target in value.items():
+        target = str(target).strip() if isinstance(target, (str, int)) and not isinstance(target, bool) else ""
+        if not isinstance(key, str) or not key.isdigit() or len(key) > 15 or not target.isdigit() or len(target) > 15:
+            raise InvalidPlaylist("Version épinglée : identifiants de chaînes attendus")
+        if target != key:
+            result[key] = target
+    return result
+
+
 def _item_numbers(value: object) -> dict[str, int]:
     """Numéros de chaînes ``{id_du_direct: numéro}`` (1 à 99 999) ; servent aussi à l'ordre."""
     if value is None:
@@ -283,6 +299,7 @@ def validate_playlist(payload: object, *, slug: str | None = None) -> dict:
     result["hide_adult"] = bool(payload.get("hide_adult", False))
     result["clean_names"] = bool(payload.get("clean_names", False))
     result["failover"] = bool(payload.get("failover", False))
+    result["adaptive_failover"] = bool(payload.get("adaptive_failover", False))
     result["hq_logos"] = bool(payload.get("hq_logos", True))
     # Profil = abonnement (1 = XTREAM_URL, 2 = XTREAM_URL_2…) : la playlist n'utilise que ce fournisseur.
     # Vide = tous les abonnements mélangés (playlists d'avant les profils, secours d'un abonnement à l'autre).
@@ -308,6 +325,7 @@ def validate_playlist(payload: object, *, slug: str | None = None) -> dict:
     result["item_logos"] = _item_logos(payload.get("item_logos"))
     result["item_epg"] = _item_epg(payload.get("item_epg"))
     result["item_xmltv"] = _item_xmltv(payload.get("item_xmltv"))
+    result["item_pinned"] = _item_pinned(payload.get("item_pinned"))
     result["custom_groups"] = _custom_groups(payload.get("custom_groups"))
     result["item_groups"] = _item_groups(payload.get("item_groups"), result["custom_groups"])
     favorites = _ids(payload.get("favorites"), pattern=ITEM_KEY_RE, label="favori")
