@@ -12,41 +12,152 @@
 <body>
 <a class="skip" href="#editor">Aller à l'éditeur</a>
 
-<header class="topbar">
-  <div class="brand">
-    <div class="logo" aria-hidden="true">TV</div>
-    <div class="brand-text">
-      <h1>Xtream M3U Local</h1>
-      <p class="subtitle">Passerelle IPTV locale &amp; multi-espaces</p>
+<div class="app-shell">
+<aside class="nav-rail" aria-label="Navigation principale">
+  <div class="rail-head">
+    <div class="brand">
+      <div class="logo" aria-hidden="true">TV</div>
+      <div class="brand-text">
+        <span class="brand-title">Xtream M3U</span>
+        <span class="brand-sub" id="rail-version">Passerelle locale</span>
+      </div>
+    </div>
+    <button type="button" class="icon-btn rail-theme" id="theme-toggle" title="Changer de thème (Sombre / Clair)" aria-label="Changer de thème">◐</button>
+  </div>
+
+  <div class="profile-bar" id="profile-bar" hidden>
+    <div class="profile-bar-inner">
+      <span class="rail-section-label">Espace actif</span>
+      <div class="views" id="profile-buttons" role="group" aria-label="Espace membre (profil)"></div>
+      <span class="hint" id="profile-hint" hidden>Espace isolé : playlists, appareils et lectures séparés.</span>
+      <button type="button" class="btn small ghost profile-manage" id="profile-manage">Gérer les espaces</button>
     </div>
   </div>
-  <nav class="views" aria-label="Vues">
-    <button type="button" class="view-btn" id="view-btn-playlists" aria-pressed="true">Mes playlists</button>
-    <button type="button" class="view-btn" id="view-btn-guide" aria-pressed="false">Guide TV</button>
-    <button type="button" class="view-btn" id="view-btn-catalog" aria-pressed="false">Catalogue<span class="hide-sm"> brut</span></button>
-    <button type="button" class="view-btn" id="view-btn-devices" aria-pressed="false">Appareils</button>
-    <button type="button" class="view-btn" id="view-btn-system" aria-pressed="false">Système</button>
+
+  <nav class="views rail-nav" aria-label="Vues">
+    <span class="rail-section-label">Principal</span>
+    <button type="button" class="view-btn" id="view-btn-dashboard" aria-pressed="false"><span class="nav-ico" aria-hidden="true">⌂</span><span class="nav-lbl">Tableau de bord</span></button>
+    <button type="button" class="view-btn" id="view-btn-playlists" aria-pressed="true"><span class="nav-ico" aria-hidden="true">▤</span><span class="nav-lbl">Mes playlists</span><span class="nav-badge" id="nav-badge-playlists" hidden></span></button>
+    <button type="button" class="view-btn" id="view-btn-guide" aria-pressed="false"><span class="nav-ico" aria-hidden="true">◷</span><span class="nav-lbl">Guide TV</span></button>
+    <button type="button" class="view-btn" id="view-btn-devices" aria-pressed="false"><span class="nav-ico" aria-hidden="true">◫</span><span class="nav-lbl">Appareils</span><span class="nav-badge" id="nav-badge-devices" hidden></span></button>
+    <span class="rail-section-label rail-sep">Système</span>
+    <button type="button" class="view-btn" id="view-btn-system" aria-pressed="false"><span class="nav-ico" aria-hidden="true">⚙</span><span class="nav-lbl">Réglages</span></button>
+    <button type="button" class="view-btn subtle-nav" id="view-btn-catalog" aria-pressed="false"><span class="nav-ico" aria-hidden="true">☵</span><span class="nav-lbl">Catalogue brut</span></button>
   </nav>
-  <div class="top-actions">
+
+  <div class="rail-footer">
     <span class="pill" id="connection" role="status" aria-live="polite"><span class="dot"></span><span id="connection-text">Connexion…</span></span>
     <span class="pill subtle" id="account" hidden></span>
-    <button type="button" class="pill pill-btn" id="streams-pill" hidden title="Lectures en cours (onglet Système)"><span class="dot live-dot"></span><span id="streams-pill-text"></span></button>
-    <button type="button" class="btn small" id="refresh" title="Recharger le catalogue depuis le fournisseur">
-      <span aria-hidden="true">↻</span> <span class="hide-sm">Actualiser</span>
+    <button type="button" class="pill pill-btn" id="streams-pill" hidden title="Lectures en cours"><span class="dot live-dot"></span><span id="streams-pill-text"></span></button>
+    <button type="button" class="btn small rail-refresh" id="refresh" title="Recharger le catalogue depuis le fournisseur">
+      <span aria-hidden="true">↻</span> <span>Actualiser</span>
     </button>
   </div>
-</header>
+</aside>
 
-<div class="profile-bar" id="profile-bar" hidden>
-  <div class="profile-bar-inner">
-    <span class="profile-label">Espace membre</span>
-    <div class="views" id="profile-buttons" role="group" aria-label="Espace membre (profil)"></div>
-    <span class="hint" id="profile-hint">Espace isolé : playlists, appareils et lectures séparés.</span>
-    <button type="button" class="btn small ghost profile-manage" id="profile-manage">Gérer les abonnements</button>
-  </div>
-</div>
-
+<div class="app-content">
 <div id="expiry-banner" class="banner" role="alert" hidden></div>
+
+<div class="layout single" id="view-dashboard" hidden>
+  <main class="main">
+    <header class="page-head">
+      <div>
+        <h1 class="page-title">Tableau de bord</h1>
+        <p class="muted small">Vue d'ensemble en temps réel : lectures actives, santé des abonnements et historique filtrable.</p>
+      </div>
+      <div class="btn-row">
+        <button type="button" class="btn small" id="dash-refresh">↻ Actualiser</button>
+        <button type="button" class="btn primary small" id="dash-new-playlist">+ Nouvelle playlist</button>
+      </div>
+    </header>
+
+    <div class="kpi-strip" id="dash-kpis">
+      <div class="kpi-tile">
+        <span class="kpi-label">En direct</span>
+        <strong class="kpi-value" id="kpi-streams">0</strong>
+        <span class="kpi-sub" id="kpi-streams-sub">Aucune lecture</span>
+      </div>
+      <button type="button" class="kpi-tile kpi-btn" id="kpi-providers-btn">
+        <span class="kpi-label">Abonnements</span>
+        <strong class="kpi-value" id="kpi-providers">1</strong>
+        <span class="kpi-sub" id="kpi-providers-sub">Vérification…</span>
+      </button>
+      <button type="button" class="kpi-tile kpi-btn" id="kpi-devices-btn">
+        <span class="kpi-label">Appareils</span>
+        <strong class="kpi-value" id="kpi-devices">0</strong>
+        <span class="kpi-sub" id="kpi-devices-sub">Aucun configuré</span>
+      </button>
+      <button type="button" class="kpi-tile kpi-btn" id="kpi-alerts-btn">
+        <span class="kpi-label">Alertes Telegram</span>
+        <strong class="kpi-value" id="kpi-alerts">—</strong>
+        <span class="kpi-sub" id="kpi-alerts-sub">Configurer</span>
+      </button>
+    </div>
+
+    <div class="sys-two-col">
+      <section class="card">
+        <div class="card-head">
+          <div>
+            <h2>Lectures en cours</h2>
+            <p class="muted small" id="streams-limit">Chargement…</p>
+          </div>
+          <button type="button" class="btn small" id="streams-refresh">↻ Actualiser</button>
+        </div>
+        <ul id="streams-list" class="stream-list"></ul>
+        <p class="hint">Deux écrans sur la même chaîne en direct partagent automatiquement une seule connexion fournisseur.</p>
+      </section>
+
+      <section class="card">
+        <div class="card-head"><h2>Abonnement actif</h2><span class="hint" id="sys-version"></span></div>
+        <dl class="facts" id="account-facts"><dt>État</dt><dd>Chargement…</dd></dl>
+      </section>
+    </div>
+
+    <section class="card" id="history-card">
+      <div class="card-head">
+        <div>
+          <h2>Historique des lectures (30 jours)</h2>
+          <p class="muted small" id="history-subtitle">Chaînes les plus suivies et bascules automatiques observées — filtre par abonnement ou par personne.</p>
+        </div>
+        <button type="button" class="btn small ghost" id="history-clear">Effacer</button>
+      </div>
+      <div class="history-filters" id="history-filters">
+        <div class="field">
+          <label for="history-provider">Abonnement</label>
+          <select id="history-provider"><option value="all">Tous les abonnements</option></select>
+        </div>
+        <div class="field">
+          <label for="history-device">Personne / Appareil</label>
+          <select id="history-device"><option value="">Tout le monde</option></select>
+        </div>
+        <div class="field">
+          <label for="history-sort">Trier par</label>
+          <select id="history-sort">
+            <option value="seconds">Temps de visionnage</option>
+            <option value="count">Nombre de lectures</option>
+            <option value="recent">Plus récentes</option>
+          </select>
+        </div>
+        <button type="button" class="btn small ghost" id="history-reset" hidden>Tout afficher</button>
+      </div>
+      <div class="history-breakdown" id="history-breakdown" hidden>
+        <div id="history-prov-box">
+          <h3>Par abonnement</h3>
+          <div class="history-chip-list" id="history-by-provider"></div>
+        </div>
+        <div id="history-dev-box">
+          <h3>Par personne / appareil</h3>
+          <div class="history-chip-list" id="history-by-device"></div>
+        </div>
+      </div>
+      <div class="summary-grid">
+        <div><h3>Les plus regardées</h3><ol id="history-top" class="sum-list"></ol></div>
+        <div><h3>Bascules automatiques</h3><ol id="history-unstable" class="sum-list"></ol></div>
+      </div>
+      <details class="epg-missing"><summary>Dernières sessions détaillées</summary><ul id="history-list" class="sum-list"></ul></details>
+    </section>
+  </main>
+</div>
 
 <div class="layout" id="view-playlists">
   <aside class="sidebar" aria-label="Playlists enregistrées">
@@ -362,6 +473,11 @@
               <label class="check-row"><input type="checkbox" id="opt-failover"> <span><strong>Bascule automatique</strong> en cas de coupure, gel ou saturation</span></label>
               <p class="hint" id="opt-failover-hint">Nécessite « Masquer les doublons » et le format MPEG-TS.</p>
               <label class="check-row sub-option"><input type="checkbox" id="opt-failover-any"> <span><strong>Secours étendu</strong> : chercher aussi des versions de repli dans les catégories non cochées</span></label>
+              <label class="check-row sub-option"><input type="checkbox" id="opt-adaptive-failover"> <span><strong>Fiabilité adaptative (quarantaine courte)</strong> : met temporairement de côté (30 min à 2 h max) une source qui décroche, puis revient automatiquement en HD</span></label>
+              <div class="sub-option health-bar" id="health-bar" hidden>
+                <span class="hint" id="health-status"></span>
+                <button type="button" class="btn small ghost" id="health-reset-btn">↺ Réinitialiser la stabilité</button>
+              </div>
             </div>
             <div class="option-row">
               <label class="check-row"><input type="checkbox" id="opt-catchup" checked> <span><strong>Replay (catch-up)</strong> sur les chaînes compatibles</span></label>
@@ -369,20 +485,20 @@
           </div>
 
           <div class="options-col">
-            <h3 class="options-group-title">Propreté &amp; filtrage</h3>
+            <h3 class="options-group-title">Affichage TV &amp; filtrage</h3>
+            <div class="option-row">
+              <label class="check-row"><input type="checkbox" id="opt-clean-names"> <span><strong>Mode Décodeur</strong> : noms de chaînes propres (retire FR:, AR:, ᴴᴰ, ᴿᴬᵂ, *LOCAL*, garde les accents)</span></label>
+              <p class="hint">Les renommages manuels (✎) restent toujours prioritaires.</p>
+            </div>
             <div class="option-row">
               <label class="check-row"><input type="checkbox" id="opt-hq-logos" checked> <span><strong>Logos haute qualité</strong> locaux en cache (iptv-org / tv-logos)</span></label>
               <p class="hint" id="opt-hq-logos-hint">Un logo personnalisé (✎) reste toujours prioritaire.</p>
             </div>
             <div class="option-row">
-              <label class="check-row"><input type="checkbox" id="opt-clean-names"> <span><strong>Nettoyer les noms de chaînes (Mode Décodeur)</strong> : retire préfixes pays (« FR: », « AR: », « VIP: »), symboles et tags qualité, et reprend les noms propres de « Mes groupes »</span></label>
-              <p class="hint">Les renommages manuels (✎) restent toujours prioritaires.</p>
-            </div>
-            <div class="option-row">
               <label class="check-row"><input type="checkbox" id="opt-separators"> <span><strong>Masquer les séparateurs</strong> (« ##### SPORT ##### », « NO EVENT STREAMING »…)</span></label>
             </div>
             <div class="option-row">
-              <label class="check-row"><input type="checkbox" id="opt-adult"> <span><strong>Masquer les contenus adultes (18+ / XXX)</strong> dans le direct, les films, les séries et les secours</span></label>
+              <label class="check-row"><input type="checkbox" id="opt-adult"> <span><strong>Masquer les contenus adultes (18+ / XXX)</strong> (direct, films, séries et secours)</span></label>
             </div>
             <div class="option-row">
               <label for="opt-fav-name">Nom du bouquet des favoris</label>
@@ -502,39 +618,42 @@
 
 <div class="layout single" id="view-devices" hidden>
   <main class="main">
-    <section class="card">
-      <div class="card-head">
-        <div>
-          <h2>Appareils</h2>
-          <p class="muted small">Crée un accès dédié par TV, boîtier ou téléphone (M3U, Xtream Codes ou tuner Plex/Jellyfin) limité à sa playlist.</p>
-        </div>
+    <header class="page-head">
+      <div>
+        <h1 class="page-title">Appareils</h1>
+        <p class="muted small">Un accès dédié par TV, boîtier ou téléphone (M3U, Xtream, QR code) avec mise en pause en 1 clic.</p>
       </div>
-      <form class="device-form" id="device-form">
-        <div class="field">
-          <label for="device-name">Nom de l'appareil</label>
-          <input id="device-name" type="text" maxlength="60" placeholder="Ex. TV du salon" autocomplete="off">
-        </div>
-        <div class="field">
-          <label for="device-playlist">Playlist associée</label>
-          <select id="device-playlist"></select>
-        </div>
-        <div class="field">
-          <label for="device-priority">Priorité</label>
-          <select id="device-priority">
-            <option value="normal">Normale</option>
-            <option value="high">Haute (jamais coupée)</option>
-            <option value="low">Basse (cède sa place)</option>
-          </select>
-        </div>
-        <div class="field">
-          <label for="device-links">Réseau</label>
-          <select id="device-links">
-            <option value="lan">Maison (réseau local)</option>
-            <option value="external">Externe (hors domicile)</option>
-          </select>
-        </div>
-        <button type="submit" class="btn primary">+ Ajouter</button>
-      </form>
+    </header>
+    <section class="card compact-card">
+      <details class="add-drawer" id="device-add-drawer" open>
+        <summary class="add-drawer-btn">+ Ajouter un appareil</summary>
+        <form class="device-form" id="device-form">
+          <div class="field">
+            <label for="device-name">Nom de l'appareil</label>
+            <input id="device-name" type="text" maxlength="60" placeholder="Ex. TV du salon" autocomplete="off">
+          </div>
+          <div class="field">
+            <label for="device-playlist">Playlist associée</label>
+            <select id="device-playlist"></select>
+          </div>
+          <div class="field">
+            <label for="device-priority">Priorité</label>
+            <select id="device-priority">
+              <option value="normal">Normale</option>
+              <option value="high">Haute (jamais coupée)</option>
+              <option value="low">Basse (cède sa place)</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="device-links">Réseau</label>
+            <select id="device-links">
+              <option value="lan">Maison (réseau local)</option>
+              <option value="external">Externe (hors domicile)</option>
+            </select>
+          </div>
+          <button type="submit" class="btn primary">+ Ajouter</button>
+        </form>
+      </details>
       <div class="device-guard-bar">
         <label class="check-row"><input type="checkbox" id="require-token"> <span><strong>Exiger un code d'appareil</strong> sur le réseau local (port 7777)</span></label>
         <span class="hint" id="require-token-hint"></span>
@@ -546,34 +665,21 @@
 
 <div class="layout single" id="view-system" hidden>
   <main class="main">
-    <nav class="section-nav sys-nav" role="tablist" aria-label="Rubriques système">
-      <button type="button" role="tab" id="sys-btn-overview" aria-controls="sys-overview" aria-selected="true"><span aria-hidden="true">📊</span> État &amp; Diagnostic</button>
-      <button type="button" role="tab" id="sys-btn-providers" aria-controls="sys-providers" aria-selected="false" tabindex="-1"><span aria-hidden="true">🔑</span> Abonnements &amp; Espaces</button>
-      <button type="button" role="tab" id="sys-btn-network" aria-controls="sys-network" aria-selected="false" tabindex="-1"><span aria-hidden="true">🌍</span> Accès &amp; Guides</button>
+    <header class="page-head">
+      <div>
+        <h1 class="page-title">Réglages</h1>
+        <p class="muted small">Abonnements, alertes Telegram, accès à distance, diagnostic et sauvegarde.</p>
+      </div>
+    </header>
+    <nav class="section-nav sys-nav" role="tablist" aria-label="Rubriques réglages">
+      <button type="button" role="tab" id="sys-btn-providers" aria-controls="sys-providers" aria-selected="true"><span aria-hidden="true">🔑</span> Abonnements &amp; Espaces</button>
       <button type="button" role="tab" id="sys-btn-alerts" aria-controls="sys-alerts" aria-selected="false" tabindex="-1"><span aria-hidden="true">🔔</span> Alertes</button>
-      <button type="button" role="tab" id="sys-btn-backup" aria-controls="sys-backup" aria-selected="false" tabindex="-1"><span aria-hidden="true">💾</span> Sauvegarde</button>
+      <button type="button" role="tab" id="sys-btn-network" aria-controls="sys-network" aria-selected="false" tabindex="-1"><span aria-hidden="true">🌍</span> Accès &amp; Guides</button>
+      <button type="button" role="tab" id="sys-btn-overview" aria-controls="sys-overview" aria-selected="false" tabindex="-1"><span aria-hidden="true">🩺</span> Diagnostic</button>
+      <button type="button" role="tab" id="sys-btn-backup" aria-controls="sys-backup" aria-selected="false" tabindex="-1"><span aria-hidden="true">💾</span> Sauvegarde &amp; Exports</button>
     </nav>
 
-    <div id="sys-overview" role="tabpanel" aria-labelledby="sys-btn-overview" class="sec-panel">
-      <div class="sys-two-col">
-        <section class="card">
-          <div class="card-head"><h2>Abonnement actif</h2><span class="hint" id="sys-version"></span></div>
-          <dl class="facts" id="account-facts"><dt>État</dt><dd>Chargement…</dd></dl>
-        </section>
-
-        <section class="card">
-          <div class="card-head">
-            <div>
-              <h2>Lectures en cours</h2>
-              <p class="muted small" id="streams-limit">Chargement…</p>
-            </div>
-            <button type="button" class="btn small" id="streams-refresh">↻ Actualiser</button>
-          </div>
-          <ul id="streams-list" class="stream-list"></ul>
-          <p class="hint">Deux écrans sur la même chaîne en direct partagent automatiquement une seule connexion fournisseur.</p>
-        </section>
-      </div>
-
+    <div id="sys-overview" role="tabpanel" aria-labelledby="sys-btn-overview" class="sec-panel" hidden>
       <section class="card">
         <div class="card-head">
           <div>
@@ -587,115 +693,74 @@
         </div>
         <ul id="diag-results" class="diag-list"></ul>
       </section>
-
-      <section class="card" id="history-card">
-        <div class="card-head">
-          <div>
-            <h2>Historique des lectures (30 jours)</h2>
-            <p class="muted small" id="history-subtitle">Chaînes les plus suivies et bascules automatiques observées — filtre par abonnement ou par personne.</p>
-          </div>
-          <button type="button" class="btn small ghost" id="history-clear">Effacer</button>
-        </div>
-        <div class="history-filters" id="history-filters">
-          <div class="field">
-            <label for="history-provider">Abonnement</label>
-            <select id="history-provider"><option value="all">Tous les abonnements</option></select>
-          </div>
-          <div class="field">
-            <label for="history-device">Personne / Appareil</label>
-            <select id="history-device"><option value="">Tout le monde</option></select>
-          </div>
-          <div class="field">
-            <label for="history-sort">Trier par</label>
-            <select id="history-sort">
-              <option value="seconds">Temps de visionnage</option>
-              <option value="count">Nombre de lectures</option>
-              <option value="recent">Plus récentes</option>
-            </select>
-          </div>
-          <button type="button" class="btn small ghost" id="history-reset" hidden>Tout afficher</button>
-        </div>
-        <div class="history-breakdown" id="history-breakdown" hidden>
-          <div id="history-prov-box">
-            <h3>Par abonnement</h3>
-            <div class="history-chip-list" id="history-by-provider"></div>
-          </div>
-          <div id="history-dev-box">
-            <h3>Par personne / appareil</h3>
-            <div class="history-chip-list" id="history-by-device"></div>
-          </div>
-        </div>
-        <div class="summary-grid">
-          <div><h3>Les plus regardées</h3><ol id="history-top" class="sum-list"></ol></div>
-          <div><h3>Bascules automatiques</h3><ol id="history-unstable" class="sum-list"></ol></div>
-        </div>
-        <details class="epg-missing"><summary>Dernières sessions détaillées</summary><ul id="history-list" class="sum-list"></ul></details>
-      </section>
     </div>
 
-    <div id="sys-providers" role="tabpanel" aria-labelledby="sys-btn-providers" class="sec-panel" hidden>
+    <div id="sys-providers" role="tabpanel" aria-labelledby="sys-btn-providers" class="sec-panel">
       <section class="card" id="providers-card">
         <div class="card-head">
           <div>
             <h2>Abonnements Xtream &amp; Rôles</h2>
-            <p class="muted small">Chaque abonnement supplémentaire peut créer un <strong>Espace membre séparé</strong> (barre du haut : famille, proche…) ou servir de <strong>Complément / secours</strong> discret pour enrichir tes playlists et absorber les limites de connexions.</p>
+            <p class="muted small">Crée un <strong>Espace membre séparé</strong> (famille, proche) ou un <strong>Complément / secours</strong> discret pour enrichir tes playlists et répartir les connexions.</p>
           </div>
         </div>
         <ul class="sum-list provider-list" id="providers-list"><li class="empty">Chargement…</li></ul>
-        <form class="provider-form" id="provider-form" autocomplete="off">
-          <div class="field">
-            <label for="provider-name">Nom affiché</label>
-            <input id="provider-name" type="text" maxlength="40" placeholder="Ex. Ma sœur ou Secours Sport" required>
-          </div>
-          <div class="field">
-            <label for="provider-url">Adresse du serveur Xtream</label>
-            <input id="provider-url" type="text" maxlength="200" placeholder="http://serveur:8080" required>
-          </div>
-          <div class="field">
-            <label for="provider-user">Utilisateur</label>
-            <input id="provider-user" type="text" maxlength="200" autocomplete="off" required>
-          </div>
-          <div class="field">
-            <label for="provider-pass">Mot de passe</label>
-            <span class="pass-wrap"><input id="provider-pass" type="password" maxlength="200" autocomplete="new-password" required><button type="button" class="pass-eye" id="provider-pass-eye" aria-label="Afficher le mot de passe" title="Afficher le mot de passe">👁</button></span>
-          </div>
-          <div class="field">
-            <label for="provider-role">Rôle de cet abonnement</label>
-            <select id="provider-role">
-              <option value="space">👤 Espace membre séparé (onglet dédié en haut)</option>
-              <option value="aux">🛡️ Complément / secours (sans onglet en haut, mélange &amp; débordement)</option>
-            </select>
-          </div>
-          <div class="field">
-            <label for="provider-ua">User-Agent (facultatif)</label>
-            <input id="provider-ua" type="text" maxlength="200" autocomplete="off" placeholder="par défaut">
-          </div>
-          <label class="check-row provider-mix-row"><input type="checkbox" id="provider-mix"> <span><strong>Autoriser le mélange</strong> avec les playlists des espaces membres (activé d'office en mode Complément / secours ou si des connexions sont partagées)</span></label>
-          <div class="provider-split-box" id="provider-split-box" hidden>
-            <div class="provider-split-head">
-              <strong>Répartition des connexions simultanées</strong>
-              <span class="badge ok" id="provider-split-badge"></span>
+        <details class="add-drawer" id="provider-add-drawer">
+          <summary class="add-drawer-btn">+ Ajouter un abonnement</summary>
+          <form class="provider-form" id="provider-form" autocomplete="off">
+            <div class="field">
+              <label for="provider-name">Nom affiché</label>
+              <input id="provider-name" type="text" maxlength="40" placeholder="Ex. Ma sœur ou Secours Sport" required>
             </div>
-            <p class="muted small provider-split-desc">Garantie souple : les connexions réservées restent toujours disponibles pour l'espace choisi, et les autres servent de secours / mélange (l'espace choisi peut emprunter une connexion libre si le secours ne l'utilise pas).</p>
-            <div class="provider-split-grid">
-              <div class="field">
-                <label for="provider-res-profile">Espace bénéficiaire</label>
-                <select id="provider-res-profile"></select>
-              </div>
-              <div class="field">
-                <label for="provider-res-count">Connexions réservées / secours</label>
-                <select id="provider-res-count"></select>
-              </div>
+            <div class="field">
+              <label for="provider-url">Adresse du serveur Xtream</label>
+              <input id="provider-url" type="text" maxlength="200" placeholder="http://serveur:8080" required>
             </div>
-            <p class="provider-split-summary" id="provider-split-summary"></p>
-          </div>
-          <p class="provider-edit-hint hint" id="provider-edit-hint" hidden></p>
-          <div class="btn-row provider-buttons">
-            <button type="submit" class="btn primary" id="provider-add">+ Ajouter l'abonnement</button>
-            <button type="button" class="btn" id="provider-probe">Vérifier les connexions</button>
-            <button type="button" class="btn" id="provider-cancel" hidden>Annuler</button>
-          </div>
-        </form>
+            <div class="field">
+              <label for="provider-user">Utilisateur</label>
+              <input id="provider-user" type="text" maxlength="200" autocomplete="off" required>
+            </div>
+            <div class="field">
+              <label for="provider-pass">Mot de passe</label>
+              <span class="pass-wrap"><input id="provider-pass" type="password" maxlength="200" autocomplete="new-password" required><button type="button" class="pass-eye" id="provider-pass-eye" aria-label="Afficher le mot de passe" title="Afficher le mot de passe">👁</button></span>
+            </div>
+            <div class="field">
+              <label for="provider-role">Rôle de cet abonnement</label>
+              <select id="provider-role">
+                <option value="space">👤 Espace membre séparé (menu Espaces)</option>
+                <option value="aux">🛡️ Complément / secours (discret, mélange &amp; débordement)</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="provider-ua">User-Agent (facultatif)</label>
+              <input id="provider-ua" type="text" maxlength="200" autocomplete="off" placeholder="par défaut">
+            </div>
+            <label class="check-row provider-mix-row"><input type="checkbox" id="provider-mix"> <span><strong>Autoriser le mélange</strong> avec les playlists des espaces membres (activé d'office en mode Complément / secours ou si des connexions sont partagées)</span></label>
+            <div class="provider-split-box" id="provider-split-box" hidden>
+              <div class="provider-split-head">
+                <strong>Répartition des connexions simultanées</strong>
+                <span class="badge ok" id="provider-split-badge"></span>
+              </div>
+              <p class="muted small provider-split-desc">Garantie souple : les connexions réservées restent toujours disponibles pour l'espace choisi, et les autres servent de secours / mélange.</p>
+              <div class="provider-split-grid">
+                <div class="field">
+                  <label for="provider-res-profile">Espace bénéficiaire</label>
+                  <select id="provider-res-profile"></select>
+                </div>
+                <div class="field">
+                  <label for="provider-res-count">Connexions réservées / secours</label>
+                  <select id="provider-res-count"></select>
+                </div>
+              </div>
+              <p class="provider-split-summary" id="provider-split-summary"></p>
+            </div>
+            <p class="provider-edit-hint hint" id="provider-edit-hint" hidden></p>
+            <div class="btn-row provider-buttons">
+              <button type="submit" class="btn primary" id="provider-add">+ Ajouter l'abonnement</button>
+              <button type="button" class="btn" id="provider-probe">Vérifier les connexions</button>
+              <button type="button" class="btn" id="provider-cancel" hidden>Annuler</button>
+            </div>
+          </form>
+        </details>
         <p class="hint" id="providers-hint"></p>
       </section>
     </div>
@@ -817,6 +882,7 @@
             </div>
             <div class="btn-row">
               <button type="button" class="btn small" id="tg-test-btn">Envoyer un test</button>
+              <button type="button" class="btn small" id="tg-weekly-btn">📊 Récap 7 j</button>
               <button type="button" class="btn small danger" id="tg-disconnect-btn">Déconnecter</button>
             </div>
           </div>
@@ -824,6 +890,8 @@
             <label class="check-row"><input type="checkbox" id="tg-enabled"> <span><strong>Activer l'envoi automatique des alertes</strong></span></label>
             <label class="check-row"><input type="checkbox" id="tg-ev-expiry"> <span><strong>Expiration d'abonnement</strong> (alertes à J-7, J-2 et à l'expiration pour tous les abonnements)</span></label>
             <label class="check-row"><input type="checkbox" id="tg-ev-provider"> <span><strong>Blocage fournisseur</strong> (HTTP 429 / passage en mode prudent)</span></label>
+            <label class="check-row"><input type="checkbox" id="tg-ev-unstable"> <span><strong>Chaîne instable</strong> (alerte si une chaîne bascule 5 fois ou plus pendant une lecture)</span></label>
+            <label class="check-row"><input type="checkbox" id="tg-ev-weekly"> <span><strong>Récapitulatif hebdomadaire</strong> (chaque dimanche à 20 h : temps regardé, top chaînes, bascules et expirations)</span></label>
             <label class="check-row"><input type="checkbox" id="tg-ev-tunnel"> <span><strong>Tunnel Cloudflare</strong> (déconnexion inattendue)</span></label>
             <label class="check-row"><input type="checkbox" id="tg-ev-security"> <span><strong>Sécurité accès distant</strong> (adresse IP bloquée après trop d'essais)</span></label>
           </div>
@@ -856,6 +924,20 @@
           </div>
           <label class="check-row"><input type="checkbox" id="restore-devices"> <span>Restaurer aussi la liste des appareils et leurs codes d'accès</span></label>
           <button type="button" class="btn" id="restore-run">Restaurer la sauvegarde</button>
+        </div>
+      </section>
+
+      <section class="card" id="channels-export-card">
+        <div class="card-head">
+          <div>
+            <h2>Export brut des chaînes (tous abonnements)</h2>
+            <p class="muted small">Télécharge tous les noms bruts de chaînes de tous tes abonnements (compte 1, 2, 3…), leur catégorie, leur nom nettoyé et leur provenance — sans aucun mot de passe ni URL privée. Idéal pour faire des rapprochements ou affiner des regex de tri.</p>
+          </div>
+        </div>
+        <div class="btn-row">
+          <a class="btn primary" id="export-all-csv" href="/api/catalog/channels-export?format=csv" download>📄 Exporter en CSV (Excel / Python)</a>
+          <a class="btn" id="export-all-json" href="/api/catalog/channels-export?format=json" download>{ } Exporter en JSON</a>
+          <a class="btn ghost" id="export-all-txt" href="/api/catalog/channels-export?format=txt" download>📝 Exporter en TXT</a>
         </div>
       </section>
     </div>
@@ -957,8 +1039,41 @@
   </form>
 </dialog>
 
+<dialog id="probe-dialog" class="probe-dialog">
+  <div class="card-head">
+    <div>
+      <h2 id="probe-title">Comparer les versions</h2>
+      <p class="muted small" id="probe-status">Test séquentiel doux (sans surcharger tes abonnements)…</p>
+    </div>
+    <button type="button" class="btn small ghost" id="probe-close">Fermer</button>
+  </div>
+  <ul id="probe-list" class="sum-list probe-list"></ul>
+  <div class="btn-row end">
+    <button type="button" class="btn small ghost" id="probe-reset-health" hidden>↺ Lever les quarantaines</button>
+    <button type="button" class="btn small" id="probe-rerun">↻ Retester</button>
+  </div>
+</dialog>
+
+<dialog id="qr-dialog" class="qr-dialog">
+  <div class="card-head">
+    <h2 id="qr-title">QR code de connexion</h2>
+    <button type="button" class="btn small ghost" id="qr-close">Fermer</button>
+  </div>
+  <div class="segmented qr-mode-row">
+    <button type="button" class="seg-btn" id="qr-mode-m3u" aria-pressed="true">Playlist M3U</button>
+    <button type="button" class="seg-btn" id="qr-mode-xtream" aria-pressed="false">Serveur Xtream</button>
+  </div>
+  <div class="qr-modal-body">
+    <div class="tg-qr-frame" id="qr-frame" aria-label="QR code appareil"></div>
+    <code class="qr-url-code" id="qr-url">—</code>
+    <p class="hint">QR code généré localement sur ton serveur (aucun service externe).</p>
+  </div>
+</dialog>
+
 <div id="toasts" class="toasts" aria-live="polite"></div>
 <footer class="footer">Passerelle locale · Ne jamais exposer les ports 7777 / 7778 sans protection · <span id="version"></span></footer>
+</div>
+</div>
 <script src="/static/app.js"></script>
 </body>
 </html>

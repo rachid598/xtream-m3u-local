@@ -171,12 +171,99 @@ class StreamSession:
         }
 
 
+class VersionHealth:
+    """Mémoire courte de stabilité des versions de secours (quarantaine temporaire 30 min – 2 h max).
+
+    Évite de subir 10 coupures de suite sur une source temporairement instable, tout en garantissant
+    que la meilleure qualité (HD/FHD) repasse automatiquement en tête dès la fin de la quarantaine.
+    """
+    WINDOW = 15 * 60            # fenêtre d'observation des échecs rapprochés
+    MIN_FAILS = 2               # 2 échecs dans la fenêtre → mise en quarantaine courte
+    BASE_QUARANTINE = 30 * 60   # 30 min la première fois
+    MAX_QUARANTINE = 2 * 3600   # 2 h maximum (jamais bloqué définitivement)
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._fails: dict[str, list[float]] = {}
+        self._until: dict[str, float] = {}
+        self._level: dict[str, int] = {}
+
+    def record_failure(self, stream_id: str, *, now: float | None = None) -> int:
+        sid = str(stream_id)
+        now = time.monotonic() if now is None else now
+        with self._lock:
+            recent = [t for t in self._fails.get(sid, ()) if now - t <= self.WINDOW]
+            recent.append(now)
+            self._fails[sid] = recent[-8:]
+            if len(recent) >= self.MIN_FAILS:
+                lvl = min(2, self._level.get(sid, 0))
+                duration = min(self.MAX_QUARANTINE, self.BASE_QUARANTINE * (2 ** lvl))
+                self._until[sid] = now + duration
+                self._level[sid] = lvl + 1
+                return int(duration)
+            return 0
+
+    def record_success(self, stream_id: str) -> None:
+        sid = str(stream_id)
+        with self._lock:
+            self._fails.pop(sid, None)
+            self._until.pop(sid, None)
+            self._level.pop(sid, None)
+
+    def quarantined_seconds(self, stream_id: str, *, now: float | None = None) -> int:
+        sid = str(stream_id)
+        now = time.monotonic() if now is None else now
+        with self._lock:
+            until = self._until.get(sid, 0.0)
+            if until <= now:
+                self._until.pop(sid, None)
+                return 0
+            return int(until - now)
+
+    def reorder(self, candidates: list[str], *, now: float | None = None) -> list[str]:
+        """Place les versions saines avant celles en quarantaine tout en gardant l'ordre de qualité."""
+        if len(candidates) <= 1:
+            return list(candidates)
+        now = time.monotonic() if now is None else now
+        healthy, cooled = [], []
+        for sid in candidates:
+            if self.quarantined_seconds(sid, now=now) > 0:
+                cooled.append(sid)
+            else:
+                healthy.append(sid)
+        return healthy + cooled
+
+    def reset(self, stream_id: str | None = None) -> None:
+        with self._lock:
+            if stream_id:
+                sid = str(stream_id)
+                self._fails.pop(sid, None)
+                self._until.pop(sid, None)
+                self._level.pop(sid, None)
+            else:
+                self._fails.clear()
+                self._until.clear()
+                self._level.clear()
+
+    def snapshot(self, *, now: float | None = None) -> dict[str, int]:
+        now = time.monotonic() if now is None else now
+        with self._lock:
+            out: dict[str, int] = {}
+            for sid, until in list(self._until.items()):
+                if until > now:
+                    out[sid] = int(until - now)
+                else:
+                    self._until.pop(sid, None)
+            return out
+
+
 class StreamManager:
     def __init__(self, limit_for: Callable[[str], int], *, takeover: bool = True, history_path: str | None = None,
                  reservation_for: Callable[[str], tuple[str, int] | None] | None = None):
         self._limit_for = limit_for
         self._reservation_for = reservation_for
         self.takeover = takeover
+        self.health = VersionHealth()
         self._lock = threading.Lock()
         self._sessions: dict[int, StreamSession] = {}
         self._cooldown: dict[tuple[str, str, str, str], float] = {}
@@ -454,6 +541,20 @@ class StreamManager:
         if session.virtual:
             self._record(session)
         return True
+
+    def stop_device(self, device_id: str) -> int:
+        """Coupe immédiatement toutes les lectures en cours d'un appareil (p. ex. mis en pause)."""
+        if not device_id:
+            return 0
+        with self._lock:
+            victims = [s for s in self._sessions.values() if s.device_id == device_id]
+            for s in victims:
+                self._sessions.pop(s.id, None)
+        for s in victims:
+            s.cancel()
+            if s.virtual:
+                self._record(s)
+        return len(victims)
 
     def list(self) -> list[dict]:
         with self._lock:

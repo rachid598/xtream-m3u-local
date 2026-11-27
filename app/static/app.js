@@ -38,7 +38,7 @@
     groupOrder: [],          // ordre personnalisé des groupes (clés : "12", "vod:3", "series:7")
     groupNames: {},          // noms de groupes personnalisés {clé: nom}
     view: 'playlists',
-    sysTab: 'overview',      // sous-onglet Système : overview | providers | network | backup
+    sysTab: 'providers',     // sous-onglet Réglages : providers | alerts | network | overview | backup
     slugTouched: false,
     snapshot: '',            // pour détecter les modifications non enregistrées
     catFilter: 'all',
@@ -56,6 +56,7 @@
     itemLogos: {},           // logos de remplacement {clé: URL}
     itemEpg: {},             // guide emprunté {id_chaîne: id_chaîne_source}
     itemXmltv: {},           // guide choisi {id_chaîne: identifiant XMLTV} (suggestions validées)
+    itemPinned: {},          // version préférée épinglée {id_canonique: id_version}
     epgSuggestions: null,    // suggestions de guide de la playlist ouverte {id_chaîne: [{id, name, source, …}]}
     section: 'content',      // partie de l'éditeur : content | organize | preview | options | guide
     tvPreview: null,         // dernier aperçu TV calculé par /api/playlists/preview
@@ -124,6 +125,27 @@
       if (value) localStorage.setItem(key, value); else localStorage.removeItem(key);
     } catch (_) { /* navigation privée */ }
     return '';
+  }
+
+  function applyTheme(mode) {
+    const resolved = mode === 'light' || mode === 'dark' ? mode
+      : (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+    if (mode === 'light' || mode === 'dark') document.documentElement.dataset.theme = mode;
+    else delete document.documentElement.dataset.theme;
+    const btn = $('theme-toggle');
+    if (btn) {
+      btn.textContent = resolved === 'light' ? '☾' : '☀';
+      btn.title = resolved === 'light' ? 'Passer en thème sombre' : 'Passer en thème clair';
+      btn.setAttribute('aria-label', btn.title);
+    }
+  }
+  function initTheme() { applyTheme(storage('xtream-m3u-theme')); }
+  function toggleTheme() {
+    const cur = document.documentElement.dataset.theme
+      || (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+    const next = cur === 'light' ? 'dark' : 'light';
+    storage('xtream-m3u-theme', next);
+    applyTheme(next);
   }
 
   // --------------------------------------------------- espaces & abonnements
@@ -673,6 +695,7 @@
     data.dedupe = $('opt-dedupe').checked;
     data.failover = $('opt-failover').checked;
     data.failover_any_category = $('opt-failover-any').checked;
+    data.adaptive_failover = $('opt-adaptive-failover').checked;
     data.uhd = $('opt-uhd').value;
     data.group_epg_external = $('opt-group-epg').checked;
     data.multi_groups = $('opt-multi-groups').checked;
@@ -693,6 +716,7 @@
     data.item_logos = sortedObject(state.itemLogos);
     data.item_epg = sortedObject(state.itemEpg);
     data.item_xmltv = sortedObject(state.itemXmltv);
+    data.item_pinned = sortedObject(state.itemPinned);
     data.custom_groups = state.customGroups.map((g) => ({ id: g.id, name: String(g.name || '').trim() || g.id, match: g.match,
       ...(g.region ? { region: g.region } : {}),
       patterns: [...new Set((g.patterns || []).map((p) => String(p).trim()).filter(Boolean))] }));
@@ -1078,12 +1102,18 @@
     if ($('opt-adult').checked) parts.push('Sans 18+');
     if ($('opt-clean-names').checked) parts.push('Mode Décodeur');
     if ($('opt-hq-logos').checked) parts.push('Logos HQ');
-    if ($('opt-failover').checked && $('opt-dedupe').checked && $('opt-live-format').value !== 'hls') parts.push('Bascule auto');
+    const failoverActive = $('opt-failover').checked && $('opt-dedupe').checked && $('opt-live-format').value !== 'hls';
+    if (failoverActive) parts.push('Bascule auto');
     $('opt-failover-hint').classList.toggle('warn-text', $('opt-failover').checked && (!$('opt-dedupe').checked || $('opt-live-format').value === 'hls'));
     $('opt-failover-any').disabled = !$('opt-failover').checked;
+    $('opt-adaptive-failover').disabled = !$('opt-failover').checked;
     $('opt-uhd').disabled = !$('opt-dedupe').checked;
-    if (!$('opt-failover').checked) $('opt-failover-any').checked = false;
-    if (parts.includes('Bascule auto') && $('opt-failover-any').checked) parts[parts.length - 1] += ' (toutes catégories)';
+    if (!$('opt-failover').checked) {
+      $('opt-failover-any').checked = false;
+      $('opt-adaptive-failover').checked = false;
+    }
+    if (failoverActive && $('opt-failover-any').checked) parts[parts.length - 1] += ' (toutes catégories)';
+    if (failoverActive && $('opt-adaptive-failover').checked) parts.push('Adaptatif');
     $('options-pill-text').textContent = parts.join(' · ');
   }
 
@@ -1123,6 +1153,11 @@
     const list = $('saved');
     list.replaceChildren();
     const sorted = [...state.playlists].filter(inProfile).sort((a, b) => collator.compare(a.name, b.name));
+    const badge = $('nav-badge-playlists');
+    if (badge) {
+      badge.textContent = String(sorted.length);
+      badge.hidden = sorted.length === 0;
+    }
     $('help-card').hidden = sorted.length > 0;
     if (!state.fullCardTouched) $('full-card').open = sorted.length === 0;
     if (!sorted.length) {
@@ -1349,17 +1384,106 @@
     if (!ids.length) return null;
     const byId = state.cat.live.channelById;
     const failover = $('opt-failover').checked;
+    const pinned = state.itemPinned[c.stream_id] || '';
+    const allIds = [c.stream_id, ...ids];
     const details = h('details', { class: 'alt-list' },
-      h('summary', { text: `🔁 ${plural(ids.length, failover ? 'version de secours' : 'autre version masquée', failover ? 'versions de secours' : 'autres versions masquées')}` }),
-      h('ol', null, ids.map((id) => {
+      h('summary', null,
+        h('span', { text: `🔁 ${plural(ids.length, failover ? 'version de secours' : 'autre version masquée', failover ? 'versions de secours' : 'autres versions masquées')}` })),
+      h('ol', null, allIds.map((id, idx) => {
         const other = byId.get(id);
-        return h('li', { text: other ? `${other.name} · ${(other.category_ids || []).map((cid) => state.cat.live.categoryNames.get(cid) || cid).join(', ')}` : `Chaîne ${id}` });
+        const label = other ? `${other.name} · ${(other.category_ids || []).map((cid) => state.cat.live.categoryNames.get(cid) || cid).join(', ')}` : `Chaîne ${id}`;
+        const isPin = pinned ? id === pinned : idx === 0;
+        return h('li', null, label, isPin ? h('span', { class: 'badge ok', text: pinned ? '📌 Épinglée n° 1' : 'n° 1' }) : null);
       })),
+      h('div', { class: 'btn-row' },
+        h('button', { type: 'button', class: 'btn small', text: '🧪 Tester & choisir la n° 1',
+          onclick: (event) => { event.preventDefault(); event.stopPropagation(); openVersionProbe(c.stream_id, displayName(c), allIds); } }),
+        pinned ? h('button', { type: 'button', class: 'btn small ghost', text: 'Retirer l\'épingle',
+          onclick: (event) => { event.preventDefault(); event.stopPropagation(); delete state.itemPinned[c.stream_id]; refresh(); toast('Version par défaut rétablie'); } }) : null),
       failover ? null : h('p', { class: 'hint', text: 'Active « Bascule automatique » (Options) pour que le serveur les utilise si la chaîne coupe.' }));
     // La ligne est un <label> : sans ça, un clic sur le résumé cocherait/décocherait la chaîne.
     details.querySelector('summary').addEventListener('click', (event) => { event.preventDefault(); details.open = !details.open; });
-    details.addEventListener('click', (event) => { if (event.target.tagName !== 'SUMMARY') event.preventDefault(); });
+    details.addEventListener('click', (event) => { if (event.target.tagName !== 'SUMMARY' && event.target.tagName !== 'BUTTON') event.preventDefault(); });
     return details;
+  }
+
+  let probeContext = null;
+  async function openVersionProbe(canonicalId, title, ids) {
+    const uniqueIds = [...new Set((ids || []).map(String).filter(Boolean))].slice(0, 6);
+    if (!uniqueIds.length) return;
+    probeContext = { canonicalId: canonicalId ? String(canonicalId) : '', title: title || 'Chaîne', ids: uniqueIds };
+    const dialog = $('probe-dialog');
+    $('probe-title').textContent = `Versions de « ${probeContext.title} »`;
+    $('probe-status').textContent = `Test séquentiel doux de ${plural(uniqueIds.length, 'version', 'versions')}…`;
+    $('probe-list').replaceChildren(h('li', { class: 'empty', text: 'Vérification des flux en cours (jusqu\'à quelques secondes)…' }));
+    $('probe-reset-health').hidden = true;
+    $('probe-rerun').disabled = true;
+    if (!dialog.open && typeof dialog.showModal === 'function') dialog.showModal();
+    try {
+      const data = await request('/api/channels/probe', 'POST', { stream_ids: uniqueIds });
+      if (!probeContext || probeContext.title !== (title || 'Chaîne')) return;
+      renderProbeResults(data.results || []);
+    } catch (error) {
+      $('probe-status').textContent = error.message;
+      $('probe-list').replaceChildren(h('li', { class: 'empty', text: 'Impossible de tester les versions.' }));
+    } finally {
+      $('probe-rerun').disabled = false;
+    }
+  }
+
+  function renderProbeResults(results) {
+    const list = $('probe-list');
+    list.replaceChildren();
+    if (!results.length) {
+      $('probe-status').textContent = 'Aucun résultat.';
+      list.append(h('li', { class: 'empty', text: 'Aucune version testée.' }));
+      return;
+    }
+    const okCount = results.filter((r) => r.ok).length;
+    const anyQuarantined = results.some((r) => (r.quarantined_for || 0) > 0);
+    $('probe-reset-health').hidden = !anyQuarantined;
+    $('probe-status').textContent = `${okCount}/${results.length} version${results.length > 1 ? 's' : ''} joignable${okCount > 1 ? 's' : ''}. Épingle ta préférée : elle passera en n° 1 sans casser l'EPG ni tes favoris.`;
+    const canon = probeContext && probeContext.canonicalId;
+    const currentPin = canon ? (state.itemPinned[canon] || '') : '';
+    const activeFirst = currentPin || (canon || results[0].stream_id);
+    for (const r of results) {
+      const qMin = r.quarantined_for ? Math.max(1, Math.ceil(r.quarantined_for / 60)) : 0;
+      const metaBits = [];
+      if (r.ok) metaBits.push(`✅ HTTP ${r.status || 200} · ${r.latency_ms} ms`);
+      else metaBits.push(`❌ ${r.error || `HTTP ${r.status || '?'}`}${r.latency_ms ? ` · ${r.latency_ms} ms` : ''}`);
+      if (hasMultipleSources() && r.provider_name) metaBits.push(`🔑 ${r.provider_name}`);
+      const isFirst = r.stream_id === activeFirst;
+      const actions = [];
+      if (canon) {
+        if (isFirst) {
+          actions.push(h('span', { class: 'badge ok', text: currentPin ? '📌 Épinglée n° 1' : 'n° 1 actuelle' }));
+          if (currentPin) {
+            actions.push(h('button', { type: 'button', class: 'btn small ghost', text: 'Par défaut',
+              onclick: () => {
+                delete state.itemPinned[canon];
+                refresh();
+                renderProbeResults(results);
+                toast('Version par défaut rétablie — pense à enregistrer');
+              } }));
+          }
+        } else {
+          actions.push(h('button', { type: 'button', class: 'btn small primary', text: '📌 Épingler n° 1',
+            onclick: () => {
+              if (r.stream_id === canon) delete state.itemPinned[canon];
+              else state.itemPinned[canon] = r.stream_id;
+              refresh();
+              renderProbeResults(results);
+              toast(`« ${r.name} » épinglée en n° 1 — pense à enregistrer la playlist`);
+            } }));
+        }
+      }
+      list.append(h('li', { class: `probe-row${r.ok ? ' is-ok' : ' is-err'}` },
+        h('span', { class: 'probe-info' },
+          h('strong', { text: r.name }),
+          h('span', { class: 'muted small', text: metaBits.join(' · ') }),
+          qMin ? h('span', { class: 'badge warn', text: `⏳ En quarantaine (${qMin} min restantes)` }) : null),
+        h('span', { class: 'btn-row' }, ...actions)));
+    }
   }
 
   function itemMeta(c) {
@@ -1378,6 +1502,11 @@
     const grouped = state.kind === 'live' ? groupAssignment().get(c.stream_id) : null;
     if (grouped) badges.push(h('span', { class: 'badge grp', text: `📁 ${customName(grouped)}`,
       title: state.itemGroups[c.stream_id] ? 'Rangée à la main dans ce groupe' : 'Rangée automatiquement (nom correspondant)' }));
+    if (state.kind === 'live' && state.itemPinned[c.stream_id]) {
+      const target = state.cat.live.channelById.get(state.itemPinned[c.stream_id]);
+      badges.push(h('span', { class: 'badge ok', text: '📌 Épinglée',
+        title: `Version préférée en n° 1 : ${target ? target.name : state.itemPinned[c.stream_id]}` }));
+    }
     if (c.epg) badges.push(h('span', { class: 'badge opt', text: 'EPG', title: 'Identifiant EPG disponible' }));
     if (c.archive) badges.push(h('span', { class: 'badge opt', text: `Replay ${c.archive} j`, title: 'Programmes passés disponibles (catch-up)' }));
     if (state.kind === 'live' && hiddenDuplicates().has(c.stream_id)) {
@@ -1449,7 +1578,11 @@
 
   function itemActions(c) {
     const fav = state.favorites.includes(keyOf(c));
+    const alts = state.kind === 'live' ? backupsOf(c.stream_id) : [];
     return h('span', { class: 'item-actions' },
+      alts.length ? h('button', { type: 'button', class: 'item-btn', text: '🧪', title: 'Tester et comparer les versions',
+        'aria-label': `Comparer les versions de ${displayName(c)}`,
+        onclick: (event) => { event.preventDefault(); event.stopPropagation(); openVersionProbe(c.stream_id, displayName(c), [c.stream_id, ...alts]); } }) : null,
       state.kind === 'live' ? h('button', { type: 'button', class: 'item-btn', text: '📁', title: 'Ranger dans un de mes groupes',
         'aria-label': `Ranger ${displayName(c)} dans un groupe`,
         onclick: (event) => { event.preventDefault(); event.stopPropagation(); moveToGroup(c); } }) : null,
@@ -1917,7 +2050,8 @@
     const custom = $('sum-custom');
     custom.replaceChildren();
     const keys = new Set([...Object.keys(state.itemNames), ...Object.keys(state.itemNumbers),
-      ...Object.keys(state.itemLogos), ...Object.keys(state.itemEpg), ...Object.keys(state.itemXmltv)]);
+      ...Object.keys(state.itemLogos), ...Object.keys(state.itemEpg), ...Object.keys(state.itemXmltv),
+      ...Object.keys(state.itemPinned)]);
     for (const key of keys) {
       const { kind, item } = itemByKey(key);
       const parts = [];
@@ -1929,11 +2063,15 @@
         parts.push(`guide de « ${source ? source.name : state.itemEpg[key]} »`);
       }
       if (kind === 'live' && state.itemXmltv[key]) parts.push(`guide ${state.itemXmltv[key]}`);
+      if (kind === 'live' && state.itemPinned[key]) {
+        const target = state.cat.live.channelById.get(state.itemPinned[key]);
+        parts.push(`📌 ${target ? target.name : state.itemPinned[key]}`);
+      }
       custom.append(h('li', null,
         h('span', null, h('span', { class: `kind-tag ${kind}`, text: KIND[kind].label }), ' ', `${item ? item.name : key} → ${parts.join(' · ')}`),
         h('button', { type: 'button', class: 'x', text: '×', title: 'Annuler la personnalisation', onclick: () => {
           delete state.itemNames[key]; delete state.itemNumbers[key]; delete state.itemLogos[key]; delete state.itemEpg[key];
-          delete state.itemXmltv[key]; refresh();
+          delete state.itemXmltv[key]; delete state.itemPinned[key]; refresh();
         } })));
     }
     if (!keys.size) custom.append(h('li', { class: 'empty', text: 'Aucune personnalisation (nom, numéro, logo, guide).' }));
@@ -2367,16 +2505,34 @@
       return tags.length ? h('span', { class: 'history-row-tags' }, ...tags) : null;
     };
 
-    const fillRanked = (id, rows, text, empty) => {
+    const findLiveForProbe = (label) => {
+      if (!state.cat.live.catalogLoaded) return null;
+      const target = norm(label);
+      for (const c of state.cat.live.channels) {
+        if (norm(c.name) === target || norm(displayName(c, 'live')) === target) {
+          const alts = backupsOf(c.stream_id);
+          if (alts.length) return { c, ids: [c.stream_id, ...alts] };
+        }
+      }
+      return null;
+    };
+
+    const fillRanked = (id, rows, text, empty, withProbe = false) => {
       const node = $(id);
-      node.replaceChildren(...rows.map((r) => h('li', null,
-        h('span', { class: 'history-row-main' }, h('span', { text: r.label }), rowTags(r)),
-        h('span', { class: 'num', text: text(r) }))));
+      node.replaceChildren(...rows.map((r) => {
+        const match = withProbe ? findLiveForProbe(r.label) : null;
+        return h('li', null,
+          h('span', { class: 'history-row-main' }, h('span', { text: r.label }), rowTags(r)),
+          h('span', { class: 'btn-row' },
+            match ? h('button', { type: 'button', class: 'btn small ghost', text: '🧪', title: 'Tester et comparer les versions',
+              onclick: () => openVersionProbe(match.c.stream_id, r.label, match.ids) }) : null,
+            h('span', { class: 'num', text: text(r) })));
+      }));
       if (!rows.length) node.append(h('li', { class: 'empty', text: empty }));
     };
 
     fillRanked('history-top', data.top, (r) => `${formatDuration(r.seconds)} · ${plural(r.count, 'fois', 'fois')}`, 'Aucune lecture enregistrée pour ce filtre.');
-    fillRanked('history-unstable', data.unstable, (r) => `${plural(r.switches, 'bascule', 'bascules')}`, 'Aucune bascule : les chaînes tiennent bien.');
+    fillRanked('history-unstable', data.unstable, (r) => `${plural(r.switches, 'bascule', 'bascules')}`, 'Aucune bascule : les chaînes tiennent bien.', true);
 
     const listNode = $('history-list');
     listNode.replaceChildren(...(data.entries || []).slice(0, 50).map((r) => {
@@ -2432,6 +2588,7 @@
     $('opt-dedupe').checked = Boolean(p && p.dedupe);
     $('opt-failover').checked = Boolean(p && p.failover);
     $('opt-failover-any').checked = Boolean(p && p.failover_any_category);
+    $('opt-adaptive-failover').checked = Boolean(p && p.adaptive_failover);
     $('opt-uhd').value = (p && p.uhd) || 'backup';
     $('opt-group-epg').checked = !p || p.group_epg_external !== false;
     $('opt-multi-groups').checked = Boolean(p && p.multi_groups);
@@ -2450,6 +2607,7 @@
     state.itemLogos = p && p.item_logos ? { ...p.item_logos } : {};
     state.itemEpg = p && p.item_epg ? { ...p.item_epg } : {};
     state.itemXmltv = p && p.item_xmltv ? { ...p.item_xmltv } : {};
+    state.itemPinned = p && p.item_pinned ? { ...p.item_pinned } : {};
     state.epgSuggestions = null;
     state.hiddenCache = null;
     state.tvPreview = null;
@@ -2553,7 +2711,16 @@
   }
 
   // ------------------------------------------------ catalogue fournisseur
-  const VIEWS = { playlists: '#', guide: '#guide', catalog: '#catalogue', devices: '#appareils', system: '#systeme' };
+  const VIEWS = { dashboard: '#tableau-de-bord', playlists: '#', guide: '#guide', catalog: '#catalogue', devices: '#appareils', system: '#systeme' };
+
+  function loadDashboard() {
+    loadStreams();
+    loadAccount();
+    loadHistory();
+    loadDevices({ quiet: true });
+    loadProviders({ quiet: true });
+    loadAlerts({ silent: true });
+  }
 
   function switchView(view) {
     if (!VIEWS[view]) view = 'playlists';
@@ -2565,6 +2732,7 @@
       if (btn) btn.setAttribute('aria-pressed', String(name === view));
     }
     document.body.classList.toggle('no-actionbar', view !== 'playlists');
+    if (view === 'dashboard') loadDashboard();
     if (view === 'catalog') renderProvider();
     if (view === 'system') loadSystem();
     if (view === 'devices') loadDevices();
@@ -2574,6 +2742,27 @@
 
   // ------------------------------------------------------------ appareils
   let devicesData = null;
+  let deviceDrawerTouched = false;
+  let qrState = { device: null, mode: 'm3u' };
+
+  async function openDeviceQr(d, mode = 'm3u') {
+    qrState = { device: d, mode };
+    const dialog = $('qr-dialog');
+    $('qr-title').textContent = `QR code — ${d.name}`;
+    $('qr-mode-m3u').setAttribute('aria-pressed', String(mode === 'm3u'));
+    $('qr-mode-xtream').setAttribute('aria-pressed', String(mode === 'xtream'));
+    $('qr-url').textContent = 'Génération du QR code…';
+    $('qr-frame').replaceChildren();
+    if (!dialog.open && typeof dialog.showModal === 'function') dialog.showModal();
+    try {
+      const data = await request(`/api/devices/${encodeURIComponent(d.id)}/qr?mode=${encodeURIComponent(mode)}`);
+      if (!qrState.device || qrState.device.id !== d.id || qrState.mode !== mode) return;
+      renderQrSvg($('qr-frame'), data.qr_svg);
+      $('qr-url').textContent = data.url || '—';
+    } catch (error) {
+      $('qr-url').textContent = error.message;
+    }
+  }
 
   function credRow(label, value, { secret = false } = {}) {
     const code = h('code', { class: secret ? 'secret' : null, text: value });
@@ -2625,14 +2814,28 @@
     const seen = d.last_seen ? `vu le ${new Date(d.last_seen * 1000).toLocaleString('fr-FR', { dateStyle: 'short', timeStyle: 'short' })}` : 'jamais utilisé depuis le démarrage';
     const prioLabel = d.priority === 'high' ? 'priorité haute' : d.priority === 'low' ? 'priorité basse' : 'priorité normale';
     const advSummary = `⚙️ Réglages (${prioLabel} · ${external ? 'externe' : 'réseau local'}${d.ip ? ` · IP ${d.ip}` : ''})`;
-    return h('section', { class: 'card device-card' },
+    const paused = Boolean(d.paused);
+    return h('section', { class: `card device-card${paused ? ' is-paused' : ''}` },
       h('div', { class: 'card-head' },
         h('div', null,
           h('h3', { class: 'dev-title' }, h('span', { text: d.name }),
+            paused ? h('span', { class: 'badge warn', text: '⏸ En pause' }) : null,
             h('span', { class: 'pill ok dev-live', id: `dev-live-${d.id}`, hidden: true },
               h('span', { class: 'dot', 'aria-hidden': 'true' }), h('span', { class: 'dev-live-text' }))),
           h('p', { class: 'muted small', text: `Identifiant ${d.username} · ${seen}` })),
         h('div', { class: 'btn-row' },
+          h('button', { type: 'button', class: `btn small${paused ? ' primary' : ''}`, text: paused ? '▶ Reprendre' : '⏸️ Pause',
+            title: paused ? 'Rétablir immédiatement l\'accès de cet appareil' : 'Suspendre temporairement cet appareil et couper sa lecture en cours',
+            onclick: async () => {
+              try {
+                await request(`/api/devices/${d.id}`, 'PUT', { paused: !paused });
+                toast(paused ? `« ${d.name} » réactivé` : `« ${d.name} » mis en pause`);
+                loadDevices();
+                loadStreams();
+              } catch (error) { toast(error.message, 'error'); }
+            } }),
+          h('button', { type: 'button', class: 'btn small', text: '📱 QR', title: 'Afficher le QR code de configuration',
+            onclick: () => openDeviceQr(d, 'm3u') }),
           h('button', { type: 'button', class: 'btn small', text: 'Renommer', onclick: async () => {
             const name = await ask({ title: 'Renommer l\'appareil', okLabel: 'Renommer', input: { label: 'Nom', value: d.name } });
             if (!name) return;
@@ -2654,7 +2857,7 @@
             h('div', { class: 'field' }, h('label', { text: 'Priorité (limite de connexions)' }), prioritySelect(d)),
             h('div', { class: 'field' }, h('label', { text: 'Adresse IP de la TV (facultatif)' }), ipInput(d)),
             h('div', { class: 'field' }, h('label', { text: 'Réseau / liens' }), linksSelect(d))))),
-      external && !externalBase() ? h('p', { class: 'hint warn-text', text: 'Aucune adresse publique : active le tunnel Cloudflare ou ajoute ton adresse de reverse proxy (Système → Accès & Guides). Liens du réseau local affichés en attendant.' }) : null,
+      external && !externalBase() ? h('p', { class: 'hint warn-text', text: 'Aucune adresse publique : active le tunnel Cloudflare ou ajoute ton adresse de reverse proxy (Réglages → Accès & Guides). Liens du réseau local affichés en attendant.' }) : null,
       h('div', { class: 'device-grid' },
         h('div', { class: 'device-mode' },
           h('h4', { text: '📺 Mode « Playlist M3U » (VLC, TiviMate, Android TV…)' }),
@@ -2707,8 +2910,8 @@
     return input;
   }
 
-  async function loadDevices() {
-    try { devicesData = await request('/api/devices'); } catch (error) { showError(error.message); return; }
+  async function loadDevices({ quiet = false } = {}) {
+    try { devicesData = await request('/api/devices'); } catch (error) { if (!quiet) showError(error.message); return; }
     renderDevicePlaylistSelect($('device-playlist'), $('device-playlist').value);
     const links = $('device-links');
     const previous = links.value;
@@ -2730,6 +2933,21 @@
       if (d.profile) return String(d.profile) === state.profile;
       return state.profile === '1';
     });
+    const navBadge = $('nav-badge-devices');
+    if (navBadge) {
+      navBadge.textContent = String(visible.length);
+      navBadge.hidden = visible.length === 0;
+    }
+    const pausedCount = visible.filter((d) => d.paused).length;
+    if ($('kpi-devices')) $('kpi-devices').textContent = String(visible.length);
+    if ($('kpi-devices-sub')) {
+      $('kpi-devices-sub').textContent = !visible.length
+        ? 'Aucun configuré'
+        : (pausedCount ? `${pausedCount} en pause · gérer` : 'Tous actifs');
+    }
+    if (!deviceDrawerTouched && $('device-add-drawer')) {
+      $('device-add-drawer').open = visible.length === 0;
+    }
     list.replaceChildren(...visible.map(deviceCard));
     refreshDeviceLive();
     if (!visible.length) list.append(h('p', { class: 'empty', text: multiProfile()
@@ -2785,7 +3003,7 @@
     let data;
     try { data = await request(`/api/streams${profileQuery()}`); } catch (_) { data = null; }
     if (data) renderStreams(data);
-    const delay = state.view === 'system' ? 3000 : 15000;
+    const delay = state.view === 'system' || state.view === 'dashboard' ? 4000 : 15000;
     if (!document.hidden) streamsTimer = setTimeout(loadStreams, delay);
   }
 
@@ -2798,6 +3016,19 @@
     $('streams-pill-text').textContent = totalViewers > n
       ? `${n} flux (${totalViewers} écrans)`
       : `${n} lecture${n > 1 ? 's' : ''}`;
+    if ($('kpi-streams')) $('kpi-streams').textContent = String(n);
+    if ($('kpi-streams-sub')) {
+      $('kpi-streams-sub').textContent = !n ? 'Aucune lecture'
+        : (totalViewers > n ? `${totalViewers} écrans · partagé` : `En direct${data.limit ? ` (${n}/${data.limit})` : ''}`);
+    }
+    const quarantined = Object.entries(data.health_quarantined || {});
+    if ($('health-bar')) {
+      $('health-bar').hidden = quarantined.length === 0;
+      if (quarantined.length) {
+        const maxMin = Math.max(1, Math.ceil(Math.max(...quarantined.map(([, sec]) => Number(sec) || 0)) / 60));
+        $('health-status').textContent = `⏳ ${plural(quarantined.length, 'source temporairement mise de côté', 'sources temporairement mises de côté')} (retour auto d'ici ${maxMin} min).`;
+      }
+    }
     const resInfo = data.reservation && data.limit > 1 && data.reservation.count > 0
       ? (() => {
           const rc = Math.min(Number(data.reservation.count) || 0, data.limit);
@@ -3010,6 +3241,15 @@
       badge.textContent = 'Non connecté';
     }
 
+    if ($('kpi-alerts')) {
+      $('kpi-alerts').textContent = data.connected ? (data.enabled ? 'Actif' : 'Pause') : 'Off';
+    }
+    if ($('kpi-alerts-sub')) {
+      $('kpi-alerts-sub').textContent = data.connected
+        ? (data.bot_username ? `@${data.bot_username}` : 'Telegram connecté')
+        : 'Configurer Telegram';
+    }
+
     $('tg-setup-box').hidden = Boolean(data.connected);
     $('tg-connected-box').hidden = !data.connected;
 
@@ -3025,11 +3265,13 @@
       const ev = data.events || {};
       $('tg-ev-expiry').checked = ev.expiry !== false;
       $('tg-ev-provider').checked = ev.provider !== false;
+      $('tg-ev-unstable').checked = ev.unstable !== false;
+      $('tg-ev-weekly').checked = Boolean(ev.weekly);
       $('tg-ev-tunnel').checked = ev.tunnel !== false;
       $('tg-ev-security').checked = ev.security !== false;
       $('tg-hint').textContent = data.last_error
         ? `⚠️ Dernière erreur d'envoi : ${data.last_error}`
-        : 'Les vérifications d\'expiration (J-7, J-2, expiré) et du tunnel tournent automatiquement en arrière-plan.';
+        : 'Les vérifications d\'expiration (J-7, J-2, expiré), chaînes instables, récap hebdo et tunnel tournent automatiquement en arrière-plan.';
       if (wasWaiting) toast('Telegram connecté !');
       return;
     }
@@ -3074,6 +3316,8 @@
         events: {
           expiry: $('tg-ev-expiry').checked,
           provider: $('tg-ev-provider').checked,
+          unstable: $('tg-ev-unstable').checked,
+          weekly: $('tg-ev-weekly').checked,
           tunnel: $('tg-ev-tunnel').checked,
           security: $('tg-ev-security').checked,
         },
@@ -3087,9 +3331,9 @@
   }
 
   // ---------------------------------------------------------- abonnements
-  const SYS_TABS = ['overview', 'providers', 'network', 'alerts', 'backup'];
+  const SYS_TABS = ['providers', 'alerts', 'network', 'overview', 'backup'];
   function selectSysTab(name) {
-    if (!SYS_TABS.includes(name)) name = 'overview';
+    if (!SYS_TABS.includes(name)) name = 'providers';
     state.sysTab = name;
     for (const tab of SYS_TABS) {
       const active = tab === name;
@@ -3237,10 +3481,18 @@
     return maxCons;
   }
 
-  async function loadProviders() {
-    try { providersData = await request('/api/providers'); } catch (error) { $('providers-hint').textContent = error.message; return; }
+  async function loadProviders({ quiet = false } = {}) {
+    try { providersData = await request('/api/providers'); } catch (error) { if (!quiet) $('providers-hint').textContent = error.message; return; }
     const list = $('providers-list');
-    list.replaceChildren(...providersData.providers.map((p) => {
+    const provList = providersData.providers || [];
+    if ($('kpi-providers')) $('kpi-providers').textContent = String(provList.length || 1);
+    if ($('kpi-providers-sub')) {
+      const errs = provList.filter((p) => p.error).length;
+      $('kpi-providers-sub').textContent = errs
+        ? `⚠️ ${plural(errs, 'erreur', 'erreurs')}`
+        : (provList.length > 1 ? 'Multi-abonnements actifs' : 'Principal actif');
+    }
+    list.replaceChildren(...provList.map((p) => {
       const meta = p.source === 'configuration'
         ? `${p.host} · configuration du conteneur`
         : `${p.host} · ${p.username} · ajouté dans l'interface`;
@@ -3272,6 +3524,7 @@
           h('span', { class: p.error ? 'warn-text' : 'muted small', text: p.error || meta + role + conns + mix + agent }), creds),
         actions);
     }));
+    $('provider-add-drawer').hidden = !providersData.editable;
     $('provider-form').hidden = !providersData.editable;
     $('providers-hint').textContent = providersData.editable ? ''
       : 'Ajout désactivé dans ce mode de démarrage : utilise les variables XTREAM_URL_2… puis redémarre le conteneur.';
@@ -3362,6 +3615,8 @@
 
   /** Modifier un abonnement ajouté dans l'interface : le formulaire passe en mode édition (tous les champs). */
   async function editProvider(p) {
+    const drawer = $('provider-add-drawer');
+    if (drawer) drawer.open = true;
     const form = $('provider-form');
     form.dataset.edit = String(p.index);
     $('provider-name').value = p.name;
@@ -3411,6 +3666,7 @@
     $('provider-add').textContent = '+ Ajouter l\'abonnement';
     $('provider-cancel').hidden = true;
     $('provider-edit-hint').hidden = true;
+    if ($('provider-add-drawer')) $('provider-add-drawer').open = false;
   }
 
   async function deleteProvider(p) {
@@ -3733,10 +3989,12 @@
   }
 
   async function init() {
+    initTheme();
     const [status, playlists] = await Promise.allSettled([request('/api/status'), request('/api/playlists')]);
     if (status.status === 'fulfilled') {
       state.status = status.value;
       $('version').textContent = `version ${state.status.version}`;
+      if ($('rail-version')) $('rail-version').textContent = `v${state.status.version}`;
       state.sources = state.status.sources || state.status.profiles || [];
       state.profiles = state.status.profiles || [];
       const remembered = storage('xtream-m3u-profile');
@@ -3758,7 +4016,11 @@
     const firstInProfile = [...state.playlists].sort((a, b) => collator.compare(a.name, b.name));
     load(firstInProfile.find((p) => hasMultipleSources() && playlistProfile(p) === state.profile) || firstInProfile.find(inProfile) || null);
     const fromHash = Object.keys(VIEWS).find((v) => VIEWS[v] === location.hash);
-    if (fromHash && fromHash !== 'playlists') switchView(fromHash);
+    if (fromHash) {
+      if (fromHash !== 'playlists') switchView(fromHash);
+    } else if (state.playlists.length > 0) {
+      switchView('dashboard');
+    }
     loadStreams();
     if (await loadCatalog(false, 'live')) refresh();
     loadSummary();
@@ -3766,6 +4028,42 @@
   }
 
   // ---------------------------------------------------------- événements
+  $('theme-toggle').addEventListener('click', toggleTheme);
+  $('dash-refresh').addEventListener('click', loadDashboard);
+  $('dash-new-playlist').addEventListener('click', async () => {
+    switchView('playlists');
+    if (!(await confirmLeave())) return;
+    load(null);
+    $('name').focus();
+  });
+  $('kpi-providers-btn').addEventListener('click', () => { switchView('system'); selectSysTab('providers'); });
+  $('kpi-devices-btn').addEventListener('click', () => switchView('devices'));
+  $('kpi-alerts-btn').addEventListener('click', () => { switchView('system'); selectSysTab('alerts'); });
+  $('device-add-drawer').addEventListener('toggle', (event) => {
+    if (event.isTrusted) deviceDrawerTouched = true;
+  });
+  $('probe-close').addEventListener('click', () => $('probe-dialog').close());
+  $('probe-rerun').addEventListener('click', () => {
+    if (probeContext) openVersionProbe(probeContext.canonicalId, probeContext.title, probeContext.ids);
+  });
+  $('probe-reset-health').addEventListener('click', async () => {
+    try {
+      await request('/api/streams/health/reset', 'POST', {});
+      toast('Quarantaines réinitialisées');
+      loadStreams();
+      if (probeContext) openVersionProbe(probeContext.canonicalId, probeContext.title, probeContext.ids);
+    } catch (error) { toast(error.message, 'error'); }
+  });
+  $('health-reset-btn').addEventListener('click', async () => {
+    try {
+      await request('/api/streams/health/reset', 'POST', {});
+      toast('Stabilité des versions réinitialisée (retour sur HD)');
+      loadStreams();
+    } catch (error) { toast(error.message, 'error'); }
+  });
+  $('qr-close').addEventListener('click', () => $('qr-dialog').close());
+  $('qr-mode-m3u').addEventListener('click', () => { if (qrState.device) openDeviceQr(qrState.device, 'm3u'); });
+  $('qr-mode-xtream').addEventListener('click', () => { if (qrState.device) openDeviceQr(qrState.device, 'xtream'); });
   $('new').addEventListener('click', async () => {
     if (!(await confirmLeave())) return;
     load(null);
@@ -3780,6 +4078,7 @@
   $('opt-catchup').addEventListener('change', () => { renderOptionsPill(); renderStats(); });
   $('opt-dedupe').addEventListener('change', () => { renderOptionsPill(); refresh(); });
   $('opt-failover').addEventListener('change', () => { renderOptionsPill(); refresh({ channels: false }); });
+  $('opt-adaptive-failover').addEventListener('change', () => { renderOptionsPill(); renderStats(); });
   $('opt-hq-logos').addEventListener('change', () => { renderOptionsPill(); refresh(); });
   $('opt-clean-names').addEventListener('change', () => { renderOptionsPill(); refresh(); });
   $('opt-adult').addEventListener('change', () => { renderOptionsPill(); refresh(); });
@@ -3845,6 +4144,19 @@
       btn.disabled = false;
     }
   });
+  $('tg-weekly-btn').addEventListener('click', async () => {
+    const btn = $('tg-weekly-btn');
+    btn.disabled = true;
+    try {
+      renderAlerts(await request('/api/alerts/weekly', 'POST'));
+      toast('Récapitulatif 7 jours envoyé sur Telegram');
+    } catch (error) {
+      toast(error.message, 'error');
+      loadAlerts({ silent: true });
+    } finally {
+      btn.disabled = false;
+    }
+  });
   $('tg-disconnect-btn').addEventListener('click', async () => {
     if (!(await ask({
       title: 'Déconnecter Telegram ?', okLabel: 'Déconnecter', danger: true,
@@ -3856,7 +4168,7 @@
       toast('Telegram déconnecté');
     } catch (error) { toast(error.message, 'error'); }
   });
-  for (const id of ['tg-enabled', 'tg-ev-expiry', 'tg-ev-provider', 'tg-ev-tunnel', 'tg-ev-security']) {
+  for (const id of ['tg-enabled', 'tg-ev-expiry', 'tg-ev-provider', 'tg-ev-unstable', 'tg-ev-weekly', 'tg-ev-tunnel', 'tg-ev-security']) {
     $(id).addEventListener('change', saveAlertOptions);
   }
   $('tailscale-local').addEventListener('change', async (event) => {
@@ -4004,8 +4316,8 @@
   $('rule-value').addEventListener('keydown', (event) => { if (event.key === 'Enter') { event.preventDefault(); addRule(); } });
   $('clear-favorites').addEventListener('click', () => { state.favorites = []; refresh(); });
   $('clear-custom').addEventListener('click', async () => {
-    if (!(await ask({ title: 'Effacer les personnalisations ?', text: 'Tous les noms, numéros, logos et guides personnalisés de cette playlist seront supprimés.', okLabel: 'Effacer', danger: true }))) return;
-    state.itemNames = {}; state.itemNumbers = {}; state.itemLogos = {}; state.itemEpg = {}; state.itemXmltv = {};
+    if (!(await ask({ title: 'Effacer les personnalisations ?', text: 'Tous les noms, numéros, logos, guides et versions épinglées de cette playlist seront supprimés.', okLabel: 'Effacer', danger: true }))) return;
+    state.itemNames = {}; state.itemNumbers = {}; state.itemLogos = {}; state.itemEpg = {}; state.itemXmltv = {}; state.itemPinned = {};
     refresh();
   });
   $('auto-number').addEventListener('click', async () => {
@@ -4051,6 +4363,7 @@
   });
   $('epg-refresh').addEventListener('click', refreshEpg);
   document.querySelectorAll('[data-kind]').forEach((btn) => btn.addEventListener('click', () => switchKind(btn.dataset.kind)));
+  $('view-btn-dashboard').addEventListener('click', () => switchView('dashboard'));
   $('view-btn-playlists').addEventListener('click', () => switchView('playlists'));
   $('view-btn-guide').addEventListener('click', () => switchView('guide'));
   $('view-btn-catalog').addEventListener('click', () => switchView('catalog'));
@@ -4070,6 +4383,8 @@
       const device = await request('/api/devices', 'POST', { name, playlist: $('device-playlist').value, priority: $('device-priority').value,
         links: $('device-links').value, profile: hasMultipleSources() ? state.profile : '' });
       $('device-name').value = '';
+      deviceDrawerTouched = false;
+      if ($('device-add-drawer')) $('device-add-drawer').open = false;
       toast(`Appareil « ${device.name} » ajouté`);
       loadDevices();
     } catch (error) { toast(error.message, 'error'); }
@@ -4090,7 +4405,7 @@
       loadDevices();
     } catch (error) { toast(error.message, 'error'); $('require-token').checked = !value; }
   });
-  $('streams-pill').addEventListener('click', () => { switchView('system'); selectSysTab('overview'); });
+  $('streams-pill').addEventListener('click', () => switchView('dashboard'));
   $('streams-refresh').addEventListener('click', loadStreams);
   $('diag-run').addEventListener('click', runDiagnostic);
   $('diag-copy').addEventListener('click', () => {

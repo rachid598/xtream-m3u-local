@@ -601,6 +601,17 @@ def select_items(api, saved: dict, kind: str, *, refresh: bool = False) -> tuple
         if saved.get("failover") and saved.get("failover_any_category"):
             entries = extend_alternates_from_catalog(entries, items, uhd,
                                                      set(saved.get(SELECTION_FIELDS["live"][2]) or ()), categories)
+    if kind == "live" and saved.get("item_pinned"):
+        pinned = saved["item_pinned"]
+        updated = []
+        for item, group in entries:
+            target = pinned.get(item["stream_id"])
+            alts = list(item.get("alternates") or [])
+            if target and target in alts:
+                # Garde stream_id canonique intact (EPG, favoris, numéros, TiviMate) mais passe la version épinglée en n° 1.
+                item = {**item, "pinned_stream": target, "alternates": [item["stream_id"], *(a for a in alts if a != target)]}
+            updated.append((item, group))
+        entries = updated
     if kind == "live" and saved.get("hq_logos", True):
         entries = apply_hq_logos(entries, categories)
     if kind == "live" and saved.get("clean_names"):

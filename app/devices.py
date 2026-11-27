@@ -74,7 +74,7 @@ class DeviceStore:
             except (OSError, ValueError):
                 raise RuntimeError("devices.json illisible") from None
             data = {"require_token": bool(data.get("require_token")),
-                    "devices": [{"profile": "", **d} for d in data["devices"]
+                    "devices": [{"profile": "", "paused": False, **d} for d in data["devices"]
                                 if isinstance(d, dict) and d.get("password")]}
             self._cache = (mtime, data)
             return data
@@ -224,7 +224,7 @@ class DeviceStore:
                       "password": new_password(), "playlist": self._check_playlist(playlist),
                       "priority": self._check_priority(priority), "ip": self._check_ip(ip),
                       "links": self._check_links(links), "profile": self._check_profile(profile),
-                      "created_at": int(time.time())}
+                      "paused": False, "created_at": int(time.time())}
             self._write({"require_token": data["require_token"], "devices": devices + [device]})
             return dict(device)
 
@@ -247,6 +247,8 @@ class DeviceStore:
                 device["links"] = self._check_links(payload["links"])
             if "profile" in payload:
                 device["profile"] = self._check_profile(payload["profile"])
+            if "paused" in payload:
+                device["paused"] = bool(payload["paused"])
             if payload.get("regenerate"):
                 device["password"] = new_password()
             self._write({"require_token": data["require_token"], "devices": devices})
@@ -307,6 +309,7 @@ class DeviceStore:
                             "ip": self._check_ip(raw.get("ip")),
                             "links": self._safe_links(raw.get("links")),
                             "profile": clean_prof if clean_prof.isdigit() and 1 <= int(clean_prof) <= 9 else "",
+                            "paused": bool(raw.get("paused", False)),
                             "created_at": created})
         if dry_run:
             return

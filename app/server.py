@@ -977,7 +977,8 @@ def playlist(config: Config, entries: list[tuple[dict, str]], categories: dict[s
              *, mode: str = "proxy", fmt: str = "ts", epg_path: str | None = "/epg.xml",
              group_names: dict[str, str] | None = None, api_epg_ids: bool = False,
              live_format: str = "ts", catchup: bool = True, token: str | None = None,
-             direct_url=None, failover: bool = False, profile: str = "") -> bytes:
+             direct_url=None, failover: bool = False, profile: str = "",
+             adaptive_failover: bool = False) -> bytes:
     """Build an M3U (extended) document.
 
     ``entries`` = ``[(élément, clé_de_groupe), ...]`` où l'élément est une chaîne (``kind`` absent ou ``live``),
@@ -998,6 +999,7 @@ def playlist(config: Config, entries: list[tuple[dict, str]], categories: dict[s
     lines = [header]
     for channel, group_id in entries:
         stream_id = channel["stream_id"]
+        play_id = channel.get("pinned_stream") or stream_id
         name = escape_title(channel.get("name"))
         group = ((group_names or {}).get(group_id) or categories.get(group_id)
                  or ("Sans catégorie" if group_id == UNCATEGORIZED else "TV"))
@@ -1025,20 +1027,22 @@ def playlist(config: Config, entries: list[tuple[dict, str]], categories: dict[s
                      "episode": ("series", channel.get("ext", "mp4"))}.get(kind, ("live", fmt))
         if mode == "proxy":
             if path == "live":
-                local = f"hls/{stream_id}.m3u8" if live_format == "hls" else f"stream/{stream_id}.ts"
+                local = f"hls/{play_id}.m3u8" if live_format == "hls" else f"stream/{play_id}.ts"
                 if failover and live_format != "hls" and channel.get("alternates"):
                     # Bascule automatique : versions de secours (meilleure qualité d'abord).
                     local += "?alt=" + ",".join(channel["alternates"])
+                    if adaptive_failover:
+                        local += "&af=1"
             else:
                 local = f"{path}/{stream_id}.{ext}"
             target = decorate(f"{base}/{local}")
         elif direct_url is not None:
-            target = direct_url(path, stream_id, ext)
+            target = direct_url(path, play_id if path == "live" else stream_id, ext)
         else:
             target = (
                 f"{config.xtream_url}/{path}/"
                 f"{quote(config.username, safe='')}/{quote(config.password, safe='')}/"
-                f"{stream_id}.{ext}"
+                f"{play_id if path == 'live' else stream_id}.{ext}"
             )
         lines.append(target)
     return ("\n".join(lines) + "\n").encode("utf-8")
@@ -1418,6 +1422,10 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_busy(wait)
             return None
         client, device = self._viewer_identity()
+        if device.get("paused"):
+            if not silent:
+                self._error(403, "Appareil mis en pause depuis l'interface Web", head_only=False)
+            return None
         caller = consumer_profile or self._caller_profile(item_id, device=device)
         try:
             return self.streams.acquire(kind=kind, item_id=item_id, client=client,
@@ -1569,7 +1577,7 @@ class Handler(BaseHTTPRequestHandler):
             if headers_sent:
                 self.close_connection = True
 
-    def relay_live(self, ids: list[str]) -> None:
+    def relay_live(self, ids: list[str], *, adaptive: bool = False) -> None:
         """Direct avec bascule automatique et débordement multi-abonnements.
 
         Une seule connexion fournisseur à la fois (la précédente est fermée avant d'ouvrir la suivante).
@@ -1578,6 +1586,9 @@ class Handler(BaseHTTPRequestHandler):
         secours appartient à un second abonnement disponible, la lecture déborde automatiquement dessus.
         """
         ids = list(dict.fromkeys(ids))
+        health = getattr(self.streams, "health", None)
+        if adaptive and health is not None and len(ids) > 1:
+            ids = health.reorder(ids)
         names = {sid: self.item_label("live", sid) for sid in ids}
         providers_in_ids = [self.api.provider_of(sid) for sid in ids]
         multi_provider = len(set(providers_in_ids)) > 1
@@ -1594,6 +1605,9 @@ class Handler(BaseHTTPRequestHandler):
         index = ids.index(remembered["sid"]) if remembered else 0
 
         client, device = self._viewer_identity()
+        if device.get("paused"):
+            self._error(403, "Appareil mis en pause depuis l'interface Web", head_only=False)
+            return
         caller = self._caller_profile(ids[0], primary_id=ids[0], device=device)
         headers_done = False
         if self.hub is not None:
@@ -1693,6 +1707,8 @@ class Handler(BaseHTTPRequestHandler):
                         session, state["transferred"] = fresh, False
                         session.channel = names[ids[0]]
                 if state.get("transferred") or outcome in ("client", "cancelled", "busy"):
+                    if outcome in ("client", "cancelled") and health is not None and time.monotonic() - started >= 60:
+                        health.record_success(sid)
                     break
                 if outcome == "best":
                     LOG.info("Retour à la meilleure version de %s après %d min", ids[0], int((time.monotonic() - started) / 60))
@@ -1703,12 +1719,20 @@ class Handler(BaseHTTPRequestHandler):
                         break
                     index, switches = 0, 0
                     continue
+                if health is not None and outcome != "full":
+                    health.record_failure(sid)
                 trial = memory.get(ids[0], {}).get("trial") if reconnect else (started if index == 0 and switches == 0 else None)
                 if index == 0 and trial and time.monotonic() - trial < 60 and wait_best:
                     wait_best = min(wait_best * 2, 4 * 3600)
                 switches += 1
                 tried += 1
                 session.switches += 1
+                if session.switches == 5:
+                    alerts.notify(
+                        "unstable", f"unstable:{ids[0]}",
+                        f"⚠️ Chaîne instable : « {names[ids[0]]} » a basculé {session.switches} fois (abonnement {provider}).",
+                        cooldown=6 * 3600,
+                    )
                 if tried > max_switches:
                     LOG.warning("Bascule automatique : aucune version de la chaîne %s ne fonctionne", ids[0])
                     break
@@ -1848,7 +1872,8 @@ class Handler(BaseHTTPRequestHandler):
                            api_epg_ids=self.config.guide_ids,
                            live_format=live_format, catchup=saved.get("catchup", True),
                            token=self.request_token, failover=bool(saved.get("failover")),
-                           profile=str(saved.get("provider") or "1"))
+                           profile=str(saved.get("provider") or "1"),
+                           adaptive_failover=bool(saved.get("adaptive_failover")))
         return content, incomplete
 
     # ------------------------------------------------------- Xtream local
@@ -1932,6 +1957,8 @@ class Handler(BaseHTTPRequestHandler):
         if device is None:
             note_refused_login(self.client_ip or self.client_address[0], username)
             return self._error(403, "Identifiants d'appareil invalides", head_only=head_only)
+        if device.get("paused"):
+            return self._error(403, "Appareil mis en pause depuis l'interface Web", head_only=head_only)
         self.request_token = device["password"]
         item_id = self.emulator.internal(item_id, device)   # identifiant court (ou copie) des lecteurs Xtream
         catalog_kind = {"live": "live", "movie": "vod", "series": "series"}[kind]
@@ -1941,15 +1968,16 @@ class Handler(BaseHTTPRequestHandler):
             return self._error(404, "Contenu absent de la playlist de cet appareil", head_only=head_only)
         ext = ext.lower()
         if kind == "live":
+            plan, adaptive = self.emulator.stream_plan(device, item_id)
+            primary = plan[0] if plan else item_id
             if ext == "m3u8":
-                self.handle_hls(f"/hls/{item_id}.m3u8", head_only=head_only)
+                self.handle_hls(f"/hls/{primary}.m3u8", head_only=head_only)
                 return None
             if head_only:
                 return self.response(200, b"", "video/mp2t", head_only=True)
-            alternates = self.emulator.alternates(device, item_id)
-            if alternates:
-                return self.relay_live([item_id, *alternates])
-            return self.relay(self.api.direct_stream(item_id), head_only=False, track=("live", item_id))
+            if len(plan) > 1:
+                return self.relay_live(plan, adaptive=adaptive)
+            return self.relay(self.api.direct_stream(primary), head_only=False, track=("live", primary))
         return self.relay(self.api.direct_url(kind, item_id, ext), head_only=head_only,
                           default_type=mime_for(ext), track=(kind, item_id))
 
@@ -1958,6 +1986,8 @@ class Handler(BaseHTTPRequestHandler):
         device = self.device_from(username, password)
         if device is None:
             return self._error(403, "Identifiants d'appareil invalides", head_only=head_only)
+        if device.get("paused"):
+            return self._error(403, "Appareil mis en pause depuis l'interface Web", head_only=head_only)
         if not START_RE.fullmatch(start) or not minutes.isdigit() or not 1 <= int(minutes) <= 24 * 60:
             return self._error(400, "Période de replay invalide", head_only=head_only)
         stream_id = self.emulator.internal(stream_id, device)
@@ -2316,17 +2346,21 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_header("Cache-Control", "no-store")
                 self.end_headers()
                 return
+            if device is not None and device.get("paused"):
+                return self._error(403, "Appareil mis en pause depuis l'interface Web", head_only=head_only)
             if not self.device_allows("live", match.group(1)):
                 return self._error(404, "Chaîne absente de la playlist de cet appareil", head_only=head_only)
             if device is not None:
                 # Versions de secours décidées par le serveur (playlist de l'appareil), pas par l'adresse.
-                alternates = self.emulator.alternates(device, match.group(1))
+                plan, adaptive = self.emulator.stream_plan(device, match.group(1))
             else:
                 alternates = parse_alternates(qs.get("alt", [""])[0])
-            if alternates:
-                return self.relay_live([match.group(1), *alternates])
-            return self.relay(self.api.direct_stream(match.group(1)), head_only=False,
-                              track=("live", match.group(1)))
+                plan = [match.group(1), *alternates] if alternates else [match.group(1)]
+                adaptive = qs.get("af", [""])[0] == "1"
+            if len(plan) > 1:
+                return self.relay_live(plan, adaptive=adaptive)
+            return self.relay(self.api.direct_stream(plan[0]), head_only=False,
+                              track=("live", plan[0]))
         if path in ("/epg.xml", "/xmltv.php") and self.config.enable_epg:
             # /xmltv.php : adresse « à la Xtream » que certains lecteurs utilisent d'office pour le guide
             # (les paramètres username/password éventuels sont ignorés).
@@ -2625,7 +2659,7 @@ def main() -> None:
     from . import nightly
     nightly.start(api, series, store, config)
     if alerts.current() is not None:
-        alerts.current().start_watchdog(api, tunnel.current())
+        alerts.current().start_watchdog(api, tunnel.current(), streams)
     # Préchargement du catalogue pour que la première ouverture soit rapide.
     threading.Thread(target=_warmup, args=(api,), daemon=True).start()
     try:
