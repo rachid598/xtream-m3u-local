@@ -588,13 +588,42 @@
         <ul id="diag-results" class="diag-list"></ul>
       </section>
 
-      <section class="card">
+      <section class="card" id="history-card">
         <div class="card-head">
           <div>
             <h2>Historique des lectures (30 jours)</h2>
-            <p class="muted small">Chaînes les plus suivies et bascules automatiques observées.</p>
+            <p class="muted small" id="history-subtitle">Chaînes les plus suivies et bascules automatiques observées — filtre par abonnement ou par personne.</p>
           </div>
           <button type="button" class="btn small ghost" id="history-clear">Effacer</button>
+        </div>
+        <div class="history-filters" id="history-filters">
+          <div class="field">
+            <label for="history-provider">Abonnement</label>
+            <select id="history-provider"><option value="all">Tous les abonnements</option></select>
+          </div>
+          <div class="field">
+            <label for="history-device">Personne / Appareil</label>
+            <select id="history-device"><option value="">Tout le monde</option></select>
+          </div>
+          <div class="field">
+            <label for="history-sort">Trier par</label>
+            <select id="history-sort">
+              <option value="seconds">Temps de visionnage</option>
+              <option value="count">Nombre de lectures</option>
+              <option value="recent">Plus récentes</option>
+            </select>
+          </div>
+          <button type="button" class="btn small ghost" id="history-reset" hidden>Tout afficher</button>
+        </div>
+        <div class="history-breakdown" id="history-breakdown" hidden>
+          <div id="history-prov-box">
+            <h3>Par abonnement</h3>
+            <div class="history-chip-list" id="history-by-provider"></div>
+          </div>
+          <div id="history-dev-box">
+            <h3>Par personne / appareil</h3>
+            <div class="history-chip-list" id="history-by-device"></div>
+          </div>
         </div>
         <div class="summary-grid">
           <div><h3>Les plus regardées</h3><ol id="history-top" class="sum-list"></ol></div>

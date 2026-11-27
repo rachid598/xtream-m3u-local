@@ -2,6 +2,14 @@
 
 Format inspiré de « Keep a Changelog ». Les versions suivent le versionnage sémantique.
 
+## [3.35.1] — 2026-11-27
+
+### Ajouté
+- **Historique des lectures (30 jours) filtrable et triable par abonnement et par personne / appareil** (**Système → État & Diagnostic**) :
+  - Barre de filtres dédiée : **Abonnement** (tous ou un abonnement précis), **Personne / Appareil** (tout le monde, un appareil nommé ou un appareil sans code par IP) et **Trier par** (*Temps de visionnage*, *Nombre de lectures*, *Plus récentes*).
+  - Synthèse cliquable **Par abonnement** et **Par personne / appareil** (durée totale, nombre de lectures, bascules et chaîne principale) : un clic filtre instantanément *Les plus regardées*, *Bascules automatiques* et *Dernières sessions détaillées*.
+  - Étiquettes discrètes (`👤 Appareil`, `🔑 Abonnement`, `🛡️ Secours`) sur les classements et sessions détaillées, et effacement ciblé respectant le filtre actif. 100 % rétrocompatible avec l'historique existant (`/data/history.json`).
+
 ## [3.35.0] — 2026-11-27
 
 ### Ajouté

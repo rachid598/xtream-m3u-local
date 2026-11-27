@@ -1,7 +1,13 @@
 # Passation — Xtream M3U Local
 
-> **État au 27 novembre 2026 — version 3.35.0.** Document à transmettre tel quel à l'IA suivante avec le dépôt.
+> **État au 27 novembre 2026 — version 3.35.1.** Document à transmettre tel quel à l'IA suivante avec le dépôt.
 > Aucun mot de passe, token ni URL fournisseur réelle ne doit être copié ici ni commité sur GitHub.
+
+### Historique des lectures filtrable par abonnement et par personne en 3.35.1
+
+- `streams.StreamManager._record()` enregistre aussi `"profile"` (`consumer_profile`) dans `/data/history.json` (100 % rétrocompatible avec les anciennes entrées) et `clear_history(provider=..., device=...)` permet l'effacement ciblé.
+- `GET /api/history` accepte `?provider=all|<id>`, `?device=<clé>`, `?sort=seconds|count|recent` (tout en conservant `?profile=` pour rétrocompatibilité) ; `history_payload()` renvoie `by_provider`, `by_device`, les étiquettes `providers`/`devices` sur `top`/`unstable` et `provider_name`/`device_label`/`backup` sur `entries`.
+- UI **Système → État & Diagnostic → Historique** : filtres Abonnement / Personne / Tri, synthèse cliquable **Par abonnement** et **Par personne / appareil**, badges discrets sur les lignes, et effacement ciblé. Test : `tests/test_v335.py::HistoryFilterTests`.
 
 ### Nouveautés en 3.35.0 (Mode Décodeur, XMLTV multi-abonnements, Alertes Telegram + QR code)
 

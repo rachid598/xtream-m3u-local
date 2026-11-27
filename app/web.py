@@ -210,10 +210,21 @@ class WebHandler(BaseHTTPRequestHandler):
         if path == "/api/streams":
             return self.json(200, self.streams_status(profile))
         if path == "/api/history":
-            entries = self.streams.history() if self.streams is not None else []
-            if profile:  # profil : seulement les lectures de son abonnement (anciennes entrées : profil 1)
-                entries = [e for e in entries if str(e.get("provider") or "1") == profile]
-            return self.json(200, history_payload(entries))
+            all_entries = self.streams.history() if self.streams is not None else []
+            prov_param = qs.get("provider", [""])[0].strip()
+            dev_param = qs.get("device", [""])[0].strip()
+            sort_param = qs.get("sort", ["seconds"])[0].strip()
+            # Rétrocompatibilité : sans ?provider=, ?profile= filtre cet abonnement ; ?provider=all affiche tout.
+            active_prov = "" if prov_param == "all" else (prov_param if prov_param.isdigit() else (profile if not prov_param else ""))
+            entries = all_entries
+            if active_prov:
+                entries = [e for e in entries if str(e.get("provider") or "1") == active_prov]
+            if dev_param:
+                entries = [e for e in entries if _history_device_key(e) == dev_param]
+            provider_names = {s["id"]: s["name"] for s in sources(self.api, self.config)}
+            return self.json(200, history_payload(
+                entries, all_history=all_entries, provider_names=provider_names, sort=sort_param,
+            ))
         if path == "/api/devices":
             return self.devices_status()
         if path == "/api/providers":
@@ -867,9 +878,15 @@ class WebHandler(BaseHTTPRequestHandler):
         if path == "/api/history/clear":
             if not self.same_origin():
                 return
-            profile = parse_qs(urlsplit(self.path).query).get("profile", [""])[0]
+            q = parse_qs(urlsplit(self.path).query)
+            prov_param = q.get("provider", [""])[0].strip()
+            prof_param = q.get("profile", [""])[0].strip()
+            dev_param = q.get("device", [""])[0].strip()
+            target_prov = None if prov_param == "all" else (
+                prov_param if prov_param.isdigit() else (prof_param if prof_param.isdigit() else None)
+            )
             if self.streams is not None:
-                self.streams.clear_history(profile if profile.isdigit() else None)
+                self.streams.clear_history(target_prov, device=dev_param or None)
             return self.json(200, {"cleared": True})
         stop = STREAM_STOP_API.fullmatch(path)
         if stop:
@@ -1410,29 +1427,151 @@ def catalog_payload(channels: list[dict], categories: dict[str, str], api: Xtrea
     }
 
 
-def history_payload(history: list[dict], *, days: int = 30, now: float | None = None) -> dict:
-    """Historique des lectures : 100 dernières, chaînes les plus regardées et chaînes qui basculent (30 jours).
+def _history_device_key(entry: dict) -> str:
+    dev = str(entry.get("device") or "").strip()
+    if dev:
+        return dev
+    client = str(entry.get("client") or "").strip()
+    return f"ip:{client}" if client else "unknown"
 
-    Les lectures de moins de 20 s (zapping) ne comptent pas dans le classement.
+
+def _history_device_label(entry: dict) -> str:
+    dev = str(entry.get("device") or "").strip()
+    if dev:
+        return dev
+    client = str(entry.get("client") or "").strip()
+    return f"Sans code ({client})" if client else "Appareil inconnu"
+
+
+def history_payload(history: list[dict], *, days: int = 30, now: float | None = None,
+                    all_history: list[dict] | None = None,
+                    provider_names: dict[str, str] | None = None,
+                    sort: str = "seconds") -> dict:
+    """Historique des lectures : 100 dernières, classements (30 j) et répartitions par abonnement / personne.
+
+    Les lectures de moins de 20 s (zapping) ne comptent pas dans le classement « Les plus regardées ».
     """
     now = now or time.time()
+    names = provider_names or {}
     recent = [h for h in history if now - h.get("started_at", 0) <= days * 86400]
+    scope = [h for h in (all_history if all_history is not None else history)
+             if now - h.get("started_at", 0) <= days * 86400]
+
+    def prov_label(pid: str) -> str:
+        return names.get(pid) or f"Abonnement {pid}"
+
+    # Répartitions globales (30 j) par abonnement et par personne / appareil
+    prov_agg: dict[str, dict] = {}
+    dev_agg: dict[str, dict] = {}
+    for h in scope:
+        pid = str(h.get("provider") or "1")
+        secs = int(h.get("seconds", 0) or 0)
+        sw = int(h.get("switches", 0) or 0)
+        lbl = h.get("label") or h.get("item_id") or "?"
+        started = int(h.get("started_at", 0) or 0)
+
+        p = prov_agg.setdefault(pid, {
+            "id": pid, "name": prov_label(pid), "sessions": 0, "seconds": 0,
+            "switches": 0, "last_at": 0, "_channels": {},
+        })
+        p["sessions"] += 1
+        p["seconds"] += secs
+        p["switches"] += sw
+        p["last_at"] = max(p["last_at"], started)
+        if secs >= 20:
+            p["_channels"][lbl] = p["_channels"].get(lbl, 0) + secs
+
+        dk = _history_device_key(h)
+        d = dev_agg.setdefault(dk, {
+            "id": dk, "label": _history_device_label(h), "sessions": 0, "seconds": 0,
+            "switches": 0, "last_at": 0, "_providers": set(), "_channels": {},
+        })
+        d["sessions"] += 1
+        d["seconds"] += secs
+        d["switches"] += sw
+        d["last_at"] = max(d["last_at"], started)
+        d["_providers"].add(pid)
+        if secs >= 20:
+            d["_channels"][lbl] = d["_channels"].get(lbl, 0) + secs
+
+    by_provider = []
+    for row in sorted(prov_agg.values(), key=lambda r: (-r["seconds"], -r["sessions"], r["id"])):
+        ch = row.pop("_channels")
+        row["top_label"] = max(ch.items(), key=lambda kv: kv[1])[0] if ch else ""
+        by_provider.append(row)
+
+    by_device = []
+    for row in sorted(dev_agg.values(), key=lambda r: (-r["seconds"], -r["sessions"], r["label"].lower())):
+        ch = row.pop("_channels")
+        provs = sorted(row.pop("_providers"), key=lambda x: int(x) if x.isdigit() else 99)
+        row["providers"] = [{"id": p, "name": prov_label(p)} for p in provs]
+        row["top_label"] = max(ch.items(), key=lambda kv: kv[1])[0] if ch else ""
+        by_device.append(row)
+
     top: dict[str, dict] = {}
     unstable: dict[str, dict] = {}
     for h in recent:
         label = h.get("label") or h.get("item_id") or "?"
+        pid = str(h.get("provider") or "1")
+        dlabel = _history_device_label(h)
+        started = int(h.get("started_at", 0) or 0)
         if h.get("seconds", 0) >= 20:
-            entry = top.setdefault(label, {"label": label, "kind": h.get("kind"), "count": 0, "seconds": 0})
+            entry = top.setdefault(label, {
+                "label": label, "kind": h.get("kind"), "count": 0, "seconds": 0,
+                "last_at": 0, "_providers": set(), "_devices": set(),
+            })
             entry["count"] += 1
             entry["seconds"] += h.get("seconds", 0)
+            entry["last_at"] = max(entry["last_at"], started)
+            entry["_providers"].add(pid)
+            entry["_devices"].add(dlabel)
         if h.get("switches"):
-            entry = unstable.setdefault(label, {"label": label, "count": 0, "switches": 0})
+            entry = unstable.setdefault(label, {
+                "label": label, "count": 0, "switches": 0,
+                "last_at": 0, "_providers": set(), "_devices": set(),
+            })
             entry["count"] += 1
             entry["switches"] += h["switches"]
+            entry["last_at"] = max(entry["last_at"], started)
+            entry["_providers"].add(pid)
+            entry["_devices"].add(dlabel)
+
+    def _finalize(rows: list[dict]) -> list[dict]:
+        out = []
+        for r in rows:
+            provs = sorted(r.pop("_providers"), key=lambda x: int(x) if x.isdigit() else 99)
+            devs = sorted(r.pop("_devices"), key=str.lower)
+            r["providers"] = [{"id": p, "name": prov_label(p)} for p in provs]
+            r["devices"] = devs
+            out.append(r)
+        return out
+
+    if sort == "count":
+        top_key = lambda e: (-e["count"], -e["seconds"], e["label"])
+    elif sort == "recent":
+        top_key = lambda e: (-e["last_at"], -e["seconds"], e["label"])
+    else:
+        top_key = lambda e: (-e["seconds"], -e["count"], e["label"])
+
+    enriched_entries = []
+    for h in history[:100]:
+        pid = str(h.get("provider") or "1")
+        prof = str(h.get("profile") or pid)
+        enriched_entries.append({
+            **h,
+            "provider": pid,
+            "provider_name": prov_label(pid),
+            "device_key": _history_device_key(h),
+            "device_label": _history_device_label(h),
+            "backup": bool(h.get("profile") and prof != pid),
+        })
+
     return {
-        "entries": history[:100],
-        "top": sorted(top.values(), key=lambda e: (-e["seconds"], e["label"]))[:15],
-        "unstable": sorted(unstable.values(), key=lambda e: (-e["switches"], e["label"]))[:15],
+        "entries": enriched_entries,
+        "top": _finalize(sorted(top.values(), key=top_key)[:15]),
+        "unstable": _finalize(sorted(unstable.values(), key=lambda e: (-e["switches"], -e["last_at"], e["label"]))[:15]),
+        "by_provider": by_provider,
+        "by_device": by_device,
         "total": len(recent),
     }
 

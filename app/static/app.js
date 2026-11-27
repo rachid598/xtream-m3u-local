@@ -2250,17 +2250,147 @@
   }
 
   // ------------------------------------------------------------ historique
+  const historyFilter = { provider: 'all', device: '', sort: 'seconds' };
+  let historyMeta = { providers: [], devices: [] };
+
+  function historyQueryParams() {
+    const params = new URLSearchParams();
+    params.set('provider', historyFilter.provider || 'all');
+    if (historyFilter.device) params.set('device', historyFilter.device);
+    if (historyFilter.sort && historyFilter.sort !== 'seconds') params.set('sort', historyFilter.sort);
+    return params.toString();
+  }
+
   async function loadHistory() {
     let data;
-    try { data = await request(`/api/history${profileQuery()}`); } catch (_) { return; }
-    const fill = (id, rows, text, empty) => {
+    try { data = await request(`/api/history?${historyQueryParams()}`); } catch (_) { return; }
+    const provs = data.by_provider || [];
+    const devs = data.by_device || [];
+    historyMeta = { providers: provs, devices: devs };
+
+    // Mettre à jour les listes déroulantes sans perdre la sélection active
+    const provSel = $('history-provider');
+    const provOpts = [h('option', { value: 'all', text: 'Tous les abonnements' }),
+      ...provs.map((p) => h('option', {
+        value: String(p.id),
+        text: `${p.id}. ${p.name} (${formatDuration(p.seconds)} · ${plural(p.sessions, 'lecture', 'lectures')})`,
+      }))];
+    provSel.replaceChildren(...provOpts);
+    provSel.value = provs.some((p) => String(p.id) === historyFilter.provider) ? historyFilter.provider : 'all';
+    if (provSel.value !== historyFilter.provider) historyFilter.provider = provSel.value;
+
+    const devSel = $('history-device');
+    const devOpts = [h('option', { value: '', text: 'Tout le monde' }),
+      ...devs.map((d) => h('option', {
+        value: d.id,
+        text: `${d.label} (${formatDuration(d.seconds)} · ${plural(d.sessions, 'lecture', 'lectures')})`,
+      }))];
+    devSel.replaceChildren(...devOpts);
+    devSel.value = devs.some((d) => d.id === historyFilter.device) ? historyFilter.device : '';
+    if (devSel.value !== historyFilter.device) historyFilter.device = devSel.value;
+
+    $('history-sort').value = historyFilter.sort;
+    const hasFilter = historyFilter.provider !== 'all' || Boolean(historyFilter.device);
+    $('history-reset').hidden = !hasFilter;
+
+    // Sous-titre résumant le périmètre affiché
+    const scopeParts = [];
+    if (historyFilter.provider !== 'all') {
+      const p = provs.find((x) => String(x.id) === historyFilter.provider);
+      scopeParts.push(`🔑 ${p ? p.name : `Abonnement ${historyFilter.provider}`}`);
+    }
+    if (historyFilter.device) {
+      const d = devs.find((x) => x.id === historyFilter.device);
+      scopeParts.push(`👤 ${d ? d.label : historyFilter.device}`);
+    }
+    $('history-subtitle').textContent = scopeParts.length
+      ? `Filtre actif : ${scopeParts.join(' · ')} — ${plural(data.total || 0, 'lecture', 'lectures')} sur 30 jours.`
+      : `Chaînes les plus suivies et bascules automatiques (${plural(data.total || 0, 'lecture', 'lectures')} sur 30 jours) — clique sur un abonnement ou une personne pour filtrer.`;
+
+    // Cartes cliquables « Par abonnement » et « Par personne / appareil »
+    const showBreakdown = provs.length > 0 || devs.length > 0;
+    $('history-breakdown').hidden = !showBreakdown;
+    $('history-prov-box').hidden = provs.length === 0;
+    $('history-dev-box').hidden = devs.length === 0;
+
+    $('history-by-provider').replaceChildren(...provs.map((p) => {
+      const active = historyFilter.provider === String(p.id);
+      return h('button', {
+        type: 'button', class: 'history-chip', 'aria-pressed': String(active),
+        onclick: () => {
+          historyFilter.provider = active ? 'all' : String(p.id);
+          loadHistory();
+        },
+      },
+      h('span', { class: 'history-chip-main' },
+        h('span', { class: 'history-chip-title', text: `🔑 ${p.id}. ${p.name}` }),
+        h('span', { class: 'history-chip-sub', text: p.top_label ? `Top : ${p.top_label}` : 'Zapping (< 20 s)' })),
+      h('span', { class: 'history-chip-stats' },
+        h('strong', { text: formatDuration(p.seconds) }),
+        h('span', { text: `${plural(p.sessions, 'lecture', 'lectures')}${p.switches ? ` · ${plural(p.switches, 'bascule', 'bascules')}` : ''}` })));
+    }));
+
+    $('history-by-device').replaceChildren(...devs.map((d) => {
+      const active = historyFilter.device === d.id;
+      const provList = (d.providers || []).map((x) => x.name).join(', ');
+      const subBits = [];
+      if (d.top_label) subBits.push(`Top : ${d.top_label}`);
+      if (provList && provs.length > 1) subBits.push(provList);
+      return h('button', {
+        type: 'button', class: 'history-chip', 'aria-pressed': String(active),
+        onclick: () => {
+          historyFilter.device = active ? '' : d.id;
+          loadHistory();
+        },
+      },
+      h('span', { class: 'history-chip-main' },
+        h('span', { class: 'history-chip-title', text: `👤 ${d.label}` }),
+        h('span', { class: 'history-chip-sub', text: subBits.join(' · ') || 'Zapping (< 20 s)' })),
+      h('span', { class: 'history-chip-stats' },
+        h('strong', { text: formatDuration(d.seconds) }),
+        h('span', { text: `${plural(d.sessions, 'lecture', 'lectures')}${d.switches ? ` · ${plural(d.switches, 'bascule', 'bascules')}` : ''}` })));
+    }));
+
+    // Étiquettes discrètes (qui / quel abonnement) sur les lignes de classement
+    const showProvTag = historyFilter.provider === 'all' && provs.length > 1;
+    const showDevTag = !historyFilter.device && devs.length > 1;
+    const rowTags = (r) => {
+      const tags = [];
+      if (showDevTag && r.devices && r.devices.length) {
+        const shown = r.devices.slice(0, 3).join(', ') + (r.devices.length > 3 ? ` +${r.devices.length - 3}` : '');
+        tags.push(h('span', { class: 'history-tag', text: `👤 ${shown}` }));
+      }
+      if (showProvTag && r.providers && r.providers.length) {
+        const shown = r.providers.map((p) => p.name).join(', ');
+        tags.push(h('span', { class: 'history-tag', text: `🔑 ${shown}` }));
+      }
+      return tags.length ? h('span', { class: 'history-row-tags' }, ...tags) : null;
+    };
+
+    const fillRanked = (id, rows, text, empty) => {
       const node = $(id);
-      node.replaceChildren(...rows.map((r) => h('li', null, h('span', { text: r.label }), h('span', { class: 'num', text: text(r) }))));
+      node.replaceChildren(...rows.map((r) => h('li', null,
+        h('span', { class: 'history-row-main' }, h('span', { text: r.label }), rowTags(r)),
+        h('span', { class: 'num', text: text(r) }))));
       if (!rows.length) node.append(h('li', { class: 'empty', text: empty }));
     };
-    fill('history-top', data.top, (r) => `${formatDuration(r.seconds)} · ${plural(r.count, 'fois', 'fois')}`, 'Aucune lecture enregistrée.');
-    fill('history-unstable', data.unstable, (r) => `${plural(r.switches, 'bascule', 'bascules')}`, 'Aucune bascule : les chaînes tiennent bien.');
-    fill('history-list', data.entries.slice(0, 50), (r) => `${new Date(r.started_at * 1000).toLocaleString('fr-FR', { dateStyle: 'short', timeStyle: 'short' })} · ${formatDuration(r.seconds)}${r.device ? ` · ${r.device}` : ''}${r.switches ? ` · ${plural(r.switches, 'bascule', 'bascules')}` : ''}`, 'Aucune lecture.');
+
+    fillRanked('history-top', data.top, (r) => `${formatDuration(r.seconds)} · ${plural(r.count, 'fois', 'fois')}`, 'Aucune lecture enregistrée pour ce filtre.');
+    fillRanked('history-unstable', data.unstable, (r) => `${plural(r.switches, 'bascule', 'bascules')}`, 'Aucune bascule : les chaînes tiennent bien.');
+
+    const listNode = $('history-list');
+    listNode.replaceChildren(...(data.entries || []).slice(0, 50).map((r) => {
+      const tags = [];
+      if (r.device_label) tags.push(h('span', { class: 'history-tag', text: `👤 ${r.device_label}` }));
+      if (r.provider_name && (provs.length > 1 || r.backup)) tags.push(h('span', { class: 'history-tag', text: `🔑 ${r.provider_name}` }));
+      if (r.backup) tags.push(h('span', { class: 'history-tag warn', text: '🛡️ Secours' }));
+      const when = new Date(r.started_at * 1000).toLocaleString('fr-FR', { dateStyle: 'short', timeStyle: 'short' });
+      const meta = `${when} · ${formatDuration(r.seconds)}${r.switches ? ` · ${plural(r.switches, 'bascule', 'bascules')}` : ''}`;
+      return h('li', null,
+        h('span', { class: 'history-row-main' }, h('span', { text: r.label }), tags.length ? h('span', { class: 'history-row-tags' }, ...tags) : null),
+        h('span', { class: 'num', text: meta }));
+    }));
+    if (!(data.entries || []).length) listNode.append(h('li', { class: 'empty', text: 'Aucune lecture.' }));
   }
 
   // ------------------------------------------------------------ onglets
@@ -4073,9 +4203,38 @@
   }
   $('preview-close').addEventListener('click', () => $('preview').close());
   $('preview').addEventListener('close', stopPreview);
+  $('history-provider').addEventListener('change', (event) => {
+    historyFilter.provider = event.target.value || 'all';
+    loadHistory();
+  });
+  $('history-device').addEventListener('change', (event) => {
+    historyFilter.device = event.target.value || '';
+    loadHistory();
+  });
+  $('history-sort').addEventListener('change', (event) => {
+    historyFilter.sort = event.target.value || 'seconds';
+    loadHistory();
+  });
+  $('history-reset').addEventListener('click', () => {
+    historyFilter.provider = 'all';
+    historyFilter.device = '';
+    loadHistory();
+  });
   $('history-clear').addEventListener('click', async () => {
-    if (!(await ask({ title: 'Effacer l\'historique des lectures ?', okLabel: 'Effacer', danger: true }))) return;
-    try { await request(`/api/history/clear${profileQuery()}`, 'POST'); loadHistory(); } catch (error) { toast(error.message, 'error'); }
+    const scope = [];
+    if (historyFilter.provider !== 'all') {
+      const p = historyMeta.providers.find((x) => String(x.id) === historyFilter.provider);
+      scope.push(`l'abonnement « ${p ? p.name : historyFilter.provider} »`);
+    }
+    if (historyFilter.device) {
+      const d = historyMeta.devices.find((x) => x.id === historyFilter.device);
+      scope.push(`« ${d ? d.label : historyFilter.device} »`);
+    }
+    const text = scope.length
+      ? `Effacer uniquement l'historique correspondant à ${scope.join(' et ')} ?`
+      : 'Effacer tout l\'historique des lectures (tous les abonnements et appareils) ?';
+    if (!(await ask({ title: 'Effacer l\'historique des lectures ?', text, okLabel: 'Effacer', danger: true }))) return;
+    try { await request(`/api/history/clear?${historyQueryParams()}`, 'POST'); loadHistory(); } catch (error) { toast(error.message, 'error'); }
   });
   document.querySelector('.tabs').addEventListener('keydown', (event) => {
     const tabs = ['categories', 'channels', 'summary'];

@@ -197,7 +197,8 @@ class StreamManager:
         entry = {"started_at": int(session.started), "seconds": int(time.time() - session.started),
                  "kind": session.kind, "item_id": session.item_id, "label": session.channel or session.label,
                  "device": session.device, "client": session.client, "switches": session.switches,
-                 "bytes": session.bytes, "provider": str(session.provider)}
+                 "bytes": session.bytes, "provider": str(session.provider),
+                 "profile": str(session.consumer_profile or session.provider)}
         with self._history_lock:
             self._history.append(entry)
             self._save_history()
@@ -219,11 +220,21 @@ class StreamManager:
         with self._history_lock:
             return list(reversed(self._history))
 
-    def clear_history(self, provider: str | None = None) -> None:
-        """Vide l'historique (ou seulement celui d'un profil ; anciennes entrées sans profil : profil 1)."""
+    def clear_history(self, provider: str | None = None, *, device: str | None = None) -> None:
+        """Vide l'historique (tout, ou filtré par abonnement et/ou personne/appareil)."""
+        def _matches(entry: dict) -> bool:
+            if provider and str(entry.get("provider") or "1") != provider:
+                return False
+            if device:
+                dev = str(entry.get("device") or "").strip()
+                key = dev if dev else (f"ip:{entry.get('client')}" if entry.get("client") else "unknown")
+                if key != device:
+                    return False
+            return True
+
         with self._history_lock:
-            if provider:
-                kept = [e for e in self._history if str(e.get("provider") or "1") != provider]
+            if provider or device:
+                kept = [e for e in self._history if not _matches(e)]
                 self._history.clear()
                 self._history.extend(kept)
                 self._save_history()
