@@ -18,13 +18,16 @@ KEEP_ORIGINAL = "-"        # item_groups[id] = "-" : la chaîne reste dans son g
 
 # Qualité déduite du nom de la chaîne (pour ne garder que la meilleure version d'un doublon).
 _QUALITY = [
-    (re.compile(r"(?<![a-z0-9])(4k|uhd|2160p?)(?![a-z0-9])"), 4.0),
+    (re.compile(r"(?<![a-z0-9])(8k|4k|uhd|3840p?|2160p?)(?![a-z0-9])"), 4.0),
     (re.compile(r"(?<![a-z0-9])(fhd|full ?hd|1080[pi]?)(?![a-z0-9])"), 3.0),
     (re.compile(r"(?<![a-z0-9])(hd|720p?)(?![a-z0-9])"), 2.0),
     (re.compile(r"(?<![a-z0-9])(sd|576[pi]?|480[pi]?)(?![a-z0-9])"), 1.0),
 ]
-_TAGS = re.compile(r"(?<![a-z0-9])(4k|uhd|2160p?|fhd|full ?hd|1080[pi]?|hd|720p?|sd|576[pi]?|480[pi]?|hevc|"
-                   r"h\.?26[45]|x26[45]|hdr|50 ?fps|60 ?fps|25 ?fps|backup|raw|multi|vip)(?![a-z0-9])")
+_TAGS = re.compile(
+    r"(?<![a-z0-9])(8k|4k|uhd|3840p?|2160p?|fhd|full ?hd|1080[pi]?|hd|720p?|sd|576[pi]?|480[pi]?|hevc|"
+    r"h\.?26[45]|x26[45]|hdr10?|dolby|atmos|60 ?fps|50 ?fps|30 ?fps|25 ?fps|"
+    r"multi[- ]?audio|multi[- ]?langues?|backup|bkp|bk|raw|multi|vip|local|low|lq|hq)(?![a-z0-9])"
+)
 
 
 _SEPARATOR_EDGE = r"[#=*~_\-|•●◆★☆▬▭━─═\s]"
@@ -78,8 +81,91 @@ def is_adult_item(item: dict, categories: dict[str, str] | None = None) -> bool:
     return False
 
 
-# Préfixe de pays du fournisseur : « FR: », « FR | », « |FR| », « [FR] », « FR - ».
-_COUNTRY = re.compile(r"^\W*[A-Za-z]{2}\s*[:|\-\]●•»◉]+\s*")
+_SMALL_CAPS = str.maketrans({
+    "ᴀ": "A", "ʙ": "B", "ᴄ": "C", "ᴅ": "D", "ᴇ": "E", "ꜰ": "F", "ɢ": "G", "ʜ": "H", "ɪ": "I",
+    "ᴊ": "J", "ᴋ": "K", "ʟ": "L", "ᴍ": "M", "ɴ": "N", "ᴏ": "O", "ᴘ": "P", "ǫ": "Q", "ʀ": "R",
+    "ꜱ": "S", "ᴛ": "T", "ᴜ": "U", "ᴠ": "V", "ᴡ": "W", "ʏ": "Y", "ᴢ": "Z",
+})
+_SOCCER_O = re.compile(r"(sp)\s*⚽\ufe0f?\s*(rts)", re.IGNORECASE)
+_NOISE_BRACKETS = re.compile(
+    r"(?:\*+\s*(?:local|backup|bkp|bk|multi|raw|hevc|h\.?26[45]|vip|fhd|uhd|hd|sd|4k|8k|low|lq|hq)\s*\*+"
+    r"|[\[(]\s*(?:local|backup|bkp|bk|multi(?:[- ]?(?:audio|langues?))?|raw|hevc|h\.?26[45]|vip|fhd|uhd|hd|sd|4k|8k|"
+    r"3840p?|2160p?|1080p?|720p?|low|lq|hq|hdr10?|50\s*fps|60\s*fps|30\s*fps|25\s*fps|5\.1|aac|ac3|"
+    r"live(?:\s+event(?:\s+only)?)?|event\s+only|stz|stc|13)\s*[\])])",
+    re.IGNORECASE,
+)
+_SLASH_QUALITY = re.compile(
+    r"(?:^|(?<=\s))(?:(?:8k|4k|uhd|fhd|hd|sd|raw|hevc|hdr)\s*/\s*)+(?:8k|4k|uhd|fhd|hd|sd|raw|hevc|hdr)(?=\s|$|\.)",
+    re.IGNORECASE,
+)
+_GLUED_DIGIT_QUALITY = re.compile(r"(?<=\d)(?:fhd|uhd|hd|sd)(?=\b|$|\s|\.)", re.IGNORECASE)
+
+
+def _expand_superscripts(text: str) -> str:
+    """Convertit exposants et petites capitales Unicode (« ᴿᴬᵂ », « ᴴᴰ », « ꜰʜᴅ », « ⁴ᴷ », « ᶜᶦᵗʸ ») sans perdre les accents."""
+    out: list[str] = []
+    for ch in text or "":
+        if ch == "ᶦ":
+            out.append("i")
+            continue
+        decomp = unicodedata.decomposition(ch)
+        if decomp and (decomp.startswith("<super>") or decomp.startswith("<compat>") or decomp.startswith("<small>")):
+            out.append(unicodedata.normalize("NFKD", ch))
+        else:
+            out.append(ch)
+    return "".join(out).translate(_SMALL_CAPS)
+
+
+def _fix_soccer_o(text: str) -> str:
+    """Remplace « SP⚽RTS » / « Sp⚽rts » (très courant chez les fournisseurs 8K) par SPORTS / Sports."""
+    return _SOCCER_O.sub(lambda m: m.group(1) + ("O" if m.group(1).isupper() else "o") + m.group(2), text)
+
+
+# Préfixe de pays/fournisseur retiré par match_name : « FR: », « |FR| », « [FR] », « VIP: », « SPO: », « 8K: »,
+# « BE-VIP: », « |4K| FR| », « |BEIN FR| », « F: ». Note : « |BEIN AR| » est volontairement laissé ici pour éviter
+# de fusionner beIN AR dans les groupes FR non régionaux ; regional_group_key() le classe en région « ar ».
+_MATCH_PREFIX = re.compile(
+    r"^(?:\s*[\[\(|•●★☆▶►◉♦♣✦▼\-]+\s*)*"
+    r"(?:(?:[A-Za-z]{2}(?:\s*[-/]\s*(?:VIP|OTT|HD|FHD|4K|UHD|RAW|HEVC))?"
+    r"|VIP|SPO|UHD|FHD|8K|4K|HEVC|F|BEIN\s+FR)\s*[:|\-\]\)●•»◉]+\s*)+",
+    re.IGNORECASE,
+)
+
+# Synonymes de chaînes réelles (normalisés) pour aligner plusieurs fournisseurs et modèles de groupes.
+_CANONICAL_ALIASES = {
+    "canal+ box offcie": "canal+ box office",
+    "canal+ cinema s": "canal+ cinema",
+    "canal docs": "canal+ docs",
+    "rmc alerte securs": "rmc alerte secours",
+    "discovery invest": "discovery investigation",
+    "planete": "planete+",
+    "planete ae": "planete+ aventure",
+    "planete a&e": "planete+ aventure",
+    "planete ci": "planete+ crime",
+    "polar": "polar+",
+    "piwi": "piwi+",
+    "golf": "golf+",
+    "infosport": "infosport+",
+    "l equipe 21": "l equipe",
+    "la chaine parlementaire": "lcp",
+    "euronews fr": "euronews",
+    "novelas": "novelas tv",
+    "museum channel": "museum tv",
+    "melody tv": "melody",
+    "lucky jack tv": "lucky jack",
+    "nick junior": "nickelodeon junior",
+    "nick 4 teen": "nickelodeon teen",
+    "equidia live": "equidia",
+    "automoto la chaine": "automoto",
+    "game one1": "game one",
+    "teletoon 1": "teletoon+1",
+    "disney channel 1": "disney channel+1",
+    "nickelodeon 1": "nickelodeon+1",
+    "telemaroc": "tele maroc",
+    "ol tv": "oltv",
+    "natgeo": "nat geo",
+    "natgeo wild": "nat geo wild",
+}
 
 
 def match_name(name: str) -> str:
@@ -87,19 +173,33 @@ def match_name(name: str) -> str:
 
     « FR: TF1 FHD » → « tf1 » ; « |FR| CANAL + 4K » → « canal+ » ; « L'Équipe HD » → « l equipe ».
     """
-    text = _COUNTRY.sub("", name or "", count=1)
+    text = _fix_soccer_o(_expand_superscripts(name or ""))
+    text = _MATCH_PREFIX.sub("", text)
+    text = _NOISE_BRACKETS.sub(" ", text)
+    text = _SLASH_QUALITY.sub(" ", text)
+    text = _GLUED_DIGIT_QUALITY.sub("", text)
     text = unicodedata.normalize("NFKD", text)
     text = "".join(ch for ch in text if not unicodedata.combining(ch)).lower()
+    text = re.sub(r"\b13\s*\.\s*eme\s+rue\b", "13eme rue", text)
     text = re.sub(r"[^\w+&]+|_", " ", text)
     text = re.sub(r"\s+\+", "+", text)
     tokens = text.split()
     if len(tokens) > 1 and tokens[0] in ("fr", "fra"):
         tokens = tokens[1:]
-    return " ".join(_TAGS.sub(" ", " ".join(tokens)).split())
+    core = " ".join(_TAGS.sub(" ", " ".join(tokens)).split())
+    core = re.sub(r"\b13\s+eme\s+rue\b", "13eme rue", core)
+    core = re.sub(r"\beuro\s+sports?\b", "eurosport", core)
+    core = re.sub(r"\bligue\s*1\+", "ligue 1+", core)
+    core = re.sub(r"\bnat\s*geo\b", "nat geo", core)
+    core = re.sub(r"\btoute\s+lhistoire\b", "toute l histoire", core)
+    core = re.sub(r"\bchasse\s*&\s*peche\b", "chasse et peche", core)
+    core = re.sub(r"\bsciences?\s*(?:&|et)?\s*vie(?:\s+tv)?\b", "science & vie", core)
+    core = re.sub(r"\bbe\s*in\s+sports?\b", "bein sports", core)
+    core = re.sub(r"\bbein sports 0([1-9])\b", r"bein sports \1", core)
+    return _CANONICAL_ALIASES.get(core, core)
 
 
-_REGION_PREFIX = re.compile(r"^\W*(?:(bein)\s+)?([a-z0-9]{1,4})\s*[:|\-\]●•»◉]+\s*")
-_REGIONAL_QUALITY = re.compile(r"ᴴᴰ|ꜰʜᴅ|ʜᴅ|ᴿᴬᵂ")
+_REGION_PREFIX = re.compile(r"^\W*(?:(bein)\s+)?([a-z0-9]{1,4})(?:\s*-\s*(?:vip|ott|hd|fhd|raw))?\s*[:|\-\]●•»◉]+\s*")
 _ARAB_COUNTRIES = frozenset("ar ma dz tn ly mr eg sa ksa ae uae qa kw om bh iq jo lb sy ps sd ye".split())
 _OTHER_COUNTRIES = frozenset("af at au br ca ch cz de dk es fi gb gr hr hu in it jp kr nl no nz pl pt ro ru se sk tr uk us".split())
 _ARAB_CATEGORY = re.compile(
@@ -117,17 +217,24 @@ _REGIONAL_ALIASES = {
     "al laayoune": "laayoune tv", "laayoune": "laayoune tv", "tamazight tv": "tamazight",
     "tamazight moroc": "tamazight", "tamazight maroc": "tamazight", "tamazighte": "tamazight",
     "assadissa moroc": "assadissa", "assadissa maroc": "assadissa",
-    "tele moroc": "tele maroc", "aflam 7 local": "aflam 7", "m24 maroc": "m24", "m24 tv": "m24",
+    "arrabia": "athaqafia", "arrabiaa": "athaqafia", "assaqafia": "athaqafia", "attakafia": "athaqafia",
+    "tele moroc": "tele maroc", "telemaroc": "tele maroc", "aflam 7 local": "aflam 7", "m24 maroc": "m24", "m24 tv": "m24",
     "al ons": "al ons tv", "mbc5": "mbc 5",
     "medi1tv": "medi 1 tv", "mbc egypt": "mbc masr",
     "mbc egypt 2": "mbc masr 2", "مصر mbc": "mbc masr", "mbc مصر": "mbc masr",
     "mbc مصر 2": "mbc masr 2", "القناة الأولى": "al aoula", "الرياضية": "arryadia",
-    "alqass": "alkass", "sportenfrance": "sport en france", "automoto tv": "automoto la chaine",
-    "golf plus": "golf+", "equidia": "equidia live", "infosport": "infosport+",
+    "alqass": "alkass", "sportenfrance": "sport en france", "automoto tv": "automoto",
+    "automoto la chaine": "automoto",
+    "golf plus": "golf+", "equidia live": "equidia", "infosport": "infosport+",
     "on time sports": "on sport", "on time sports 1": "on sport", "on sports": "on sport",
     "on sports plus": "on sport plus", "zamalek sport": "zamalek sports",
-    "al ahly": "al ahly tv", "oman tv sport": "oman sports",
-    "kuwait sport": "kuwait sports", "sharjah sport": "sharjah sports",
+    "al ahly": "al ahly tv", "oman tv sport": "oman sports", "oman sport tv": "oman sports",
+    "kuwait sport": "kuwait sports", "kuwait sport 1": "kuwait sports", "kuwait sports 2": "kuwait sports plus",
+    "sharjah sport": "sharjah sports", "sharjah sport 2": "sharjah sports 2",
+    "dubai sport 1": "dubai sports 1", "dubai sport 2": "dubai sports 2", "dubai sport 3": "dubai sports 3",
+    "dubai racing 1 tv": "dubai racing 1", "yas sport": "yas sports",
+    "saudia sport 1": "ksa sport 1", "saudia sport 2": "ksa sport 2", "saudia sport 3": "ksa sport 3", "saudia sport 4": "ksa sport 4",
+    "al rabiaa sport": "alrabiaa sport one", "ad sports tv": "ad sports 1",
     "mbc masr 1": "mbc masr", "mbc drama masr": "mbc masr drama", "rotana khalijiah": "rotana khalijia",
     "yah ala": "osntv yahala", "yahala": "osntv yahala", "osn yahala": "osntv yahala",
     "yahala bil arabi": "osntv yahala bil arabi", "osn yahala bil arabi": "osntv yahala bil arabi",
@@ -136,7 +243,10 @@ _REGIONAL_ALIASES = {
     "al masryia": "al masriya", "al aoula laayoune": "laayoune tv", "al aoula layoune": "laayoune tv",
     "medi 1 maghreb tv": "medi 1 tv maghreb", "medi 1 arabic tv": "medi 1 tv",
     "a3 algerie": "a3", "algerie 4 tamazight": "tv4 tamazight", "algerie 5 quran": "tv5 coran",
-    "tunisia nat 1": "wataniya 1", "tunisia nat 2": "wataniya 2", "attessia tv": "attessia",
+    "tunisia nat 1": "wataniya 1", "tunisia nat 2": "wataniya 2",
+    "tunisia 1": "wataniya 1", "tunisia 2": "wataniya 2",
+    "tunisia 1 tnt": "wataniya 1", "tunisia 2 tnt": "wataniya 2",
+    "nessma tv": "nessma", "attessia tv": "attessia",
     "abu dhabi": "abu dhabi tv", "abu dhabi al emarat": "al emarat",
     "qatar": "qatar tv", "al rayyan tv": "al rayyan", "oman tv general": "oman tv",
     "jordan": "jordan tv", "jordan satellite channel": "jordan tv", "sharjah sports 2 e a u": "sharjah sports 2",
@@ -158,15 +268,14 @@ def regional_group_key(name: str, category: str) -> tuple[str, str]:
     Une catégorie du fournisseur peut mélanger plusieurs pays. Les marqueurs de la chaîne
     (p. ex. « |BEIN FR| » et « |BEIN AR| ») et la langue explicite de beIN passent avant elle.
     """
-    text = normalize(_REGIONAL_QUALITY.sub(" HD ", name))
-    label = normalize(category)
+    text = normalize(_fix_soccer_o(_expand_superscripts(name)))
+    label = normalize(_expand_superscripts(category))
     prefix = _REGION_PREFIX.match(text)
     code = prefix[2] if prefix else ""
     if prefix:
         text = text[prefix.end():]
-    text = re.sub(r"sp\s*⚽\s*rts", "sports", text)
     text = re.sub(r"\bh[ .]?26[45]\b|\b8k\b", " ", text)
-    text = re.sub(r"(?<=\d)(?=(?:f?hd|sd)\b)", " ", text)
+    text = _GLUED_DIGIT_QUALITY.sub("", text)
     core = match_name(text)
     if re.search(r"^be\s*in\s*(?:sports?|max)\b", core):
         if re.search(r"\b(?:english|en)\b", core):
@@ -177,6 +286,7 @@ def regional_group_key(name: str, category: str) -> tuple[str, str]:
             code = "fr"
             core = re.sub(r"\b(?:fr|france|french)\b", "", core).strip()
         core = re.sub(r"^be\s*in\s*(?:sports?\s+)?", "bein sports ", core)
+        core = re.sub(r"^(bein sports) 0([1-9])\b", r"\1 \2", core)
         core = re.sub(r"^(bein sports) (\d+) (?:extra|xtra)$", r"\1 xtra \2", core).strip()
         core = core.replace(" sports extra ", " sports xtra ")
     if code in _OTHER_COUNTRIES or re.search(r"^(?:ma\| malta|bh\| bosnia|tn\| taiwan)", label):
@@ -195,7 +305,7 @@ def regional_group_key(name: str, category: str) -> tuple[str, str]:
     core = re.sub(r"^al\s*kass\s*", "alkass ", core).strip()
     core = re.sub(r"^(?:thmanayh|thmanyah|thamania)\s*(?:sports?\s*)?", "thmanyah ", core).strip()
     core = re.sub(r"^(?:ad|abu dhabi) sports?\s+", "ad sports ", core)
-    core = re.sub(r"^adsp (\d+) premium$", r"ad sports premium \1", core)
+    core = re.sub(r"^(?:adsp|ad sports) (\d+) premium$", r"ad sports premium \1", core)
     core = re.sub(r"^gobx\s+(?=mbc\b)", "", core)
     core = re.sub(r"^mbc\s*(?=\d)", "mbc ", core)
     if label.startswith("ar| osn"):
@@ -224,34 +334,18 @@ def group_matches(core: str, group: dict) -> int | None:
 
 
 _CLEAN_PREFIX = re.compile(
-    r"^(?:\s*[\[\(|•●★☆▶►◉♦♣\-]+\s*)*"
-    r"(?:(?:[A-Za-z]{2,3}(?:\s*[-/]\s*(?:VIP|OTT|HD|FHD|4K|UHD|RAW|HEVC))?|VIP|BEIN\s+(?:FR|AR))\s*[:|\-\]\)●•»◉]+\s*)+",
+    r"^(?:\s*[\[\(|•●★☆▶►◉♦♣✦▼\-]+\s*)*"
+    r"(?:(?:[A-Za-z]{2,3}(?:\s*[-/]\s*(?:VIP|OTT|HD|FHD|4K|UHD|RAW|HEVC))?"
+    r"|VIP|SPO|UHD|FHD|8K|4K|HEVC|F|BEIN\s+(?:FR|AR))\s*[:|\-\]\)●•»◉]+\s*)+",
     re.IGNORECASE,
 )
-_CLEAN_SYMBOLS = re.compile(r"[◉●★☆▶►•♦♣]+")
-_CLEAN_BRACKETS = re.compile(
-    r"(?:\*+\s*(?:local|backup|bkp|multi|raw|hevc|h\.?26[45]|vip|fhd|uhd|hd|sd|4k|8k|low|lq|hq)\s*\*+"
-    r"|[\[(]\s*(?:local|backup|bkp|multi|raw|hevc|h\.?26[45]|vip|fhd|uhd|hd|sd|4k|8k|low|lq|hq|50\s*fps|60\s*fps|5\.1|aac|ac3)\s*[\])])",
-    re.IGNORECASE,
-)
+_CLEAN_SYMBOLS = re.compile(r"[◉●★☆▶►•♦♣✦▼▲⚽✟\ufe0f]+")
 _CLEAN_TAGS = re.compile(
-    r"(?:^|(?<=\s))(?:full\s*hd|fhd|uhd|4k|8k|hd|sd|hevc|h\.?26[45]|1080p?|720p?|576p?|480p?|50\s*fps|60\s*fps|raw|vip|low|lq|hq|backup|bkp|multi|local|5\.1|aac|ac3)(?=\s|$)",
+    r"(?:^|(?<=\s))(?:full\s*hd|fhd|uhd|4k|8k|3840p?|2160p?|1080[pi]?|720p?|576[pi]?|480[pi]?|"
+    r"hd|sd|hevc|h\.?26[45]|x26[45]|hdr10?|dolby|atmos|60\s*fps|50\s*fps|30\s*fps|25\s*fps|"
+    r"multi[- ]?audio|multi[- ]?langues?|raw|vip|low|lq|hq|backup|bkp|bk|multi|local|5\.1|aac|ac3)\.?(?=\s|$)",
     re.IGNORECASE,
 )
-
-
-def _expand_superscripts(text: str) -> str:
-    """Convertit les exposants/petites capitales Unicode (« ᴿᴬᵂ », « ᴴᴰ », « ⁴ᴷ ») sans retirer les accents français."""
-    out: list[str] = []
-    for ch in text or "":
-        decomp = unicodedata.decomposition(ch)
-        if decomp and (decomp.startswith("<super>") or decomp.startswith("<compat>") or decomp.startswith("<small>")):
-            out.append(unicodedata.normalize("NFKD", ch))
-        elif ch in "ꜰʜᴅʀᴀᴡᴜꜱ":
-            out.append({"ꜰ": "F", "ʜ": "H", "ᴅ": "D", "ʀ": "R", "ᴀ": "A", "ᴡ": "W", "ᴜ": "U", "ꜱ": "S"}[ch])
-        else:
-            out.append(ch)
-    return "".join(out)
 
 
 def clean_channel_name(name: str) -> str:
@@ -259,11 +353,23 @@ def clean_channel_name(name: str) -> str:
     raw = str(name or "").strip()
     if not raw:
         return raw
-    text = _expand_superscripts(raw)
+    text = _fix_soccer_o(_expand_superscripts(raw))
     text = _CLEAN_SYMBOLS.sub(" ", text)
-    text = _CLEAN_PREFIX.sub("", text)
-    text = _CLEAN_BRACKETS.sub(" ", text)
+    prefix_match = _CLEAN_PREFIX.match(text)
+    prefix_code = ""
+    if prefix_match:
+        m = re.match(r"^\W*([A-Za-z]{2})\b", prefix_match.group(0))
+        prefix_code = m.group(1).upper() if m else ""
+        text = text[prefix_match.end():]
+        # Ex. « BE: BE VRT 1 » → « VRT 1 »
+        if prefix_code and re.match(rf"^{prefix_code}\s+", text):
+            text = text[len(prefix_code) + 1:]
+    text = _NOISE_BRACKETS.sub(" ", text)
+    text = _SLASH_QUALITY.sub(" ", text)
+    text = _GLUED_DIGIT_QUALITY.sub("", text)
     text = re.sub(r"\s*[|•]+\s*", " ", text)
+    # Deuxième passe si « |4K| FR| ARTE UHD » laissait un code pays après le « | »
+    text = _CLEAN_PREFIX.sub("", text)
     text = _CLEAN_TAGS.sub(" ", text)
     text = re.sub(r"^[\s\-:|*]+|[\s\-:|*]+$", "", text)
     text = " ".join(text.split())
@@ -364,7 +470,7 @@ def apply_custom_groups(entries: list[tuple[dict, str]], saved: dict,
 
 
 def normalize(text: str) -> str:
-    text = unicodedata.normalize("NFKD", text or "")  # NFKD : « ᴴᴰ » → « hd », « ⁴ᴷ » → « 4k »
+    text = unicodedata.normalize("NFKD", _expand_superscripts(text or ""))  # « ᴴᴰ » → « hd », « ꜰʜᴅ » → « fhd », « ⁸ᴷ » → « 8k »
     text = "".join(ch for ch in text if not unicodedata.combining(ch))
     return " ".join(text.lower().split())
 
@@ -393,6 +499,111 @@ def rule_matches(category_name: str, rule: dict) -> bool:
     return value in name
 
 
+_GARBAGE_EPG_IDS = frozenset({"ts", "none", "null", "n/a", "na", "0", "-", "--", "unknown", "dummy", "test"})
+_EPG_ID_SUFFIX = re.compile(
+    r"(?:@[a-z0-9]+|\.[a-z]{2,4}(?:\.[a-z]{2})?|\.(?:provider|ext|local|tv|hd|sd|fhd|uhd|4k))$",
+    re.IGNORECASE,
+)
+_EPG_STOPWORDS = frozenset({
+    "tv", "hd", "sd", "fhd", "uhd", "4k", "8k", "ch", "channel", "chaine", "live", "plus", "news", "the",
+    "sport", "sports", "cinema", "cinemas", "movie", "movies", "film", "films", "music", "kids", "info",
+    "radio", "france", "french", "arab", "arabic", "maroc", "morocco", "world", "international", "inter",
+    "national", "network", "extra", "max", "prime", "gold", "one", "two", "three",
+})
+_EPG_FAMILY_NOISE = re.compile(
+    r"\b(?:ultra|sat|mobil|eon|hdr|solo|eventos|sub|dvb|overlay|hot|yes|no|ca|en|fr|enf|kids|live|plus)\b"
+)
+
+
+def is_usable_epg_id(eid: str | None) -> bool:
+    """Vrai si l'identifiant XMLTV semble réel (écarte les valeurs vides ou génériques comme « TS » ou « 0 »)."""
+    text = (eid or "").strip().lower()
+    if len(text) < 3 or text in _GARBAGE_EPG_IDS:
+        return False
+    return any(ch.isalnum() for ch in text)
+
+
+def _epg_id_stem(eid: str) -> str:
+    text = (eid or "").strip().lower()
+    for _ in range(3):
+        stripped = _EPG_ID_SUFFIX.sub("", text)
+        if stripped == text:
+            break
+        text = stripped
+    text = unicodedata.normalize("NFKD", text)
+    text = "".join(ch for ch in text if not unicodedata.combining(ch))
+    return re.sub(r"[^a-z0-9+]+", "", text).replace("+", "plus")
+
+
+def epg_id_matches_name(eid: str, *names: str) -> bool:
+    """Vrai si l'identifiant XMLTV (ex. ``01tv.fr``) est cohérent avec l'un des noms donnés."""
+    stem = _epg_id_stem(eid)
+    if not stem:
+        return False
+    for name in names:
+        core = match_name(name or "")
+        if not core:
+            continue
+        nsquash = core.replace("+", "plus").replace(" ", "")
+        tokens = [t.replace("+", "plus") for t in core.split()]
+        if stem == nsquash or stem in tokens:
+            return True
+        if len(stem) >= 3 and len(nsquash) >= 3 and (stem in nsquash or nsquash in stem):
+            return True
+        if len(nsquash) >= 2 and stem.startswith(nsquash) and not nsquash.isdigit():
+            return True
+        for tok in tokens:
+            if len(tok) >= 4 and not tok.isdigit() and tok not in _EPG_STOPWORDS and tok in stem:
+                return True
+        brand = next((t for t in tokens if len(t) >= 3 and not t.isdigit() and t not in _EPG_STOPWORDS), None)
+        if brand and brand in stem:
+            return True
+        if "national" in tokens and "geographic" in tokens and "natgeo" in stem:
+            return True
+    return False
+
+
+def _epg_core_family(core: str) -> str:
+    cleaned = _EPG_FAMILY_NOISE.sub(" ", core)
+    parts = cleaned.split()
+    return " ".join(parts[:3]) if parts else core
+
+
+def sanitize_epg_ids(entries: list[tuple[dict, str]]) -> list[tuple[dict, str]]:
+    """Nettoie les identifiants EPG bidons (« TS ») ou empoisonnés par le fournisseur (ex. ``01tv.fr`` sur 50 chaînes).
+
+    Un identifiant attribué par le fournisseur à au moins 3 chaînes distinctes dont le nom n'a aucun rapport
+    avec lui est effacé de ces chaînes (la vraie chaîne correspondante, ex. ``01TV``, garde le sien).
+    Ainsi M3U, Xtream et XMLTV attribuent à chacune son propre identifiant ``xtream-<id>`` et son vrai guide.
+    """
+    bad_cores: dict[str, set[str]] = {}
+    bad_families: dict[str, set[str]] = {}
+    for item, _ in entries:
+        if item.get("epg_manual"):
+            continue
+        eid = (item.get("epg_id") or "").strip().lower()
+        if not is_usable_epg_id(eid):
+            continue
+        core = match_name(item.get("name") or "")
+        if core and not epg_id_matches_name(eid, item.get("name") or "", item.get("epg_name") or ""):
+            bad_cores.setdefault(eid, set()).add(core)
+            bad_families.setdefault(eid, set()).add(_epg_core_family(core))
+    poisoned = {eid for eid, cores in bad_cores.items() if len(cores) >= 3 and len(bad_families.get(eid, ())) >= 3}
+    result: list[tuple[dict, str]] = []
+    for item, group in entries:
+        if item.get("epg_manual"):
+            result.append((item, group))
+            continue
+        eid = (item.get("epg_id") or "").strip()
+        low = eid.lower()
+        if eid and (not is_usable_epg_id(eid) or (
+            low in poisoned and not epg_id_matches_name(low, item.get("name") or "", item.get("epg_name") or "")
+        )):
+            item = {**item, "epg_id": ""}
+        result.append((item, group))
+    return result
+
+
 MAX_ALTERNATES = 8
 UHD_MODES = ("backup", "normal", "never")
 UHD_QUALITY = 4.0
@@ -414,8 +625,8 @@ def dedupe(entries: list[tuple[dict, str]], uhd: str = "backup") -> list[tuple[d
     """Dans chaque groupe, garde la meilleure qualité d'une même chaîne (SD/HD/FHD/4K…).
 
     La version gardée reçoit ``alternates`` : les autres versions, de la meilleure à la moins bonne,
-    utilisées par la bascule automatique (option ``failover``). Les versions 4K suivent ``uhd``
-    (voir :func:`version_rank`).
+    utilisées par la bascule automatique (option ``failover``). Si la version gardée n'a pas d'identifiant
+    EPG utilisable, elle hérite du premier identifiant EPG valide trouvé parmi ses doublons fusionnés.
     """
     versions: dict[tuple[str, str | tuple[str, str]], list[tuple[float, int]]] = {}
     for index, (item, group) in enumerate(entries):
@@ -434,8 +645,24 @@ def dedupe(entries: list[tuple[dict, str]], uhd: str = "backup") -> list[tuple[d
     for index, (item, group) in enumerate(entries):
         if index not in keep:
             continue
-        others = [entries[i][0]["stream_id"] for i in keep[index]][:MAX_ALTERNATES]
-        result.append(({**item, "alternates": others} if others else item, group))
+        merged_indices = keep[index]
+        others = [entries[i][0]["stream_id"] for i in merged_indices][:MAX_ALTERNATES]
+        updates: dict = {}
+        if others:
+            updates["alternates"] = others
+        if not is_usable_epg_id(item.get("epg_id")):
+            inherited = next(
+                (entries[i][0]["epg_id"] for i in merged_indices
+                 if is_usable_epg_id(entries[i][0].get("epg_id"))
+                 and epg_id_matches_name(entries[i][0]["epg_id"], item.get("name") or "")),
+                None,
+            ) or next(
+                (entries[i][0]["epg_id"] for i in merged_indices if is_usable_epg_id(entries[i][0].get("epg_id"))),
+                None,
+            )
+            if inherited:
+                updates["epg_id"] = inherited
+        result.append(({**item, **updates} if updates else item, group))
     return result
 
 
@@ -595,6 +822,7 @@ def select_items(api, saved: dict, kind: str, *, refresh: bool = False) -> tuple
         entries = [entry for entry in entries if not is_separator(entry[0]["name"])]
     if kind == "live":
         entries = apply_custom_groups(entries, saved, categories)
+        entries = sanitize_epg_ids(entries)
     if kind == "live" and saved.get("dedupe"):
         uhd = saved.get("uhd") if saved.get("uhd") in UHD_MODES else "backup"
         entries = dedupe(entries, uhd)
