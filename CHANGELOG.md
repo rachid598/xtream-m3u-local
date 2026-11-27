@@ -2,6 +2,12 @@
 
 Format inspiré de « Keep a Changelog ». Les versions suivent le versionnage sémantique.
 
+## [3.34.1] — 2026-11-26
+
+### Modifié
+- **Modèle de groupe « Maroc » enrichi (`region: "ar"`)** : ajout de toutes les variantes réelles de chaînes marocaines (`2M National` / `2M Natioanl`, `Arryadia Live`, `Arryadia 1/2/3`, `Arryadia TNT Local`, `Arryadia Olympics`, `Assadissa Moroc`, `Aflam 7`, `Tamazight Moroc`, `MBC 5`, `M24 Maroc`, `Medi 1 Maghreb TV`, `Medi 1 Arabic TV`, `Tele Moroc`, `Al Ons TV`, `TV5` arabe/marocaine sans faux positif FR/PH, `Omar Peche 24/7`) ainsi que les alias régionaux et EPG Open-EPG associés.
+- **Mise à jour en un clic d'un modèle déjà présent** : cliquer sur un bouton de modèle (ex. `+ Maroc`) quand le groupe existe déjà dans la playlist complète désormais ce groupe avec les nouveaux noms du modèle et ajoute automatiquement les chaînes manquantes disponibles, sans perdre sa position ni tes réglages.
+
 ## [3.34.0] — 2026-11-26
 
 ### Ajouté

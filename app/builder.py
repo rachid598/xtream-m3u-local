@@ -103,16 +103,22 @@ _REGIONAL_QUALITY = re.compile(r"ᴴᴰ|ꜰʜᴅ|ʜᴅ|ᴿᴬᵂ")
 _ARAB_COUNTRIES = frozenset("ar ma dz tn ly mr eg sa ksa ae uae qa kw om bh iq jo lb sy ps sd ye".split())
 _OTHER_COUNTRIES = frozenset("af at au br ca ch cz de dk es fi gb gr hr hu in it jp kr nl no nz pl pt ro ru se sk tr uk us".split())
 _ARAB_CATEGORY = re.compile(
-    r"^\W*(?:ar[| :\-]|arabic\b|maghreb\b|maroc\b|algerie\b|tunisie\b|egypt\b|mbc groupe\b|thmanyah\b|starzplay ad sport\b|"
-    r"alwan sport\b|bein sports (?:fhd|h265)\b|(?:ma|dz|tn|eg|iq|qa|ksa|uae)\s*[|:])"
+    r"^\W*(?:ar[| :\-]|arabic\b|maghreb\b|maroc\b|morocco\b|algerie\b|tunisie\b|egypt\b|mbc groupe\b|thmanyah\b|starzplay ad sport\b|"
+    r"alwan sport\b|bein sports (?:fhd|h265)\b|(?:ma|dz|tn|eg|iq|qa|ksa|uae)\s*[|:]|fr\s*[|:]\s*(?:maroc|morocco|maghreb)\b)"
 )
 _FR_CATEGORY = re.compile(r"^\W*(?:fr\s*[|:]|france\b)")
 _REGIONAL_ALIASES = {
     "l equipe 21": "l equipe", "la chaine l equipe": "l equipe",
     "arriadia": "arryadia", "arriyadia": "arryadia", "arryadia live": "arryadia",
     "arryadia tv maroc": "arryadia", "arryadia tnt local": "arryadia tnt",
-    "al aula": "al aoula", "al aoula inter": "al aoula", "tvm": "al aoula",
+    "al aula": "al aoula", "al aoula inter": "al aoula", "al aoula international": "al aoula",
+    "al aoula maroc": "al aoula", "tvm": "al aoula",
+    "2m natioanl": "2m", "2m national": "2m",
     "al laayoune": "laayoune tv", "laayoune": "laayoune tv", "tamazight tv": "tamazight",
+    "tamazight moroc": "tamazight", "tamazight maroc": "tamazight", "tamazighte": "tamazight",
+    "assadissa moroc": "assadissa", "assadissa maroc": "assadissa",
+    "tele moroc": "tele maroc", "aflam 7 local": "aflam 7", "m24 maroc": "m24", "m24 tv": "m24",
+    "al ons": "al ons tv", "mbc5": "mbc 5",
     "medi1tv": "medi 1 tv", "mbc egypt": "mbc masr",
     "mbc egypt 2": "mbc masr 2", "مصر mbc": "mbc masr", "mbc مصر": "mbc masr",
     "mbc مصر 2": "mbc masr 2", "القناة الأولى": "al aoula", "الرياضية": "arryadia",
