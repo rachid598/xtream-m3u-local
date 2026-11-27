@@ -171,6 +171,11 @@ class ProviderSet:
     def epg_url(self) -> str:
         return self.apis[0].epg_url()
 
+    def epg_urls(self) -> dict[str, tuple[str, str, str]]:
+        """``{index: (url_xmltv, nom, user_agent)}`` pour chaque abonnement configuré."""
+        return {str(index): (api.epg_url(), name, api.config.user_agent)
+                for index, name, api in zip(self.indices, self.names, self.apis)}
+
     def api_url(self, action: str | None = None, **extra: str) -> str:
         return self.apis[0].api_url(action, **extra)
 

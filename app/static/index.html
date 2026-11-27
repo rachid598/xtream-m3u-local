@@ -375,6 +375,10 @@
               <p class="hint" id="opt-hq-logos-hint">Un logo personnalisé (✎) reste toujours prioritaire.</p>
             </div>
             <div class="option-row">
+              <label class="check-row"><input type="checkbox" id="opt-clean-names"> <span><strong>Nettoyer les noms de chaînes (Mode Décodeur)</strong> : retire préfixes pays (« FR: », « AR: », « VIP: »), symboles et tags qualité, et reprend les noms propres de « Mes groupes »</span></label>
+              <p class="hint">Les renommages manuels (✎) restent toujours prioritaires.</p>
+            </div>
+            <div class="option-row">
               <label class="check-row"><input type="checkbox" id="opt-separators"> <span><strong>Masquer les séparateurs</strong> (« ##### SPORT ##### », « NO EVENT STREAMING »…)</span></label>
             </div>
             <div class="option-row">
@@ -546,6 +550,7 @@
       <button type="button" role="tab" id="sys-btn-overview" aria-controls="sys-overview" aria-selected="true"><span aria-hidden="true">📊</span> État &amp; Diagnostic</button>
       <button type="button" role="tab" id="sys-btn-providers" aria-controls="sys-providers" aria-selected="false" tabindex="-1"><span aria-hidden="true">🔑</span> Abonnements &amp; Espaces</button>
       <button type="button" role="tab" id="sys-btn-network" aria-controls="sys-network" aria-selected="false" tabindex="-1"><span aria-hidden="true">🌍</span> Accès &amp; Guides</button>
+      <button type="button" role="tab" id="sys-btn-alerts" aria-controls="sys-alerts" aria-selected="false" tabindex="-1"><span aria-hidden="true">🔔</span> Alertes</button>
       <button type="button" role="tab" id="sys-btn-backup" aria-controls="sys-backup" aria-selected="false" tabindex="-1"><span aria-hidden="true">💾</span> Sauvegarde</button>
     </nav>
 
@@ -724,6 +729,78 @@
           <input id="guides-input" type="url" maxlength="500" placeholder="https://…/guide.xml.gz" spellcheck="false" aria-label="Adresse d'un guide XMLTV">
           <button type="submit" class="btn small">Ajouter</button>
         </form>
+      </section>
+    </div>
+
+    <div id="sys-alerts" role="tabpanel" aria-labelledby="sys-btn-alerts" class="sec-panel" hidden>
+      <section class="card" id="alerts-card">
+        <div class="card-head">
+          <div>
+            <h2><span aria-hidden="true">🔔</span> Alertes automatiques Telegram</h2>
+            <p class="muted small">Reçois une notification discrète sur ton téléphone en cas d'expiration d'abonnement, blocage fournisseur (429), coupure du tunnel ou blocage de sécurité. Aucun port à ouvrir.</p>
+          </div>
+          <span class="badge" id="tg-status-badge">Non connecté</span>
+        </div>
+
+        <div id="tg-setup-box">
+          <ol class="tg-steps">
+            <li>Ouvre <a href="https://t.me/BotFather" target="_blank" rel="noopener noreferrer"><strong>@BotFather</strong></a> dans Telegram, envoie <code>/newbot</code> et copie le token fourni.</li>
+            <li>Colle le token ci-dessous et clique sur <strong>Générer le QR code</strong>.</li>
+            <li>Scanne le QR code avec ton téléphone puis appuie sur <strong>Démarrer</strong> dans Telegram : la connexion est automatique.</li>
+          </ol>
+          <form class="tg-form" id="tg-pair-form" autocomplete="off">
+            <div class="field grow">
+              <label for="tg-token">Token du bot Telegram</label>
+              <span class="pass-wrap"><input id="tg-token" type="password" maxlength="120" placeholder="123456789:AAH…" autocomplete="new-password" required><button type="button" class="pass-eye" id="tg-token-eye" aria-label="Afficher le token" title="Afficher le token">👁</button></span>
+            </div>
+            <button type="submit" class="btn primary" id="tg-pair-btn">Générer le QR code</button>
+          </form>
+
+          <div class="tg-qr-box" id="tg-qr-box" hidden>
+            <div class="tg-qr-frame" id="tg-qr-svg" aria-label="QR code Telegram"></div>
+            <div class="tg-qr-info">
+              <strong id="tg-qr-title">Scanne ce QR code avec ton téléphone</strong>
+              <p class="muted small" id="tg-qr-status">Puis appuie sur « Démarrer » dans Telegram…</p>
+              <div class="btn-row">
+                <a class="btn primary small" id="tg-qr-link" href="#" target="_blank" rel="noopener noreferrer">Ouvrir dans Telegram</a>
+                <button type="button" class="btn small ghost" id="tg-pair-cancel">Annuler</button>
+              </div>
+            </div>
+          </div>
+
+          <details class="tg-manual-details">
+            <summary>Connexion manuelle (si tu connais déjà ton chat_id)</summary>
+            <form class="tg-manual-form" id="tg-manual-form" autocomplete="off">
+              <div class="field">
+                <label for="tg-manual-chat">Identifiant de discussion (chat_id)</label>
+                <input id="tg-manual-chat" type="text" maxlength="25" placeholder="Ex. 123456789" inputmode="numeric">
+              </div>
+              <button type="submit" class="btn small" id="tg-manual-btn">Connecter avec ce chat_id</button>
+            </form>
+          </details>
+        </div>
+
+        <div id="tg-connected-box" hidden>
+          <div class="tg-conn-bar">
+            <div>
+              <strong id="tg-conn-title">Connecté</strong>
+              <p class="muted small" id="tg-conn-sub"></p>
+            </div>
+            <div class="btn-row">
+              <button type="button" class="btn small" id="tg-test-btn">Envoyer un test</button>
+              <button type="button" class="btn small danger" id="tg-disconnect-btn">Déconnecter</button>
+            </div>
+          </div>
+          <div class="tg-options">
+            <label class="check-row"><input type="checkbox" id="tg-enabled"> <span><strong>Activer l'envoi automatique des alertes</strong></span></label>
+            <label class="check-row"><input type="checkbox" id="tg-ev-expiry"> <span><strong>Expiration d'abonnement</strong> (alertes à J-7, J-2 et à l'expiration pour tous les abonnements)</span></label>
+            <label class="check-row"><input type="checkbox" id="tg-ev-provider"> <span><strong>Blocage fournisseur</strong> (HTTP 429 / passage en mode prudent)</span></label>
+            <label class="check-row"><input type="checkbox" id="tg-ev-tunnel"> <span><strong>Tunnel Cloudflare</strong> (déconnexion inattendue)</span></label>
+            <label class="check-row"><input type="checkbox" id="tg-ev-security"> <span><strong>Sécurité accès distant</strong> (adresse IP bloquée après trop d'essais)</span></label>
+          </div>
+        </div>
+
+        <p class="hint" id="tg-hint"></p>
       </section>
     </div>
 

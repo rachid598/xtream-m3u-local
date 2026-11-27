@@ -193,6 +193,8 @@ def main() -> None:
     from app import tunnel
     fake = Path(__file__).resolve().parent.parent / "tests" / "fake_cloudflared.py"
     tunnel.install(tunnel.Tunnel(args.data, args.port, binary=str(fake)))
+    from app import alerts
+    alerts.install(alerts.AlertManager(args.data))
     api = ApiHolder(make_api(config, providers))  # abonnements ajoutables depuis l'interface
     store = PlaylistStore(args.data)
     epg = make_epg(config, api)

@@ -673,6 +673,23 @@ progress.g-bar::-moz-progress-bar { background: var(--accent-strong); border-rad
 dialog .provider-split-box { margin: 10px 0 12px; }
 #providers-list .row-actions { display: inline-flex; gap: 6px; flex: none; }
 
+.tg-steps { margin: 0 0 14px; padding-left: 20px; display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--text-muted); line-height: 1.45; }
+.tg-steps a { color: var(--accent); text-decoration: none; }
+.tg-steps a:hover { text-decoration: underline; }
+.tg-form { display: flex; gap: 10px; align-items: end; flex-wrap: wrap; }
+.tg-form .grow { flex: 1 1 280px; }
+.tg-qr-box { margin-top: 14px; padding: 14px; border: 1px solid var(--accent-border); background: var(--accent-soft); border-radius: var(--radius-sm); display: flex; gap: 16px; align-items: center; flex-wrap: wrap; }
+.tg-qr-frame { width: 176px; height: 176px; flex: none; background: #ffffff; padding: 8px; border-radius: 10px; box-shadow: var(--shadow-sm); display: flex; align-items: center; justify-content: center; }
+.tg-qr-frame svg { width: 100%; height: 100%; display: block; }
+.tg-qr-info { flex: 1 1 220px; display: flex; flex-direction: column; gap: 8px; }
+.tg-manual-details { margin-top: 14px; padding-top: 10px; border-top: 1px dashed var(--border); font-size: 13px; }
+.tg-manual-details summary { cursor: pointer; color: var(--text-muted); font-weight: 600; }
+.tg-manual-form { margin-top: 10px; display: flex; gap: 10px; align-items: end; flex-wrap: wrap; }
+.tg-manual-form .field { flex: 1 1 220px; }
+.tg-conn-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 12px 14px; border: 1px solid var(--ok-border); background: var(--ok-soft); border-radius: var(--radius-sm); margin-bottom: 12px; }
+.tg-conn-bar p { margin: 2px 0 0; }
+.tg-options { display: flex; flex-direction: column; gap: 8px; }
+
 .pill-btn { cursor: pointer; font: inherit; font-size: 12px; }
 .pill-btn:hover { background: var(--bg-hover); }
 .live-dot { background: var(--danger) !important; box-shadow: 0 0 0 3px var(--danger-soft); animation: pulse 1.6s infinite; }
