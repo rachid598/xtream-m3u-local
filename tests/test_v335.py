@@ -491,7 +491,10 @@ class TelegramAlertsTests(unittest.TestCase):
         mode = stat.S_IMODE(os.stat(alerts_file).st_mode)
         self.assertEqual(mode, 0o600)
 
-        # Message de bienvenue envoyé
+        # Message de bienvenue envoyé (juste après l'enregistrement de la connexion)
+        welcome_deadline = time.time() + 2.0
+        while time.time() < welcome_deadline and not any("connecté" in m.get("text", "") for m in self.tg_state.sent_messages):
+            time.sleep(0.05)
         self.assertTrue(any("connecté" in m.get("text", "") for m in self.tg_state.sent_messages))
 
         # 5. Envoi d'un test
