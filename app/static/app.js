@@ -472,8 +472,14 @@
     return state.customGroups.map((g, i) => ({ g, i }))
       .sort((a, b) => (rank.get(CG + a.g.id) ?? 1e9) - (rank.get(CG + b.g.id) ?? 1e9) || a.i - b.i)
       .map(({ g }) => {
-        const patterns = [...new Set((g.patterns || []).map((p) => matchName(String(p).replace(NUMBERED, (m, n, rest) => rest))).filter(Boolean))];
-        return { ...g, _patterns: patterns, _exact: new Map(patterns.map((p, i) => [p, i]).reverse()) };
+        const cores = new Map();
+        for (const raw of (g.patterns || [])) {
+          const text = String(raw).replace(NUMBERED, (m, n, rest) => rest).trim();
+          const core = matchName(text);
+          if (core && !cores.has(core)) cores.set(core, text);
+        }
+        const patterns = [...cores.keys()];
+        return { ...g, _patterns: patterns, _labels: cores, _exact: new Map(patterns.map((p, i) => [p, i]).reverse()) };
       });
   }
 
@@ -497,6 +503,7 @@
     if (state.groupCache) return state.groupCache;
     const result = new Map();
     const extras = new Map();
+    const cleanLabels = new Map();
     const multi = $('opt-multi-groups').checked;
     const groups = orderedCustomGroups();
     if (groups.length) {
@@ -512,12 +519,21 @@
         if (manual && known.has(manual)) { result.set(c.stream_id, manual); continue; }
         const matching = multi ? groups.filter((g) => g._patterns.length && groupMatches(c, g))
           : [groups.find((g) => g._patterns.length && groupMatches(c, g))].filter(Boolean);
-        if (matching.length) result.set(c.stream_id, matching[0].id);
+        if (matching.length) {
+          const g0 = matching[0];
+          result.set(c.stream_id, g0.id);
+          if (g0.match === 'exact') {
+            const core = g0.region ? c.regional?.[1] : c._core;
+            const lbl = g0._labels && g0._labels.get(core);
+            if (lbl) cleanLabels.set(c.stream_id, lbl);
+          }
+        }
         if (matching.length > 1) extras.set(c.stream_id, matching.slice(1).map((g) => g.id));
       }
     }
     state.groupCache = result;
     state.groupExtras = extras;
+    state.groupCleanLabels = cleanLabels;
     return result;
   }
   const customName = (id) => (state.customGroups.find((g) => g.id === id) || {}).name || id;
@@ -528,6 +544,25 @@
   }
   function baseName(name) {
     return squash(name).replace(QUALITY_TAGS, ' ').replace(/[|()[\]{}:._\-+*/\\]+/g, ' ').split(/\s+/).filter(Boolean).join(' ');
+  }
+  const CLEAN_SUPERSCRIPTS = {
+    'ᴴ': 'H', 'ᴰ': 'D', 'ᴿ': 'R', 'ᴬ': 'A', 'ᵂ': 'W', 'ᵁ': 'U', 'ᶠ': 'F', 'ˢ': 'S', 'ᵏ': 'K', '⁴': '4', '⁸': '8',
+    'ꜰ': 'F', 'ʜ': 'H', 'ᴅ': 'D', 'ʀ': 'R', 'ᴀ': 'A', 'ᴡ': 'W', 'ᴜ': 'U', 'ꜱ': 'S',
+  };
+  const CLEAN_PREFIX = /^(?:\s*[\[\(|•●★☆▶►◉♦♣\-]+\s*)*(?:(?:[A-Za-z]{2,3}(?:\s*[-/]\s*(?:VIP|OTT|HD|FHD|4K|UHD|RAW|HEVC))?|VIP|BEIN\s+(?:FR|AR))\s*[:|\-\]\)●•»◉]+\s*)+/i;
+  const CLEAN_SYMBOLS = /[◉●★☆▶►•♦♣]+/g;
+  const CLEAN_BRACKETS = /(?:\*+\s*(?:local|backup|bkp|multi|raw|hevc|h\.?26[45]|vip|fhd|uhd|hd|sd|4k|8k|low|lq|hq)\s*\*+|[\[(]\s*(?:local|backup|bkp|multi|raw|hevc|h\.?26[45]|vip|fhd|uhd|hd|sd|4k|8k|low|lq|hq|50\s*fps|60\s*fps|5\.1|aac|ac3)\s*[\])])/gi;
+  const CLEAN_TAGS = /(?:^|\s)(?:full\s*hd|fhd|uhd|4k|8k|hd|sd|hevc|h\.?26[45]|1080p?|720p?|576p?|480p?|50\s*fps|60\s*fps|raw|vip|low|lq|hq|backup|bkp|multi|local|5\.1|aac|ac3)(?=\s|$)/gi;
+  function cleanChannelName(name) {
+    const raw = String(name || '').trim();
+    if (!raw) return raw;
+    let text = raw.replace(/[ᴴᴰᴿᴬᵂᵁᶠˢᵏ⁴⁸ꜰʜᴅʀᴀᴡᴜꜱ]/g, (ch) => CLEAN_SUPERSCRIPTS[ch] || ch);
+    text = text.replace(CLEAN_SYMBOLS, ' ').replace(CLEAN_PREFIX, '').replace(CLEAN_BRACKETS, ' ');
+    text = text.replace(/\s*[|•]+\s*/g, ' ');
+    let prev;
+    do { prev = text; text = text.replace(CLEAN_TAGS, ' '); } while (text !== prev);
+    text = text.replace(/^[\s\-:|*]+|[\s\-:|*]+$/g, '').replace(/\s+/g, ' ').trim();
+    return text || raw;
   }
   function ruleMatches(name, rule) {
     const n = squash(name), v = squash(rule.value);
@@ -547,7 +582,15 @@
   }
   const catOn = (kind, id) => state.sel[kind].selected.has(id) || ruleSet(kind).has(id);
   const keyOf = (c, kind = state.kind) => KIND[kind].prefix + c.stream_id;
-  const displayName = (c, kind = state.kind) => state.itemNames[keyOf(c, kind)] || c.name;
+  function displayName(c, kind = state.kind) {
+    const manual = state.itemNames[keyOf(c, kind)];
+    if (manual) return manual;
+    if (kind === 'live' && $('opt-clean-names').checked) {
+      groupAssignment();
+      return (state.groupCleanLabels && state.groupCleanLabels.get(c.stream_id)) || cleanChannelName(c.name);
+    }
+    return c.name;
+  }
 
   /** Chaînes du direct masquées comme doublons (option « Masquer les doublons »). */
   function hiddenDuplicates() {
@@ -638,6 +681,7 @@
     data.mix = hasMultipleSources() && $('opt-provider').value === 'mix';
     data.hide_separators = $('opt-separators').checked;
     data.hide_adult = $('opt-adult').checked;
+    data.clean_names = $('opt-clean-names').checked;
     data.favorites_name = $('opt-fav-name').value.trim() || '★ Favoris';
     data.rules = state.rules.map((r) => ({ ...r }));
     data.favorites = sorted ? [...state.favorites].sort() : [...state.favorites];
@@ -1032,6 +1076,7 @@
     if ($('opt-dedupe').checked) parts.push('Sans doublons');
     if ($('opt-separators').checked) parts.push('Sans séparateurs');
     if ($('opt-adult').checked) parts.push('Sans 18+');
+    if ($('opt-clean-names').checked) parts.push('Mode Décodeur');
     if ($('opt-hq-logos').checked) parts.push('Logos HQ');
     if ($('opt-failover').checked && $('opt-dedupe').checked && $('opt-live-format').value !== 'hls') parts.push('Bascule auto');
     $('opt-failover-hint').classList.toggle('warn-text', $('opt-failover').checked && (!$('opt-dedupe').checked || $('opt-live-format').value === 'hls'));
@@ -2264,6 +2309,7 @@
     $('opt-hq-logos').checked = !p || p.hq_logos !== false;
     $('opt-separators').checked = Boolean(p && p.hide_separators);
     $('opt-adult').checked = Boolean(p && p.hide_adult);
+    $('opt-clean-names').checked = Boolean(p && p.clean_names);
     $('opt-fav-name').value = (p && p.favorites_name) || '★ Favoris';
     renderProviderSelect(providerChoice(p));
     reapplyCatalogs();
@@ -2664,6 +2710,7 @@
     loadProviders();
     loadSettings();
     loadTunnel();
+    loadAlerts();
   }
 
   let settingsData = null;
@@ -2796,8 +2843,121 @@
     }
   }
 
+  // ------------------------------------------------ alertes Telegram + QR
+  let alertsData = null;
+  let alertsTimer = null;
+  let lastQrLink = '';
+
+  function renderQrSvg(container, svgText) {
+    if (!svgText) { container.replaceChildren(); return; }
+    const doc = new DOMParser().parseFromString(svgText, 'image/svg+xml');
+    const svg = doc.documentElement;
+    if (svg && svg.nodeName.toLowerCase() === 'svg') {
+      container.replaceChildren(document.importNode(svg, true));
+    }
+  }
+
+  function renderAlerts(data) {
+    clearTimeout(alertsTimer);
+    alertsTimer = null;
+    const wasWaiting = Boolean(alertsData && alertsData.pairing && alertsData.pairing.status === 'waiting');
+    alertsData = data;
+    if (!data) return;
+
+    const badge = $('tg-status-badge');
+    const pair = data.pairing;
+    if (data.connected && data.enabled) {
+      badge.className = 'badge ok';
+      badge.textContent = 'Connecté · Actif';
+    } else if (data.connected) {
+      badge.className = 'badge warn';
+      badge.textContent = 'Connecté · En pause';
+    } else if (pair && pair.status === 'waiting') {
+      badge.className = 'badge warn';
+      badge.textContent = 'En attente du scan…';
+    } else {
+      badge.className = 'badge';
+      badge.textContent = 'Non connecté';
+    }
+
+    $('tg-setup-box').hidden = Boolean(data.connected);
+    $('tg-connected-box').hidden = !data.connected;
+
+    if (data.connected) {
+      lastQrLink = '';
+      $('tg-qr-box').hidden = true;
+      $('tg-conn-title').textContent = `Connecté à ${data.chat_label || 'Telegram'}${data.bot_username ? ` via @${data.bot_username}` : ''}`;
+      const subParts = [];
+      if (data.bot_token_masked) subParts.push(`Token ${data.bot_token_masked}`);
+      if (data.last_sent_at) subParts.push(`Dernière alerte : ${new Date(data.last_sent_at * 1000).toLocaleString('fr-FR')}`);
+      $('tg-conn-sub').textContent = subParts.join(' · ') || 'Prêt à envoyer des notifications.';
+      $('tg-enabled').checked = Boolean(data.enabled);
+      const ev = data.events || {};
+      $('tg-ev-expiry').checked = ev.expiry !== false;
+      $('tg-ev-provider').checked = ev.provider !== false;
+      $('tg-ev-tunnel').checked = ev.tunnel !== false;
+      $('tg-ev-security').checked = ev.security !== false;
+      $('tg-hint').textContent = data.last_error
+        ? `⚠️ Dernière erreur d'envoi : ${data.last_error}`
+        : 'Les vérifications d\'expiration (J-7, J-2, expiré) et du tunnel tournent automatiquement en arrière-plan.';
+      if (wasWaiting) toast('Telegram connecté !');
+      return;
+    }
+
+    if (pair && pair.status === 'waiting') {
+      $('tg-qr-box').hidden = false;
+      if (pair.deep_link !== lastQrLink) {
+        renderQrSvg($('tg-qr-svg'), pair.qr_svg);
+        lastQrLink = pair.deep_link || '';
+      }
+      $('tg-qr-title').textContent = `Scanne ce QR code (@${pair.bot_username})`;
+      const mins = Math.max(1, Math.ceil((pair.expires_in || 0) / 60));
+      $('tg-qr-status').textContent = `Puis appuie sur « Démarrer » dans Telegram… (${mins} min restantes)`;
+      $('tg-qr-link').href = pair.deep_link || '#';
+      $('tg-hint').textContent = 'Connexion automatique en cours d\'écoute : aucune manipulation technique à faire.';
+      alertsTimer = setTimeout(() => loadAlerts({ silent: true }), 2500);
+    } else {
+      lastQrLink = '';
+      $('tg-qr-box').hidden = true;
+      if (pair && pair.status === 'expired') {
+        $('tg-hint').textContent = 'Le QR code a expiré : clique de nouveau sur « Générer le QR code ».';
+      } else if (pair && pair.status === 'error') {
+        $('tg-hint').textContent = `⚠️ ${pair.error || 'Erreur Telegram'}`;
+      } else {
+        $('tg-hint').textContent = 'Ton token est enregistré uniquement dans /data/alerts.json (permissions 0600) et n\'est jamais inclus dans les sauvegardes.';
+      }
+    }
+  }
+
+  async function loadAlerts({ silent = false } = {}) {
+    try {
+      renderAlerts(await request('/api/alerts'));
+    } catch (error) {
+      if (!silent) $('tg-hint').textContent = error.message;
+    }
+  }
+
+  async function saveAlertOptions() {
+    try {
+      const data = await request('/api/alerts', 'PUT', {
+        enabled: $('tg-enabled').checked,
+        events: {
+          expiry: $('tg-ev-expiry').checked,
+          provider: $('tg-ev-provider').checked,
+          tunnel: $('tg-ev-tunnel').checked,
+          security: $('tg-ev-security').checked,
+        },
+      });
+      renderAlerts(data);
+      toast('Préférences d\'alertes enregistrées');
+    } catch (error) {
+      toast(error.message, 'error');
+      loadAlerts({ silent: true });
+    }
+  }
+
   // ---------------------------------------------------------- abonnements
-  const SYS_TABS = ['overview', 'providers', 'network', 'backup'];
+  const SYS_TABS = ['overview', 'providers', 'network', 'alerts', 'backup'];
   function selectSysTab(name) {
     if (!SYS_TABS.includes(name)) name = 'overview';
     state.sysTab = name;
@@ -3491,8 +3651,84 @@
   $('opt-dedupe').addEventListener('change', () => { renderOptionsPill(); refresh(); });
   $('opt-failover').addEventListener('change', () => { renderOptionsPill(); refresh({ channels: false }); });
   $('opt-hq-logos').addEventListener('change', () => { renderOptionsPill(); refresh(); });
+  $('opt-clean-names').addEventListener('change', () => { renderOptionsPill(); refresh(); });
   $('opt-adult').addEventListener('change', () => { renderOptionsPill(); refresh(); });
   $('opt-provider').addEventListener('change', () => { reapplyCatalogs(); refresh(); });
+  $('tg-token-eye').addEventListener('click', () => {
+    const field = $('tg-token');
+    field.type = field.type === 'password' ? 'text' : 'password';
+  });
+  $('tg-pair-form').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const token = $('tg-token').value.trim();
+    if (!token) { $('tg-token').focus(); return; }
+    const btn = $('tg-pair-btn');
+    btn.disabled = true;
+    btn.textContent = 'Génération du QR code…';
+    try {
+      const data = await request('/api/alerts/pair', 'POST', { bot_token: token });
+      renderAlerts(data);
+      toast('QR code prêt : scanne-le puis clique sur Démarrer dans Telegram');
+    } catch (error) {
+      toast(error.message, 'error');
+      $('tg-hint').textContent = `⚠️ ${error.message}`;
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Générer le QR code';
+    }
+  });
+  $('tg-pair-cancel').addEventListener('click', async () => {
+    try {
+      renderAlerts(await request('/api/alerts/cancel', 'POST'));
+    } catch (error) { toast(error.message, 'error'); }
+  });
+  $('tg-manual-form').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const token = $('tg-token').value.trim();
+    const chatId = $('tg-manual-chat').value.trim();
+    if (!token) { toast('Colle d\'abord le token du bot ci-dessus', 'error'); $('tg-token').focus(); return; }
+    if (!chatId) { $('tg-manual-chat').focus(); return; }
+    const btn = $('tg-manual-btn');
+    btn.disabled = true;
+    try {
+      const data = await request('/api/alerts/manual', 'POST', { bot_token: token, chat_id: chatId });
+      $('tg-token').value = '';
+      $('tg-manual-chat').value = '';
+      renderAlerts(data);
+      toast('Telegram connecté !');
+    } catch (error) {
+      toast(error.message, 'error');
+    } finally {
+      btn.disabled = false;
+    }
+  });
+  $('tg-test-btn').addEventListener('click', async () => {
+    const btn = $('tg-test-btn');
+    btn.disabled = true;
+    try {
+      renderAlerts(await request('/api/alerts/test', 'POST'));
+      toast('Message de test envoyé sur Telegram');
+    } catch (error) {
+      toast(error.message, 'error');
+      loadAlerts({ silent: true });
+    } finally {
+      btn.disabled = false;
+    }
+  });
+  $('tg-disconnect-btn').addEventListener('click', async () => {
+    if (!(await ask({
+      title: 'Déconnecter Telegram ?', okLabel: 'Déconnecter', danger: true,
+      text: 'Le token et l\'identifiant de discussion seront supprimés de ce serveur et tu ne recevras plus d\'alertes.',
+    }))) return;
+    try {
+      renderAlerts(await request('/api/alerts/disconnect', 'POST'));
+      $('tg-token').value = '';
+      toast('Telegram déconnecté');
+    } catch (error) { toast(error.message, 'error'); }
+  });
+  for (const id of ['tg-enabled', 'tg-ev-expiry', 'tg-ev-provider', 'tg-ev-tunnel', 'tg-ev-security']) {
+    $(id).addEventListener('change', saveAlertOptions);
+  }
   $('tailscale-local').addEventListener('change', async (event) => {
     const on = event.target.checked;
     if (on && !(await ask({ title: 'Tailscale = mon réseau local ?', okLabel: 'Activer',

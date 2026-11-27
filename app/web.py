@@ -11,7 +11,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
-from . import __version__, access, logos, provider_store, settings, tunnel
+from . import __version__, access, alerts, logos, provider_store, settings, tunnel
 from .httputil import encode_body
 from .custom import InvalidPlaylist, PlaylistStore, validate_playlist
 from .epg import EpgCache
@@ -229,6 +229,8 @@ class WebHandler(BaseHTTPRequestHandler):
             return self.provider_credentials(int(creds.group(1)))
         if path == "/api/tunnel":
             return self.json(200, self.tunnel_status())
+        if path == "/api/alerts":
+            return self.json(200, self.alerts_status())
         if path == "/api/epg/suggest":
             return self.epg_suggest(qs.get("slug", [""])[0])
         if path == "/api/epg/groups":
@@ -860,6 +862,8 @@ class WebHandler(BaseHTTPRequestHandler):
             return self.diagnostic()
         if path.startswith("/api/tunnel/"):
             return self.tunnel_action(path.rsplit("/", 1)[-1])
+        if path.startswith("/api/alerts/"):
+            return self.alerts_action(path.rsplit("/", 1)[-1])
         if path == "/api/history/clear":
             if not self.same_origin():
                 return
@@ -914,6 +918,8 @@ class WebHandler(BaseHTTPRequestHandler):
             except OSError:
                 return self.json(500, {"error": "Impossible d'enregistrer /data/settings.json"})
             return self.json(200, self.settings_status())
+        if urlsplit(self.path).path == "/api/alerts":
+            return self.alerts_update()
         match = SLUG_API.fullmatch(urlsplit(self.path).path)
         if not match:
             return self.json(404, {"error": "Route introuvable"})
@@ -1031,11 +1037,66 @@ class WebHandler(BaseHTTPRequestHandler):
             return self.json(500, {"error": "Impossible d'écrire dans /data/cloudflared"})
         return self.json(200, self.tunnel_status())
 
+    # ------------------------------------------------------- alertes Telegram
+    def alerts_status(self) -> dict:
+        mgr = alerts.current()
+        if mgr is None:
+            return {"available": False, "connected": False, "enabled": False,
+                    "events": dict(alerts.DEFAULT_EVENTS), "pairing": None}
+        return {"available": True, **mgr.status()}
+
+    def alerts_action(self, action: str) -> None:
+        if action in ("pair", "manual"):
+            body = self.read_payload()
+            if body is None:
+                return
+        elif not self.same_origin():
+            return
+        mgr = alerts.current()
+        if mgr is None:
+            return self.json(409, {"error": "Alertes Telegram indisponibles dans ce mode de démarrage"})
+        try:
+            if action == "pair":
+                return self.json(200, {"available": True, **mgr.start_pairing(body.get("bot_token", ""))})
+            if action == "cancel":
+                return self.json(200, {"available": True, **mgr.cancel_pairing()})
+            if action == "manual":
+                return self.json(200, {"available": True, **mgr.connect_manual(
+                    body.get("bot_token", ""), body.get("chat_id", ""))})
+            if action == "test":
+                return self.json(200, {"available": True, **mgr.send_test()})
+            if action == "disconnect":
+                return self.json(200, {"available": True, **mgr.disconnect()})
+            return self.json(404, {"error": "Action inconnue"})
+        except alerts.AlertError as exc:
+            return self.json(400, {"error": str(exc)})
+        except OSError:
+            return self.json(500, {"error": "Impossible d'enregistrer /data/alerts.json"})
+
+    def alerts_update(self) -> None:
+        body = self.read_payload()
+        if body is None:
+            return
+        mgr = alerts.current()
+        if mgr is None:
+            return self.json(409, {"error": "Alertes Telegram indisponibles dans ce mode de démarrage"})
+        try:
+            state = mgr.update_options(
+                enabled=body.get("enabled") if "enabled" in body else None,
+                events=body.get("events") if "events" in body else None,
+            )
+            return self.json(200, {"available": True, **state})
+        except OSError:
+            return self.json(500, {"error": "Impossible d'enregistrer /data/alerts.json"})
+
     def epg_guides(self) -> list[tuple[str, str, object]]:
-        """Guides disponibles : ``[(clé, libellé, EpgCache)]`` (fournisseur, puis guides externes)."""
+        """Guides disponibles : ``[(clé, libellé, EpgCache)]`` (fournisseurs, puis guides externes)."""
         guides = []
         if self.config.epg_source != "api":
             guides.append(("provider", "Guide du fournisseur", self.epg))
+            for pid, pcache in sorted(getattr(self.epg, "provider_caches", {}).items(), key=lambda e: int(e[0])):
+                label = getattr(pcache, "label", "") or f"abonnement {pid}"
+                guides.append((f"provider:{pid}", f"Guide {label}", pcache))
         for n, extra in enumerate(self.epg.extras, start=1):
             host = urlsplit(getattr(extra, "label", "") or "").netloc or f"guide {n}"
             guides.append((f"external:{n}", f"Guide externe {n} ({host})", extra))
@@ -1202,6 +1263,11 @@ class WebHandler(BaseHTTPRequestHandler):
                     self.epg.ensure(refresh=True)
                 except EpgUnavailable:
                     pass
+                for pcache in getattr(self.epg, "provider_caches", {}).values():
+                    try:
+                        pcache.ensure(refresh=True)
+                    except EpgUnavailable:
+                        pass
             if saved is not None and self.epg.api_cache is not None:
                 try:
                     ids = [c["stream_id"] for c in self.playlist_channels(saved)]

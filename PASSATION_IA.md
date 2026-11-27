@@ -1,7 +1,20 @@
 # Passation — Xtream M3U Local
 
-> **État au 26 novembre 2026 — version 3.34.1.** Document à transmettre tel quel à l'IA suivante avec le dépôt.
+> **État au 27 novembre 2026 — version 3.35.0.** Document à transmettre tel quel à l'IA suivante avec le dépôt.
 > Aucun mot de passe, token ni URL fournisseur réelle ne doit être copié ici ni commité sur GitHub.
+
+### Nouveautés en 3.35.0 (Mode Décodeur, XMLTV multi-abonnements, Alertes Telegram + QR code)
+
+- **Alertes automatiques Telegram avec couplage par QR code local (`app/alerts.py`, `app/qrcode_svg.py`)** :
+  - `qrcode_svg.py` : encodeur QR ISO/IEC 18004 pur Python stdlib (versions 1–6, mode Byte, ECC M, Reed-Solomon GF(256), score de pénalité des 8 masques, sortie SVG autonome sans scripts/styles inline).
+  - `alerts.py` (`AlertManager`) : stockage `/data/alerts.json` (permissions `0600`, jamais inclus dans `/api/backup`, token masqué dans `server.redact()`). `POST /api/alerts/pair` vérifie le token via `getMe`, génère `https://t.me/<bot>?start=<code>` + SVG local, et lance un thread `getUpdates` court (5 min) qui détecte le clic **Démarrer**, enregistre `chat_id`/`chat_label` et envoie un message de bienvenue. Endpoints REST : `GET /api/alerts`, `POST /api/alerts/{pair,cancel,manual,test,disconnect}`, `PUT /api/alerts`. Watchdog périodique dans `server.main()` : `check_expiries(api)` (J-7, J-2, expiré avec déduplication persistée), `check_tunnel(tunnel)`, plus hooks `alerts.notify("provider", ...)` dans `XtreamAPI.note_429` et `alerts.notify("security", ...)` dans `Handler.note_failure`. Onglet **Système → 🔔 Alertes** (`#sys-alerts`, rendu SVG via `DOMParser` + `document.importNode` conforme CSP stricte).
+- **Mode Décodeur — nettoyage automatique des noms (`clean_names`)** :
+  - Champ booléen `clean_names` (défaut `False`) dans `custom.py`, appliqué dans `builder.select_items()` **après** `dedupe()` et `apply_hq_logos()` (préservant le tri qualité et les logos HQ) et **avant** les renommages manuels `item_names` (`✎` reste prioritaire).
+  - Dans un groupe personnalisé `match: "exact"`, `apply_custom_groups()` attache le libellé propre du motif (`clean_name`, sans numéro `N: `). Ailleurs, `builder.clean_channel_name()` (et son miroir JS `cleanChannelName()` dans `app.js`) retire préfixes pays/fournisseur, symboles décoratifs et mentions techniques/exposants Unicode tout en conservant les accents français.
+- **Guide XMLTV (`xmltv.php`) par abonnement (`providers.py`, `epg.py`, `server.py`, `web.py`)** :
+  - `ProviderSet.epg_urls()` retourne `{provider_id: (url, ua, label)}` pour chaque abonnement (`1..9`). `make_epg()` injecte `_provider_caches_fn` (caches secondaires sous `/data/epg-provider/<sha256[:10]>`) et `_provider_of_fn` dans `EpgCache`.
+  - `EpgCache.playlist_guide()` ne télécharge le `xmltv.php` d'un abonnement secondaire que si la playlist contient effectivement des chaînes de cet abonnement, écrit leurs programmes via `write_mapped_xmltv`, les intègre à la signature de cache et les expose dans `web.epg_guides()` (recherche manuelle `/api/epg/search`, couverture groupes, actualisation `/api/epg/refresh`).
+- Tests : `tests/test_v335.py` (décodage QR round-trip multi-blocs V2/V4/V6, Mode Décodeur + rétrocompatibilité, fusion XMLTV multi-fournisseurs, flux complet QR pairing + `0600` + `redact()` + expiries contre un faux serveur Telegram local).
 
 ### Modèle « Maroc » et mise à jour des modèles en 3.34.1
 

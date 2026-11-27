@@ -431,6 +431,8 @@ class EpgCache:
     api_cache = None  # KeyedCache des programmes par chaîne (get_simple_data_table)
     _extras: list = []   # guides XMLTV externes (EPG_EXTRA_URLS), essayés avant l'API
     _extras_fn = None    # ou fonction qui les donne (guides ajoutés dans l'interface, pris en compte à chaud)
+    _provider_caches_fn = None   # fonction -> {provider_id: EpgCache} pour les abonnements 2..9
+    _provider_of_fn = None       # fonction(stream_id) -> provider_id
 
     @property
     def extras(self) -> list:
@@ -439,6 +441,19 @@ class EpgCache:
     @extras.setter
     def extras(self, value) -> None:
         self._extras = list(value)
+
+    @property
+    def provider_caches(self) -> dict[str, "EpgCache"]:
+        return dict(self._provider_caches_fn()) if self._provider_caches_fn is not None else {}
+
+    def _provider_of(self, sid: str) -> str:
+        if self._provider_of_fn is not None:
+            try:
+                return str(self._provider_of_fn(sid) or "1")
+            except Exception:
+                return "1"
+        return "1"
+
     api_max = 0        # chaînes au plus complétées par l'API pour une playlist (0 = sans limite)
 
     def playlist_guide(self, key: str, channels: list[dict], *, mode: str | None = None, api=None,
@@ -455,20 +470,58 @@ class EpgCache:
         mode = mode or self.mode
         api = api if api is not None else self.api_cache
         now = time.time()
+        p_caches = self.provider_caches
+        ch_provider = {c["stream_id"]: self._provider_of(c["stream_id"]) for c in channels}
+        needed_providers = set(ch_provider.values()) if channels else {"1"}
         source = None
         source_error = None
-        if mode in ("auto", "xmltv"):
+        if mode in ("auto", "xmltv") and ("1" in needed_providers or not p_caches):
             try:
                 source = self.ensure(refresh=refresh)
             except EpgUnavailable as exc:
                 source_error = exc
         available = self.upcoming_ids(now) if source else set()
-        in_provider = {c["stream_id"] for c in channels
-                       if (c.get("epg_id") or "").strip().lower() in available}
+        # Abonnements secondaires (2..9) : chaque abonnement télécharge et met en cache son propre xmltv.php.
+        sec_available: dict[str, tuple["EpgCache", set[str]]] = {}
+        sec_errors: list[EpgUnavailable] = []
+        if mode in ("auto", "xmltv") and p_caches:
+            for pid in sorted(needed_providers - {"1"}):
+                pcache = p_caches.get(pid)
+                if pcache is None:
+                    continue
+                try:
+                    pcache.ensure(refresh=refresh)
+                    sec_available[pid] = (pcache, pcache.upcoming_ids(now))
+                except EpgUnavailable as exc:
+                    sec_errors.append(exc)
+        if source is None and not sec_available and source_error is None and sec_errors:
+            source_error = sec_errors[0]
+        in_provider_primary: set[str] = set()
+        in_provider_sec: dict[str, tuple[str, "EpgCache", str]] = {}
+        for c in channels:
+            sid = c["stream_id"]
+            eid = (c.get("epg_id") or "").strip().lower()
+            if not eid:
+                continue
+            pid = ch_provider[sid]
+            if pid != "1" and pid in sec_available:
+                pcache, pavail = sec_available[pid]
+                if eid in pavail:
+                    in_provider_sec[sid] = (pid, pcache, eid)
+                    continue
+            if eid in available:
+                in_provider_primary.add(sid)
+        in_provider_all = in_provider_primary | set(in_provider_sec)
         # Chaînes de « Mes groupes » (OTT, TNT, Maroc…) : guides externes d'abord, guide du fournisseur ensuite.
         prefer = {c["stream_id"] for c in channels if c.get("epg_prefer_external")}
-        covered = in_provider - prefer
-        sources: dict[str, dict] = {sid: {"source": "provider", "id": ""} for sid in covered}
+        covered = in_provider_all - prefer
+        sources: dict[str, dict] = {}
+        for sid in covered:
+            if sid in in_provider_sec:
+                pid, _, eid = in_provider_sec[sid]
+                sources[sid] = {"source": f"provider:{pid}", "id": eid}
+            else:
+                sources[sid] = {"source": "provider", "id": ""}
         # Guides externes : par identifiant XMLTV, puis par nom de chaîne (« FR: TF1 FHD » = « TF1 »).
         external: list[tuple["EpgCache", dict[str, list[str]]]] = []
         from_extra: set[str] = set()
@@ -483,8 +536,8 @@ class EpgCache:
                     extra.ensure(refresh=refresh)
                 except EpgUnavailable:
                     continue
-                available = extra.upcoming_ids(now)
-                auto_ids, by_name = extra.automatic_matches(available)
+                available_ext = extra.upcoming_ids(now)
+                auto_ids, by_name = extra.automatic_matches(available_ext)
                 mapping: dict[str, list[str]] = {}
                 left = []
                 for c in remaining:
@@ -494,7 +547,7 @@ class EpgCache:
                         # Nom propre du groupe (« TF1 ») d'abord, puis le nom de la chaîne chez le fournisseur.
                         eid = (by_name.get(squash_name(c["epg_name"]), "") if c.get("epg_name") else "") \
                             or by_name.get(squash_name(match_name(c["name"])), "")
-                    if eid in (available if manual else auto_ids):
+                    if eid in (available_ext if manual else auto_ids):
                         ours = xml_channel_id(c)
                         if ours not in mapping.setdefault(eid, []):
                             mapping[eid].append(ours)
@@ -505,12 +558,16 @@ class EpgCache:
                 remaining = left
                 if mapping:
                     external.append((extra, mapping))
-        if source_error is not None and not from_extra and (mode == "xmltv" or api is None):
+        if source_error is not None and not sec_available and not from_extra and (mode == "xmltv" or api is None):
             raise source_error
-        # Pas trouvées dans les guides externes : guide du fournisseur s'il en a un.
-        for sid in (in_provider & prefer) - from_extra:
+        # Pas trouvées dans les guides externes : guide du fournisseur (principal ou secondaire) s'il en a un.
+        for sid in (in_provider_all & prefer) - from_extra:
             covered.add(sid)
-            sources[sid] = {"source": "provider", "id": ""}
+            if sid in in_provider_sec:
+                pid, _, eid = in_provider_sec[sid]
+                sources[sid] = {"source": f"provider:{pid}", "id": eid}
+            else:
+                sources[sid] = {"source": "provider", "id": ""}
         # Un identifiant repris d'un guide externe n'est plus pris chez le fournisseur (sinon programmes en
         # double pour une autre chaîne de la playlist qui porte le même identifiant).
         taken = {ours.lower(): (extras.index(extra) + 1, eid) for extra, mapping in external
@@ -527,7 +584,7 @@ class EpgCache:
             targets = targets[:self.api_max]  # ordre de la playlist : groupes perso et favoris d'abord
         if api_ids is not None:
             targets = [c for c in targets if c["stream_id"] in api_ids]
-            if source is None and not targets and not from_extra:
+            if source is None and not sec_available and not targets and not from_extra:
                 raise EpgUnavailable("Guide XMLTV du fournisseur indisponible : enregistre une playlist personnalisée "
                                      "pour obtenir un guide complété par l'API, puis réessaie")
         # Chaque chaîne interroge d'abord sa propre version, puis — si le fournisseur n'a aucun programme
@@ -559,11 +616,21 @@ class EpgCache:
         pending = api.pending_count(list(dict.fromkeys(to_fetch))) if to_fetch else 0
         from_api = {c["stream_id"] for c in targets if listings.get(c["stream_id"])}
         by_sid = {c["stream_id"]: c for c in channels}
+        covered_primary = {sid for sid in covered if sid not in in_provider_sec}
+        sec_mappings: dict[str, tuple["EpgCache", dict[str, list[str]]]] = {}
         for sid in covered:
-            sources[sid] = {"source": "provider", "id": (by_sid[sid].get("epg_id") or "").strip().lower()}
+            if sid in in_provider_sec:
+                pid, pcache, eid = in_provider_sec[sid]
+                sources[sid] = {"source": f"provider:{pid}", "id": eid}
+                ours = xml_channel_id(by_sid[sid])
+                _, mapping = sec_mappings.setdefault(pid, (pcache, {}))
+                if ours not in mapping.setdefault(eid, []):
+                    mapping[eid].append(ours)
+            else:
+                sources[sid] = {"source": "provider", "id": (by_sid[sid].get("epg_id") or "").strip().lower()}
         for sid in from_api:
             sources[sid] = {"source": "api", "id": ""}
-        wanted = {c["epg_id"].strip().lower() for c in channels if c["stream_id"] in covered}
+        wanted = {c["epg_id"].strip().lower() for c in channels if c["stream_id"] in covered_primary}
         stats = {
             "mode": mode,
             "channels": len(channels),
@@ -581,6 +648,9 @@ class EpgCache:
         digest.update(f"{mode}\n{self._source_key() if source else '-'}\n".encode())
         for item in sorted(wanted):
             digest.update(item.encode("utf-8", "replace") + b"\n")
+        for pid in sorted(sec_mappings):
+            pcache, mapping = sec_mappings[pid]
+            digest.update(f"p{pid}:{pcache._source_key()}:{json.dumps(mapping, sort_keys=True)}\n".encode("utf-8", "replace"))
         for extra, mapping in external:
             digest.update(f"x:{extra._source_key()}:{json.dumps(mapping, sort_keys=True)}\n".encode("utf-8", "replace"))
         for c in sorted(targets, key=lambda c: c["stream_id"]):
@@ -604,6 +674,9 @@ class EpgCache:
                         write_filtered_xmltv(source, dst, wanted, close=False)
                     else:
                         dst.write('<?xml version="1.0" encoding="UTF-8"?>\n<tv generator-info-name="Xtream M3U Local">\n')
+                    for pid in sorted(sec_mappings):
+                        pcache, mapping = sec_mappings[pid]
+                        write_mapped_xmltv(pcache.source, dst, mapping)
                     for extra, mapping in external:
                         write_mapped_xmltv(extra.source, dst, mapping)
                     written: set[str] = set()

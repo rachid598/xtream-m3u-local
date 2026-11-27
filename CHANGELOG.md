@@ -2,6 +2,21 @@
 
 Format inspiré de « Keep a Changelog ». Les versions suivent le versionnage sémantique.
 
+## [3.35.0] — 2026-11-27
+
+### Ajouté
+- **Alertes automatiques Telegram avec couplage par QR code local** (**Système → 🔔 Alertes**) :
+  - Générateur de **QR code SVG 100 % local** en Python pur (`app/qrcode_svg.py`, norme ISO/IEC 18004, zéro dépendance externe, zéro appel tiers, compatible CSP stricte).
+  - Connexion simplifiée en 3 étapes : coller le token `@BotFather`, scanner le QR code généré localement et appuyer sur **Démarrer** dans Telegram (`https://t.me/<bot>?start=<code>`) — le serveur détecte automatiquement le `chat_id` via `getUpdates`, enregistre `/data/alerts.json` en permissions `0600` (jamais exporté dans les sauvegardes, token masqué par `redact()`) et bascule l'interface sur **Connecté · Actif**. Connexion manuelle par `chat_id` également disponible en repli.
+  - Notifications configurables événement par événement : **expiration d'abonnement** (paliers J-7, J-2 et expiré sur tous les abonnements, sans doublon), **blocage fournisseur** (`HTTP 429` / passage en mode prudent), **déconnexion inattendue du tunnel Cloudflare**, et **sécurité accès distant** (IP bloquée après trop d'essais), plus bouton **Envoyer un test**.
+- **Nettoyage automatique des noms de chaînes (« Mode Décodeur »)** (`clean_names`, dans **Options** de chaque playlist, désactivé par défaut pour une rétrocompatibilité totale) :
+  - Retire les préfixes pays/fournisseur (`FR:`, `AR:`, `[FR-VIP]`, `|BEIN FR|`), symboles décoratifs (`◉`, `●`, `★`, `▶`) et mentions techniques (`ᴴᴰ`, `ᴿᴬᵂ`, `FHD`, `4K`, `HEVC`, `50FPS`, `*LOCAL*`, `[BACKUP]`) tout en conservant les accents français (`Canal+ Cinéma`, `L'Équipe`, `RMC Découverte`).
+  - Dans les groupes personnalisés exacts (« TNT », « Maroc », « OTT », « Canal+ »…), utilise automatiquement le libellé propre du motif (ex. `AR: 2M Natioanl ◉` → `2M`, `AR: ARRYADIA TNT ᴴᴰ *LOCAL*` → `Arryadia TNT`).
+  - Les renommages manuels (`✎`) restent toujours prioritaires, et l'aperçu en direct dans l'éditeur reflète immédiatement l'option.
+- **Guide XMLTV (`xmltv.php`) pour chaque abonnement (pas seulement le n° 1)** :
+  - Les abonnements secondaires (`2..9`) disposent désormais de leur propre cache `xmltv.php` (`/data/epg-provider/<id>/`, téléchargé uniquement quand des chaînes de cet abonnement sont présentes dans une playlist).
+  - Les playlists sur un espace membre secondaire ou en mode mélange fusionnent directement les programmes XMLTV de chaque abonnement concerné (avec repli automatique vers les guides externes et l'API Xtream), et la recherche manuelle (`/api/epg/search`) ainsi que l'actualisation couvrent tous les guides fournisseurs.
+
 ## [3.34.1] — 2026-11-26
 
 ### Modifié

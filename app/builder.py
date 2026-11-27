@@ -223,6 +223,53 @@ def group_matches(core: str, group: dict) -> int | None:
     return None
 
 
+_CLEAN_PREFIX = re.compile(
+    r"^(?:\s*[\[\(|•●★☆▶►◉♦♣\-]+\s*)*"
+    r"(?:(?:[A-Za-z]{2,3}(?:\s*[-/]\s*(?:VIP|OTT|HD|FHD|4K|UHD|RAW|HEVC))?|VIP|BEIN\s+(?:FR|AR))\s*[:|\-\]\)●•»◉]+\s*)+",
+    re.IGNORECASE,
+)
+_CLEAN_SYMBOLS = re.compile(r"[◉●★☆▶►•♦♣]+")
+_CLEAN_BRACKETS = re.compile(
+    r"(?:\*+\s*(?:local|backup|bkp|multi|raw|hevc|h\.?26[45]|vip|fhd|uhd|hd|sd|4k|8k|low|lq|hq)\s*\*+"
+    r"|[\[(]\s*(?:local|backup|bkp|multi|raw|hevc|h\.?26[45]|vip|fhd|uhd|hd|sd|4k|8k|low|lq|hq|50\s*fps|60\s*fps|5\.1|aac|ac3)\s*[\])])",
+    re.IGNORECASE,
+)
+_CLEAN_TAGS = re.compile(
+    r"(?:^|(?<=\s))(?:full\s*hd|fhd|uhd|4k|8k|hd|sd|hevc|h\.?26[45]|1080p?|720p?|576p?|480p?|50\s*fps|60\s*fps|raw|vip|low|lq|hq|backup|bkp|multi|local|5\.1|aac|ac3)(?=\s|$)",
+    re.IGNORECASE,
+)
+
+
+def _expand_superscripts(text: str) -> str:
+    """Convertit les exposants/petites capitales Unicode (« ᴿᴬᵂ », « ᴴᴰ », « ⁴ᴷ ») sans retirer les accents français."""
+    out: list[str] = []
+    for ch in text or "":
+        decomp = unicodedata.decomposition(ch)
+        if decomp and (decomp.startswith("<super>") or decomp.startswith("<compat>") or decomp.startswith("<small>")):
+            out.append(unicodedata.normalize("NFKD", ch))
+        elif ch in "ꜰʜᴅʀᴀᴡᴜꜱ":
+            out.append({"ꜰ": "F", "ʜ": "H", "ᴅ": "D", "ʀ": "R", "ᴀ": "A", "ᴡ": "W", "ᴜ": "U", "ꜱ": "S"}[ch])
+        else:
+            out.append(ch)
+    return "".join(out)
+
+
+def clean_channel_name(name: str) -> str:
+    """Mode Décodeur : retire préfixes pays/fournisseur, symboles et mentions techniques en gardant les accents."""
+    raw = str(name or "").strip()
+    if not raw:
+        return raw
+    text = _expand_superscripts(raw)
+    text = _CLEAN_SYMBOLS.sub(" ", text)
+    text = _CLEAN_PREFIX.sub("", text)
+    text = _CLEAN_BRACKETS.sub(" ", text)
+    text = re.sub(r"\s*[|•]+\s*", " ", text)
+    text = _CLEAN_TAGS.sub(" ", text)
+    text = re.sub(r"^[\s\-:|*]+|[\s\-:|*]+$", "", text)
+    text = " ".join(text.split())
+    return text or raw
+
+
 def ordered_custom_groups(saved: dict) -> list[dict]:
     """Groupes personnalisés par priorité : ordre des groupes de la playlist, puis ordre de création."""
     groups = saved.get("custom_groups") or []
@@ -230,13 +277,18 @@ def ordered_custom_groups(saved: dict) -> list[dict]:
     ordered = sorted(enumerate(groups), key=lambda e: (rank.get(CUSTOM_PREFIX + e[1]["id"], len(rank)), e[0]))
     result = []
     for _, group in ordered:
-        cores: dict[str, int | None] = {}
+        cores: dict[str, tuple[int | None, str]] = {}
         for value in group.get("patterns") or []:
             number, text = split_pattern(value)
             core = match_name(text)
             if core and core not in cores:
-                cores[core] = number
-        result.append({**group, "_patterns": list(cores), "_numbers": list(cores.values())})
+                cores[core] = (number, text.strip())
+        result.append({
+            **group,
+            "_patterns": list(cores),
+            "_numbers": [v[0] for v in cores.values()],
+            "_labels": [v[1] for v in cores.values()],
+        })
     return result
 
 
@@ -289,6 +341,8 @@ def apply_custom_groups(entries: list[tuple[dict, str]], saved: dict,
                 number = g["_numbers"][rank]
                 if number is not None:
                     item = {**item, "num": str(number), "custom_num": True}
+                if g.get("match") == "exact" and g["_labels"][rank]:
+                    item = {**item, "clean_name": g["_labels"][rank]}
                 if region == "ar" and regional_core.startswith("bein sports ") and scope:
                     # Le guide beIN France peut porter le même nom que la chaîne MENA.
                     item = {**item, "epg_match_name": False}
@@ -549,6 +603,9 @@ def select_items(api, saved: dict, kind: str, *, refresh: bool = False) -> tuple
                                                      set(saved.get(SELECTION_FIELDS["live"][2]) or ()), categories)
     if kind == "live" and saved.get("hq_logos", True):
         entries = apply_hq_logos(entries, categories)
+    if kind == "live" and saved.get("clean_names"):
+        entries = [({**item, "name": item.get("clean_name") or clean_channel_name(item["name"])}, group)
+                   for item, group in entries]
     names = saved.get("item_names") or {}
     numbers = saved.get("item_numbers") or {} if kind == "live" else {}
     logos = saved.get("item_logos") or {}

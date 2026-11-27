@@ -27,7 +27,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, quote, urlencode, urlsplit
 from urllib.request import Request, urlopen
 
-from . import __version__, access, hdhr, logos, provider_store, settings, tunnel
+from . import __version__, access, alerts, hdhr, logos, provider_store, settings, tunnel
 from .httputil import accepts_gzip, encode_body, etag_matches, etag_of, gzip_stream
 from .builder import FAVORITES_GROUP, GROUP_PREFIX, add_favorites, display_logo, select_items
 from .devices import DeviceStore
@@ -571,6 +571,9 @@ class XtreamAPI:
             + urlencode({"username": self.config.username, "password": self.config.password})
         )
 
+    def epg_urls(self) -> dict[str, tuple[str, str, str]]:
+        return {"1": (self.epg_url(), self.config.provider_name or "Fournisseur 1", self.config.user_agent)}
+
     def _fetch(self, url: str, label: str):
         wait = self.paused_for()
         if wait:
@@ -658,6 +661,12 @@ class XtreamAPI:
             (self._cache_dir / f"last429-{self.provider_key}").write_text(str(self.last_429))
         except OSError:
             pass
+        pname = self.config.provider_name or urlsplit(self.config.xtream_url).netloc or "Fournisseur"
+        alerts.notify(
+            "provider", f"429:{self.provider_key}",
+            f"⚠️ Fournisseur « {pname} » : trop de requêtes (HTTP 429). Mode prudent activé 1 h.",
+            cooldown=4 * 3600,
+        )
 
     def _refresh_in_background(self, kind: str) -> None:
         st = self._kinds[kind]
@@ -906,6 +915,9 @@ def redact(value: object, config: Config) -> object:
     paths = [pattern for user, password in credentials
              for pattern in {f"/{user}/{password}/", f"/{quote(user, safe='')}/{quote(password, safe='')}/"}]
     passwords = [p for _, p in credentials if len(p) >= 4]
+    alert_mgr = alerts.current()
+    if alert_mgr is not None:
+        passwords += alert_mgr.secrets()
     return _redact(value, paths, passwords + [quote(p, safe="") for p in passwords if quote(p, safe="") != p])
 
 
@@ -1289,6 +1301,12 @@ class Handler(BaseHTTPRequestHandler):
         if self.remote and self.guard.fail(self.client_ip):
             LOG.warning("Accès distant : %s bloquée %d min (trop d'essais de code)", self.client_ip,
                         access.BLOCK_SECONDS // 60)
+            alerts.notify(
+                "security", f"ban:{self.client_ip}",
+                f"🛡️ Sécurité : adresse distante {self.client_ip} bloquée {access.BLOCK_SECONDS // 60} min "
+                "(trop d'essais d'identifiants invalides).",
+                cooldown=3600,
+            )
 
     def scoped(self) -> "dict | None":
         """Appareil dont les droits limitent la requête (``None`` : accès complet)."""
@@ -2362,6 +2380,30 @@ def make_epg(config: Config, api: XtreamAPI) -> EpgCache:
 
     epg._extras_fn = lambda: [extra_for(url) for url in
                               dict.fromkeys(list(config.epg_extra_urls) + settings.epg_sources())]
+    if not config.epg_url:
+        provider_epgs: dict[tuple[str, str], EpgCache] = {}
+
+        def provider_caches() -> dict[str, EpgCache]:
+            urls_fn = getattr(api, "epg_urls", None)
+            if urls_fn is None:
+                return {}
+            result: dict[str, EpgCache] = {}
+            for pid, (url, name, ua) in urls_fn().items():
+                if pid == "1" or not url:
+                    continue
+                ckey = (url, ua)
+                if ckey not in provider_epgs:
+                    folder = Path(config.data_dir) / "epg-provider" / hashlib.sha256(url.encode()).hexdigest()[:10]
+                    cache = EpgCache((lambda u=url: u), str(folder),
+                                     max_age=config.epg_cache_hours * 3600,
+                                     user_agent=ua or config.user_agent)
+                    provider_epgs[ckey] = cache
+                provider_epgs[ckey].label = name or f"Abonnement {pid}"
+                result[pid] = provider_epgs[ckey]
+            return result
+
+        epg._provider_caches_fn = provider_caches
+        epg._provider_of_fn = lambda sid: api.provider_of(sid)
     if config.epg_source != "xmltv":
         # Débit limité (2 appels par seconde) et journal résumé : des milliers d'appels d'un coup
         # déclenchaient le « 429 trop de requêtes » du fournisseur, et le flux vidéo était refusé avec.
@@ -2557,6 +2599,7 @@ def main() -> None:
     # Tunnel Cloudflare de l'interface (Système → Accès à distance) : redémarré s'il était activé.
     tunnel.install(tunnel.Tunnel(config.data_dir, config.port))
     tunnel.current().start()
+    alerts.install(alerts.AlertManager(config.data_dir))
     from .providers import ApiHolder
     api = ApiHolder(make_api(config, providers))  # remplaçable à chaud (abonnements de l'interface)
     store = PlaylistStore(config.data_dir)
@@ -2581,6 +2624,8 @@ def main() -> None:
     # Mises à jour lourdes (films, séries, épisodes) la nuit (NIGHTLY_REFRESH).
     from . import nightly
     nightly.start(api, series, store, config)
+    if alerts.current() is not None:
+        alerts.current().start_watchdog(api, tunnel.current())
     # Préchargement du catalogue pour que la première ouverture soit rapide.
     threading.Thread(target=_warmup, args=(api,), daemon=True).start()
     try:
@@ -2588,6 +2633,8 @@ def main() -> None:
     except KeyboardInterrupt:
         pass
     finally:
+        if alerts.current() is not None:
+            alerts.current().stop()
         if tunnel.current() is not None:
             tunnel.current().stop(disable=False)
         series.close()
