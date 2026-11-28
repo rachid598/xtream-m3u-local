@@ -209,5 +209,70 @@ class EpgSanitizationAndMatchingTests(unittest.TestCase):
         self.assertEqual(morocco["alaoulamaroc"], "alaoulaar.ma")
 
 
+class BelgiquePresetTests(unittest.TestCase):
+    """Le modèle « Belgique » couvre la liste belge francophone + Sports + Régionales + Radio Vision + Luxembourg."""
+
+    def _patterns(self) -> list[str]:
+        if shutil.which("node") is None:
+            self.skipTest("node absent")
+        node_code = r"""
+const fs = require('fs');
+const src = fs.readFileSync('app/static/app.js', 'utf8');
+const norm = (text) => String(text || '').normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+const m1 = src.indexOf('const EMPTY_SET = new Set();');
+const m2 = src.indexOf('/** Groupes perso par priorité');
+const fn = new Function('norm', 'state', '$', src.slice(m1, m2) + '\nreturn BELGIQUE;');
+console.log(JSON.stringify(fn(norm, { kind: 'live', cat: { live: { categoryNames: new Map() } } }, () => ({ checked: false }))));
+"""
+        root = Path(__file__).resolve().parents[1]
+        return json.loads(subprocess.check_output(["node", "-e", node_code], cwd=root, text=True))
+
+    def test_exact_belgium_and_luxembourg_list_order_and_cross_provider_aliases(self):
+        group = builder.ordered_custom_groups(
+            {"custom_groups": [{"id": "be", "name": "Belgique", "match": "exact", "patterns": self._patterns()}]}
+        )[0]
+        provider_list = [
+            "|BE| LA UNE FHD", "|BE| TIPIK FHD", "|BE| LA TROIS FHD", "|BE| RTL-TVI FHD",
+            "|BE| CLUB-RTL FHD", "|BE| PLUG-RTL FHD", "|BE| RTL DISTRICT FHD", "|BE| RTL PLAY FHD",
+            "|BE| RTL PLAY 2 FHD", "|BE| ARTE BELGIQUE FHD", "|BE| LN24 FHD", "|BE| CANAL Z",
+            "|BE| AB1 FHD", "|BE| AB3 FHD", "|BE| ABXPLORE FHD", "|BE| DOBBIT TV HD (FR)",
+            "|BE| BE 1 FHD", "|BE| BE CINE FHD", "|BE| BE SERIES FHD",
+            "|BE| DAZN CHANNEL 1 FHD (FR)", "|BE| DAZN CHANNEL 2 FHD (FR)",
+            "|BE| DAZN PRO LEAGUE 1 FHD (FR)", "|BE| DAZN PRO LEAGUE 2 FHD (FR)",
+            "|BE| DAZN 1 FHD (FR)", "|BE| DAZN 2 FHD (FR)", "|BE| DAZN 3 FHD (FR)",
+            "|BE| DAZN 4 FHD (FR)", "|BE| DAZN 5 FHD (FR)",
+            "|BE| PLAY SPORTS 1 FHD (FR)", "|BE| PLAY SPORTS 2 FHD (FR)",
+            "|BE| VOO SPORT WORLD 1 FHD", "|BE| VOO SPORT WORLD 2 FHD", "|BE| VOO SPORT WORLD 3 FHD",
+            "|BE| DIVERTISSEZ-VOO HD",
+            "|BE| ANTENNE CENTRE TV", "|BE| BX1", "|BE| BOUKÉ", "|BE| CANAL ZOOM",
+            "|BE| MA TELE", "|BE| NO TELE", "|BE| QU4TRE (RTC LIEGE)", "|BE| TELE SAMBRE",
+            "|BE| TELE MB", "|BE| TV COM", "|BE| TV LUX", "|BE| VEDIA",
+            "|BE| FUN RADIO VISION HD", "|BE| RADIO CONTACT VISION", "|BE| BEL-RTL VISION",
+            "|BE| TIPIK VISION", "|BE| ARABEL VISION", "|BE| NRJ LIVE TV",
+            "|LU| RTL LUX", "|LU| RTL 2 LUX", "|LU| ELDO TV", "|LU| CHAMBER TV",
+        ]
+        ranks = []
+        for name in provider_list:
+            rank = builder.group_matches(builder.match_name(name), group)
+            self.assertIsNotNone(rank, name)
+            ranks.append(rank)
+        self.assertEqual(ranks, sorted(ranks), "ordre exact Belgique/Luxembourg conservé")
+
+        # Variantes d'autres fournisseurs (P1/P2) reconnues et fusionnées via alias canoniques :
+        second_provider = [
+            "BE: MATELE ◉", "BE: NOTELE ◉", "BE: TELESAMBRE 4K ◉", "BE: TELEMB 4K",
+            "BE: RTC TELE LIEGE 4K ◉", "BE: PLAY SPORTS 1 (WALLONIE)", "BE: PLAY SPORTS 2 (WALLONIE)",
+            "BE: DAZN PRO LEAGUE 1 FR", "BE| DAZN PRO LEAGUES 1", "BE| DAZN SPORTS 1 FHD [FR]",
+            "BE-VIP: RTL CLUB (13)", "BE-VIP: RTL PLUG (13)", "BE: BOUKE 4K ◉", "BE: BE 1 4K ◉",
+        ]
+        for name in second_provider:
+            with self.subTest(name=name):
+                self.assertIsNotNone(builder.group_matches(builder.match_name(name), group), name)
+
+        # Les chaînes flamandes / NL ne polluent pas le groupe Belgique francophone :
+        for excluded in ("BE: VTM 2 HD", "BE-NL| EEN HD", "BE-NL| VRT CANVAS HD", "BE-NL| PLAY SPORTS 1 FHD"):
+            self.assertIsNone(builder.group_matches(builder.match_name(excluded), group), excluded)
+
+
 if __name__ == "__main__":
     unittest.main()
