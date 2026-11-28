@@ -1922,28 +1922,33 @@
     if (existing) {
       if (!preset) { toast(`Le groupe « ${existing.name} » existe déjà.`, 'warn'); return existing; }
       const stripNum = (p) => matchName(String(p).replace(NUMBERED, (m, n, rest) => rest));
-      const known = new Set((existing.patterns || []).map(stripNum).filter(Boolean));
-      const added = (preset.patterns || []).filter((p) => {
-        const core = stripNum(p);
-        if (!core || known.has(core)) return false;
-        known.add(core);
-        return true;
-      });
-      const regionAdded = Boolean(preset.region && existing.region !== preset.region);
-      if (regionAdded) existing.region = preset.region;
-      if (added.length) existing.patterns = [...(existing.patterns || []), ...added].slice(0, 300);
+      const nextPatterns = [...(preset.patterns || [])].slice(0, 300);
+      const oldList = existing.patterns || [];
+      const oldCores = new Set(oldList.map(stripNum).filter(Boolean));
+      const nextCores = new Set(nextPatterns.map(stripNum).filter(Boolean));
+      const addedCount = [...nextCores].filter((c) => !oldCores.has(c)).length;
+      const removedCount = [...oldCores].filter((c) => !nextCores.has(c)).length;
+      const sameOrder = oldList.length === nextPatterns.length && oldList.every((p, i) => p === nextPatterns[i]);
+      const matchChanged = existing.match !== preset.match;
+      const regionChanged = Boolean(existing.region || '') !== Boolean(preset.region || '') || (existing.region || '') !== (preset.region || '');
+      existing.match = preset.match;
+      if (preset.region) existing.region = preset.region;
+      else delete existing.region;
+      existing.patterns = nextPatterns;
+      state.groupCache = null;
       const beforeInc = state.sel.live.included.size;
       if (existing.region) includeRegionalChannels(orderedCustomGroups().find((g) => g.id === existing.id));
       const addedChannels = state.sel.live.included.size - beforeInc;
-      if (added.length || regionAdded || addedChannels > 0) {
+      if (!sameOrder || matchChanged || regionChanged || addedChannels > 0) {
         refresh();
         const details = [
-          added.length ? `+${plural(added.length, 'nom', 'noms')}` : '',
+          addedCount ? `+${addedCount}` : '',
+          removedCount ? `−${removedCount}` : '',
           addedChannels > 0 ? `+${plural(addedChannels, 'chaîne ajoutée', 'chaînes ajoutées')}` : '',
         ].filter(Boolean).join(', ');
-        toast(`Groupe « ${existing.name} » mis à jour${details ? ` (${details})` : ''} — pense à enregistrer.`);
+        toast(`Groupe « ${existing.name} » remplacé à la même place${details ? ` (${details})` : ''} — pense à enregistrer.`);
       } else {
-        toast(`Le groupe « ${existing.name} » est déjà à jour.`);
+        toast(`Le groupe « ${existing.name} » est déjà identique au modèle.`);
       }
       return existing;
     }
@@ -2030,6 +2035,16 @@
   function renderCustomGroups() {
     const list = $('cg-list');
     list.replaceChildren();
+    const existingNames = new Set(state.customGroups.map((g) => norm(g.name)));
+    for (const btn of $('cg-presets').querySelectorAll('button[data-preset]')) {
+      const pname = btn.dataset.preset;
+      const preset = PRESETS.find((p) => p.name === pname);
+      const exists = existingNames.has(norm(pname));
+      btn.textContent = `${exists ? '↻' : '+'} ${pname}`;
+      btn.title = exists
+        ? `Remplacer « ${pname} » à la même place par la version à jour du modèle — ${preset ? preset.hint : ''}`
+        : (preset ? preset.hint : '');
+    }
     const ordered = orderedCustomGroups();
     const members = groupMembers();
     const reorderCg = (from, to) => {
@@ -4528,7 +4543,7 @@
     const line = h('div', { class: 'preset-line' }, h('span', { class: 'preset-cat', text: family }));
     for (const name of names) {
       const preset = PRESETS.find((p) => p.name === name);
-      if (preset) line.append(h('button', { type: 'button', class: 'btn small', text: `+ ${preset.name}`, title: preset.hint, onclick: () => createGroup(preset) }));
+      if (preset) line.append(h('button', { type: 'button', class: 'btn small', 'data-preset': preset.name, text: `+ ${preset.name}`, title: preset.hint, onclick: () => createGroup(preset) }));
     }
     $('cg-presets').append(line);
   }

@@ -2,6 +2,12 @@
 
 Format inspiré de « Keep a Changelog ». Les versions suivent le versionnage sémantique.
 
+## [3.36.2] — 2026-11-28
+
+### Amélioré
+- **Remplacement d'un groupe modèle en 1 clic à la même place** (**Mes playlists → Mes groupes**, `app.js::createGroup`) :
+  - Cliquer sur un bouton de modèle déjà présent (affiché **`↻ OTT`**, **`↻ Belgique`**, **`↻ Maroc`**…) remplace directement son contenu par la version à jour du modèle **sans changer sa position** dans la playlist ni perdre son identifiant ou les chaînes rangées à la main (`📁`), avec indication du delta (`+N`, `−M`). Plus besoin de supprimer puis recréer le groupe à la main.
+
 ## [3.36.1] — 2026-11-27
 
 ### Amélioré
