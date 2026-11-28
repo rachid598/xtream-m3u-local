@@ -50,7 +50,9 @@ DEFAULT_EPG_GUIDES = {
         "alaoula": "alaoulaar.ma",
         "alaoulainter": "alaoulaar.ma",
         "alaoulainternational": "alaoulaar.ma",
+        "alaoulamaroc": "alaoulaar.ma",
         "almaghribia": "almaghribiaar.ma",
+        "almaghribiya": "almaghribiaar.ma",
         "maghribia": "almaghribiaar.ma",
         "tamazight": "tamazightar.ma",
         "tamazighttv": "tamazightar.ma",
@@ -59,7 +61,11 @@ DEFAULT_EPG_GUIDES = {
         "tamazightmaroc": "tamazightar.ma",
     },
     "https://raw.githubusercontent.com/iimnm/arabic-epg/output/guide.xml.gz": {
+        "2m": "2mmonde.ma@sd",
+        "2mmaroc": "2mmonde.ma@sd",
         "2mmonde": "2mmonde.ma@sd",
+        "2mnational": "2mmonde.ma@sd",
+        "2mnatioanl": "2mmonde.ma@sd",
         "chadatv": "chadatv.ma@sd",
         "chada": "chadatv.ma@sd",
     },
@@ -144,8 +150,12 @@ def write_api_channel(dst, xml_id: str, name: str, logo: str, listings: list[dic
 
 
 def xml_channel_id(channel: dict) -> str:
-    """Identifiant XMLTV d'une chaîne : ``epg_channel_id`` du fournisseur, sinon ``xtream-<stream_id>``."""
-    return channel.get("epg_id") or f"xtream-{channel['stream_id']}"
+    """Identifiant XMLTV d'une chaîne : ``epg_channel_id`` du fournisseur (s'il est exploitable), sinon ``xtream-<stream_id>``."""
+    from .builder import is_usable_epg_id
+    eid = (channel.get("epg_id") or "").strip()
+    if eid and (channel.get("epg_manual") or is_usable_epg_id(eid)):
+        return eid
+    return f"xtream-{channel['stream_id']}"
 
 
 class EpgUnavailable(Exception):
@@ -380,6 +390,7 @@ class EpgCache:
             return cached[1]
         from .builder import match_name
         result: dict[str, list[str]] = {}
+        fallback_tv: dict[str, list[str]] = {}
         labels: dict[str, str] = {}
         try:
             for _, elem in ET.iterparse(self.source, events=("end",)):
@@ -393,11 +404,18 @@ class EpgCache:
                             ids = result.setdefault(core, [])
                             if cid not in ids:
                                 ids.append(cid)
+                            if core.endswith("tv") and len(core) >= 6 and not core[:-2].isdigit():
+                                fids = fallback_tv.setdefault(core[:-2], [])
+                                if cid not in fids:
+                                    fids.append(cid)
                     elem.clear()
                 elif elem.tag == "programme":
                     elem.clear()
         except (ET.ParseError, OSError):
             return {}
+        for short, fids in fallback_tv.items():
+            if short not in result:
+                result[short] = fids
         self._names = (key, result)
         self._labels = (key, labels)
         return result
@@ -496,12 +514,30 @@ class EpgCache:
                     sec_errors.append(exc)
         if source is None and not sec_available and source_error is None and sec_errors:
             source_error = sec_errors[0]
+        from .builder import epg_id_matches_name, is_usable_epg_id, match_name, _epg_core_family
+        bad_cores: dict[str, set[str]] = {}
+        bad_families: dict[str, set[str]] = {}
+        for c in channels:
+            if c.get("epg_manual"):
+                continue
+            eid = (c.get("epg_id") or "").strip().lower()
+            if not is_usable_epg_id(eid):
+                continue
+            core = match_name(c.get("name") or "")
+            if core and not epg_id_matches_name(eid, c.get("name") or "", c.get("epg_name") or ""):
+                bad_cores.setdefault(eid, set()).add(core)
+                bad_families.setdefault(eid, set()).add(_epg_core_family(core))
+        poisoned_eids = {eid for eid, cores in bad_cores.items() if len(cores) >= 3 and len(bad_families.get(eid, ())) >= 3}
+
         in_provider_primary: set[str] = set()
         in_provider_sec: dict[str, tuple[str, "EpgCache", str]] = {}
         for c in channels:
             sid = c["stream_id"]
             eid = (c.get("epg_id") or "").strip().lower()
-            if not eid:
+            manual = c.get("epg_manual")
+            if not eid or (not manual and not is_usable_epg_id(eid)):
+                continue
+            if not manual and eid in poisoned_eids and not epg_id_matches_name(eid, c.get("name") or "", c.get("epg_name") or ""):
                 continue
             pid = ch_provider[sid]
             if pid != "1" and pid in sec_available:
@@ -527,7 +563,6 @@ class EpgCache:
         from_extra: set[str] = set()
         extras = self.extras
         if extras:
-            from .builder import match_name
             remaining = [c for c in channels if c["stream_id"] not in covered]
             for position, extra in enumerate(extras, start=1):
                 if not remaining:
@@ -541,12 +576,19 @@ class EpgCache:
                 mapping: dict[str, list[str]] = {}
                 left = []
                 for c in remaining:
-                    eid = (c.get("epg_id") or "").strip().lower()
+                    raw_eid = (c.get("epg_id") or "").strip().lower()
                     manual = c.get("epg_manual")
-                    if eid not in auto_ids and not manual and c.get("epg_match_name", True):
+                    eid = raw_eid if (manual or is_usable_epg_id(raw_eid)) else ""
+                    if eid and not manual and eid in poisoned_eids and not epg_id_matches_name(eid, c.get("name") or "", c.get("epg_name") or ""):
+                        eid = ""
+                    if not manual and c.get("epg_match_name", True):
                         # Nom propre du groupe (« TF1 ») d'abord, puis le nom de la chaîne chez le fournisseur.
-                        eid = (by_name.get(squash_name(c["epg_name"]), "") if c.get("epg_name") else "") \
+                        name_eid = (by_name.get(squash_name(c["epg_name"]), "") if c.get("epg_name") else "") \
                             or by_name.get(squash_name(match_name(c["name"])), "")
+                        if eid not in auto_ids:
+                            eid = name_eid
+                        elif name_eid and name_eid != eid and not epg_id_matches_name(eid, c.get("name") or "", c.get("epg_name") or ""):
+                            eid = name_eid
                     if eid in (available_ext if manual else auto_ids):
                         ours = xml_channel_id(c)
                         if ours not in mapping.setdefault(eid, []):

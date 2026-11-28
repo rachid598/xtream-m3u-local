@@ -2,6 +2,21 @@
 
 Format inspiré de « Keep a Changelog ». Les versions suivent le versionnage sémantique.
 
+## [3.36.1] — 2026-11-27
+
+### Amélioré
+- **Nettoyage automatique des noms (« Mode Décodeur »)** (`builder.clean_channel_name` & `app.js::cleanChannelName`) — calibré sur un export réel de 152 314 chaînes multi-abonnements :
+  - Correction de `SP⚽RTS` → `SPORTS` (1 548 occurrences nettoyées) et conversion complète des petites capitales & exposants Unicode (`ꜰʜᴅ`, `ᴿᴬᵂ`, `ᴴᴰ`, `ᵁᴴᴰ`, `⁸ᴷ`, `³⁸⁴⁰ᵖ`, `⁽ᴮᴷ⁾`, `ᶜᶦᵗʸ`) — 49 152 occurrences nettoyées ; `quality()` reconnaît désormais aussi `ꜰʜᴅ`, `⁸ᴷ` et `³⁸⁴⁰ᵖ`.
+  - Suppression des préfixes multiples ou doublonnés (`VIP:`, `SPO:`, `8K:`, `UHD:`, `F:`, `BE-VIP:`, `|4K| FR|`, `BE: BE VRT 1` → `VRT 1`), qualités collées ou avec slash (`1HD`, `2FHD`, `FHD/SD`, `UHD/4K`), mentions entre crochets/parenthèses (`(LIVE EVENT ONLY)`, `[MULTI-AUDIO]`, `(MULTI-LANGUES)`, `(BK)`, `(13)`, `(STZ)`), et symboles décoratifs (`✦`, `▼`, `▲`, `⚽`, `✟`).
+- **Rapprochement des groupes, modèles et déduplication multi-abonnements** (`builder.py` & `app.js`) :
+  - Alias canoniques partagés Python/JS (`Euro Sport` → `Eurosport`, `13.ème Rue` → `13ème Rue`, `Canal+ Cinéma(s)` → `Canal+ Cinéma`, `NatGeo` → `Nat Geo`, `Chasse & Pêche` → `Chasse et Pêche`, `Sciences & Vie` → `Science & Vie`, `Planète` → `Planète+`, `Infosport` → `Infosport+`, `Golf` → `Golf+`, `Automoto La Chaîne` → `Automoto`, `Equidia Live` → `Equidia`, `beIN Sports 01` → `beIN Sports 1`, `Telemaroc` → `Tele Maroc`…), augmentant le recouvrement FR inter-fournisseurs tout en gardant `|BEIN AR|` strictement isolé des groupes FR.
+  - Correction de `regional_group_key()` sur les exposants `ᵁᴴᴰ` (qui scindaient en `u ...`), ajout des alias `Arrabiaa` → `Athaqafia` et `AD Sports N Premium` → `AD Sports Premium N`.
+  - Enrichissement et recalibrage des modèles : **OTT** (exactement les 112 chaînes Généralistes → Canal+ → Cinéma → Canal Play → Séries → Divertissement → Découverte → Jeunesse jusqu'à *Pitchoun Kids Music*, sans flux `[VOD]`/Info/Sport), **Belgique** (56 chaînes francophones : RTBF, RTL, Be 1/Ciné/Séries, DAZN FR, Play Sports FR, VOO Sport World, régionales *Bouké / Canal Zoom / Qu4tre / Ma Télé / No Télé / Télé Sambre / Télé MB*, Radio Vision et Luxembourg *RTL Lux / Eldo TV / Chamber TV*, sans chaînes flamandes), **Francophonie** (Belgique+Luxembourg + Suisse romande *Blue Sport 1–10*, *My Sports 1–9*), **Sport FR**, **Sport AR**, **Bouquet Canal+** et **Maroc**.
+- **Fiabilité & couverture du guide EPG** (`builder.py` & `epg.py`) :
+  - Rejet des identifiants EPG bidons (`TS`, `0`, `N/A`…) et détection automatique des identifiants **empoisonnés** par le fournisseur (ex. `01tv.fr` attribué à 72 chaînes sans rapport dont beIN Sports 1–8, `100nltv.nl`, `27mediaset.it`, `1plus1.pt`, `ab3.be`, `13eme.rue.fr`) tout en préservant la vraie chaîne correspondante (`01TV`, `100% NL TV`, `AB3`) et tout choix manuel (`epg_manual`).
+  - Héritage d'un identifiant EPG valide depuis les doublons fusionnés lors de `dedupe()` (ex. `Al Aoula Inter ᴴᴰ` récupère `AlAoula.ma` depuis la version SD).
+  - Rapprochement externe amélioré : préférence au nom cohérent quand l'identifiant fournisseur ne correspond pas à la chaîne, indexation de secours sans suffixe `TV` (`Histoire` ↔ `Histoire TV`, `Museum` ↔ `Museum TV`), et ajout des variantes `2M National/Natioanl` et `Al Aoula Maroc` dans les guides Maroc par défaut.
+
 ## [3.36.0] — 2026-11-27
 
 ### Ajouté

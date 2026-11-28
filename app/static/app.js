@@ -303,20 +303,36 @@
   // ------------------------------------------------- règles et doublons
   // Mêmes règles que le serveur (app/builder.py) pour que les compteurs concordent.
   const EMPTY_SET = new Set();
+  const SMALL_CAPS = {
+    'ᴀ': 'A', 'ʙ': 'B', 'ᴄ': 'C', 'ᴅ': 'D', 'ᴇ': 'E', 'ꜰ': 'F', 'ɢ': 'G', 'ʜ': 'H', 'ɪ': 'I',
+    'ᴊ': 'J', 'ᴋ': 'K', 'ʟ': 'L', 'ᴍ': 'M', 'ɴ': 'N', 'ᴏ': 'O', 'ᴘ': 'P', 'ǫ': 'Q', 'ʀ': 'R',
+    'ꜱ': 'S', 'ᴛ': 'T', 'ᴜ': 'U', 'ᴠ': 'V', 'ᴡ': 'W', 'ʏ': 'Y', 'ᴢ': 'Z',
+    'ᴴ': 'H', 'ᴰ': 'D', 'ᴿ': 'R', 'ᴬ': 'A', 'ᵂ': 'W', 'ᵁ': 'U', 'ᶠ': 'F', 'ˢ': 'S', 'ᵏ': 'K',
+    'ᴷ': 'K', 'ᴮ': 'B', 'ᴵ': 'I', 'ᴾ': 'P', 'ᵀ': 'T', 'ᴱ': 'E', 'ᴼ': 'O', 'ᴺ': 'N', 'ᴹ': 'M',
+    'ᴳ': 'G', 'ᴸ': 'L', 'ⱽ': 'V', 'ᶜ': 'c', 'ᶦ': 'i', 'ᵗ': 't', 'ʸ': 'y', 'ᵖ': 'p', 'ʳ': 'r',
+    '⁰': '0', '¹': '1', '²': '2', '³': '3', '⁴': '4', '⁵': '5', '⁶': '6', '⁷': '7', '⁸': '8', '⁹': '9',
+    '⁽': '(', '⁾': ')',
+  };
+  const SMALL_CAPS_RE = new RegExp(`[${Object.keys(SMALL_CAPS).join('')}]`, 'g');
+  const expandSuperscripts = (text) => String(text || '').replace(SMALL_CAPS_RE, (ch) => SMALL_CAPS[ch] || ch);
+  const fixSoccerO = (text) => String(text || '').replace(/(sp)\s*⚽\ufe0f?\s*(rts)/gi, (_, a, b) => a + (a === a.toUpperCase() ? 'O' : 'o') + b);
   const QUALITY = [
-    [/(?<![a-z0-9])(4k|uhd|2160p?)(?![a-z0-9])/, 4],
+    [/(?<![a-z0-9])(8k|4k|uhd|3840p?|2160p?)(?![a-z0-9])/, 4],
     [/(?<![a-z0-9])(fhd|full ?hd|1080[pi]?)(?![a-z0-9])/, 3],
     [/(?<![a-z0-9])(hd|720p?)(?![a-z0-9])/, 2],
     [/(?<![a-z0-9])(sd|576[pi]?|480[pi]?)(?![a-z0-9])/, 1],
   ];
-  const QUALITY_TAGS = /(?<![a-z0-9])(4k|uhd|2160p?|fhd|full ?hd|1080[pi]?|hd|720p?|sd|576[pi]?|480[pi]?|hevc|h\.?26[45]|x26[45]|hdr|50 ?fps|60 ?fps|25 ?fps|backup|raw|multi|vip)(?![a-z0-9])/g;
+  const QUALITY_TAGS = /(?<![a-z0-9])(8k|4k|uhd|3840p?|2160p?|fhd|full ?hd|1080[pi]?|hd|720p?|sd|576[pi]?|480[pi]?|hevc|h\.?26[45]|x26[45]|hdr10?|dolby|atmos|60 ?fps|50 ?fps|30 ?fps|25 ?fps|multi[- ]?audio|multi[- ]?langues?|backup|bkp|bk|raw|multi|vip|local|low|lq|hq)(?![a-z0-9])/g;
+  const NOISE_BRACKETS = /(?:\*+\s*(?:local|backup|bkp|bk|multi|raw|hevc|h\.?26[45]|vip|fhd|uhd|hd|sd|4k|8k|low|lq|hq)\s*\*+|[\[(]\s*(?:local|backup|bkp|bk|multi(?:[- ]?(?:audio|langues?))?|raw|hevc|h\.?26[45]|vip|fhd|uhd|hd|sd|4k|8k|3840p?|2160p?|1080p?|720p?|low|lq|hq|hdr10?|50\s*fps|60\s*fps|30\s*fps|25\s*fps|5\.1|aac|ac3|live(?:\s+event(?:\s+only)?)?|event\s+only|stz|stc|13)\s*[\])])/gi;
+  const SLASH_QUALITY = /(?:^|(?<=\s))(?:(?:8k|4k|uhd|fhd|hd|sd|raw|hevc|hdr)\s*\/\s*)+(?:8k|4k|uhd|fhd|hd|sd|raw|hevc|hdr)(?=\s|$|\.)/gi;
+  const GLUED_DIGIT_QUALITY = /(?<=\d)(?:fhd|uhd|hd|sd)(?=\b|$|\s|\.)/gi;
   const SEP_CHARS = '#=*~_\\-•●◆★☆▬▭━─═';
   const SEPARATOR = new RegExp(`^[${SEP_CHARS}|\\s]*[${SEP_CHARS}]{3,}.*[${SEP_CHARS}]{3,}[${SEP_CHARS}|\\s]*$`, 'u');
   /** Fausse chaîne servant de titre de section (même règle que le serveur). */
   const SYMBOL_EDGES = /^\s*[^\p{L}\p{N}\s]{3,}.*[^\p{L}\p{N}\s]{3,}\s*$/u;
   const PLACEHOLDER = /^[^\p{L}\p{N}]*no\s+(live\s+)?events?\b|\bno\s+event\s+streaming\b/iu;
   const isSeparator = (name) => { const t = String(name || '').trim(); return !t || PLACEHOLDER.test(t) || SEPARATOR.test(t) || SYMBOL_EDGES.test(t) || !/[\p{L}\p{N}]/u.test(t); };
-  const squash = (text) => norm(text).split(/\s+/).filter(Boolean).join(' ');
+  const squash = (text) => norm(expandSuperscripts(text)).split(/\s+/).filter(Boolean).join(' ');
   const ADULT_RE = /(?<![a-z0-9])(?:xxx|18\s*\+|\+\s*18|for\s+adults?|adults?(?!\s+swim)|adultes?|porno?|eroti(?:c|que)|x-rated|nsfw|dorcel|brazzers|penthouse|hustler|playboy\s*tv)(?![a-z0-9])/i;
   const isAdultCategory = (name) => ADULT_RE.test(squash(name));
   const isAdultItem = (c, kind = state.kind) => {
@@ -328,14 +344,83 @@
 
   // ------------------------------------------- groupes personnalisés (même règle que app/builder.py)
   const CG = 'g:';
-  const COUNTRY = /^[^\p{L}\p{N}_]*[A-Za-z]{2}\s*[:|\-\]●•»◉]+\s*/u;
+  const MATCH_PREFIX = /^(?:\s*[\[\(|•●★☆▶►◉♦♣✦▼\-]+\s*)*(?:(?:[A-Za-z]{2}(?:\s*[-/]\s*(?:VIP|OTT|HD|FHD|4K|UHD|RAW|HEVC))?|VIP|SPO|UHD|FHD|8K|4K|HEVC|F|BEIN\s+FR)\s*[:|\-\]\)●•»◉]+\s*)+/i;
+  const CANONICAL_ALIASES = {
+    'canal+ box offcie': 'canal+ box office',
+    'canal+ cinema s': 'canal+ cinema',
+    'canal docs': 'canal+ docs',
+    'rmc alerte securs': 'rmc alerte secours',
+    'discovery invest': 'discovery investigation',
+    'discovery id': 'discovery investigation',
+    'planete': 'planete+',
+    'planete ae': 'planete+ aventure',
+    'planete a&e': 'planete+ aventure',
+    'planete ci': 'planete+ crime',
+    'polar': 'polar+',
+    'piwi': 'piwi+',
+    'golf': 'golf+',
+    'infosport': 'infosport+',
+    'l equipe 21': 'l equipe',
+    'la chaine parlementaire': 'lcp',
+    'euronews fr': 'euronews',
+    'novelas': 'novelas tv',
+    'museum': 'museum tv',
+    'museum channel': 'museum tv',
+    'histoire': 'histoire tv',
+    'melody tv': 'melody',
+    'lucky jack tv': 'lucky jack',
+    'nick junior': 'nickelodeon junior',
+    'nick 4 teen': 'nickelodeon teen',
+    'equidia live': 'equidia',
+    'automoto la chaine': 'automoto',
+    'game one1': 'game one',
+    'teletoon 1': 'teletoon+1',
+    'disney channel 1': 'disney channel+1',
+    'nickelodeon 1': 'nickelodeon+1',
+    'telemaroc': 'tele maroc',
+    'ol tv': 'oltv',
+    'natgeo': 'national geographic',
+    'nat geo': 'national geographic',
+    'national geo': 'national geographic',
+    'natgeo wild': 'nat geo wild',
+    'national geo wild': 'nat geo wild',
+    'tv5monde': 'tv5 monde',
+    'tv5monde europe': 'tv5 monde europe',
+    'ma tele': 'matele',
+    'no tele': 'notele',
+    'tele sambre': 'telesambre',
+    'tele mb': 'telemb',
+    'qu4tre rtc liege': 'rtc tele liege',
+    'qu4tre': 'rtc tele liege',
+    'antenne centre tv': 'antenne centre',
+    'rtl club': 'club rtl',
+    'rtl plug': 'plug rtl',
+    'play sports 1 wallonie': 'play sports 1 fr',
+    'play sports 2 wallonie': 'play sports 2 fr',
+    'dazn pro leagues 1': 'dazn pro league 1 fr',
+    'dazn pro leagues 2': 'dazn pro league 2 fr',
+    'dazn sports 1 fr': 'dazn 1 fr',
+  };
   /** Nom comparable : sans pays (« FR: »), accents, ponctuation ni qualité. « FR: TF1 FHD » → « tf1 ». */
   function matchName(name) {
-    let text = String(name || '').replace(COUNTRY, '').normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase();
-    text = text.replace(/[^\p{L}\p{N}+&]+/gu, ' ').replace(/\s+\+/g, '+');
+    let text = fixSoccerO(expandSuperscripts(name || '')).replace(MATCH_PREFIX, '');
+    text = text.replace(NOISE_BRACKETS, ' ').replace(SLASH_QUALITY, ' ').replace(GLUED_DIGIT_QUALITY, '');
+    text = text.normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase();
+    text = text.replace(/\b13\s*\.\s*eme\s+rue\b/g, '13eme rue');
+    text = text.replace(/[^\p{L}\p{N}+&]+|_/gu, ' ').replace(/\s+\+/g, '+');
     let tokens = text.split(/\s+/).filter(Boolean);
     if (tokens.length > 1 && (tokens[0] === 'fr' || tokens[0] === 'fra')) tokens = tokens.slice(1);
-    return tokens.join(' ').replace(QUALITY_TAGS, ' ').split(/\s+/).filter(Boolean).join(' ');
+    let core = tokens.join(' ').replace(QUALITY_TAGS, ' ').split(/\s+/).filter(Boolean).join(' ');
+    core = core.replace(/\b13\s+eme\s+rue\b/g, '13eme rue')
+      .replace(/\beuro\s+sports?\b/g, 'eurosport')
+      .replace(/\bligue\s*1\+/g, 'ligue 1+')
+      .replace(/\bnat\s*geo\b/g, 'nat geo')
+      .replace(/\btoute\s+lhistoire\b/g, 'toute l histoire')
+      .replace(/\bchasse\s*&\s*peche\b/g, 'chasse et peche')
+      .replace(/\bsciences?\s*(?:&|et)?\s*vie(?:\s+tv)?\b/g, 'science & vie')
+      .replace(/\bbe\s*in\s+sports?\b/g, 'bein sports')
+      .replace(/\bbein sports 0([1-9])\b/g, 'bein sports $1');
+    return CANONICAL_ALIASES[core] || core;
   }
   const NUMBERED = /^\s*(\d{1,5})\s*[:=]\s*(.+)$/;  // « 4: Canal+ » = numéro de chaîne (comme sur le décodeur)
   const LIVES = Array.from({ length: 19 }, (_, i) => `Canal+ Live ${i + 1}`);
@@ -344,19 +429,21 @@
     ...numbered('beIN Sports', 1, 3), 'Canal+ Foot', 'Ligue 1+ 1', 'Canal+ Sport', 'Canal+ Sport 360',
     'Eurosport 1', 'Eurosport 2', 'RMC Sport 1', 'L’Équipe', 'L’Équipe Live Foot', 'Sport en France',
     'RMC Sport 2', 'RMC Sport Access', 'RMC After Foot TV', 'Infosport+', 'Automoto La Chaîne',
-    'Golf+', 'Golf Channel', 'Journal du Golf TV', 'Equidia Live',
+    'Golf+', 'Golf Channel', 'Journal du Golf TV', 'Equidia Live', ...numbered('Equidia Racing', 1, 8),
     ...numbered('beIN Sports Max', 4, 10), ...numbered('Ligue 1+', 2, 10), ...LIVES,
-    ...numbered('Eurosport 360', 1, 32), ...numbered('RMC Sport Live', 1, 17), ...numbered('DAZN', 1, 2),
+    ...numbered('Eurosport 360', 1, 32), ...numbered('RMC Sport Live', 1, 17), ...numbered('DAZN', 1, 5),
   ];
   const SPORT_AR = [
-    ...numbered('beIN Sports', 1, 9), 'Arryadia', 'Arryadia TNT', ...numbered('Alkass', 1, 8),
-    ...numbered('Thmanyah', 1, 3), ...numbered('AD Sports Premium', 1, 2), ...numbered('AD Sports', 1, 2),
+    ...numbered('beIN Sports', 1, 9), 'Arryadia', 'Arryadia TNT', ...numbered('Alkass', 1, 10),
+    ...numbered('Thmanyah', 1, 3), ...numbered('AD Sports Premium', 1, 2), ...numbered('AD Sports', 1, 4),
+    ...numbered('AD Sports Asia', 1, 2), ...numbered('StarzPlay Sports', 1, 2),
+    ...numbered('Alwan Sport', 1, 5), ...numbered('Diwan Sport', 1, 2),
     'ON Sport', 'ON Sport Plus', 'ON Sport Max', ...numbered('Dubai Sports', 1, 3), 'Yas Sports',
     'Al Ahly TV', 'Zamalek Sports', 'Nile Sport', 'Iraqia Sport', 'Alrabiaa Sport One', 'Alrabiaa Sport Two',
     'Kuwait Sports', 'Kuwait Sports Plus', ...numbered('Bahrain Sport', 1, 2), 'Oman Sports',
     'Jordan Sport', ...numbered('Libya Sport', 1, 2), 'Sharjah Sports', 'Sharjah Sports 2', 'Neelain Sport',
     ...numbered('KSA Sport', 1, 4), ...numbered('Dubai Racing', 1, 3), 'beIN Sports News', 'beIN Sports Global',
-    ...numbered('beIN Sports Xtra', 1, 5), 'beIN Sports AFC', ...numbered('beIN Sports AFC', 1, 4),
+    'beIN Sports NBA', ...numbered('beIN Sports Xtra', 1, 5), 'beIN Sports AFC', ...numbered('beIN Sports AFC', 1, 6),
     ...numbered('Shahid Sports Event', 1, 3),
   ];
   const NILESAT = [
@@ -382,29 +469,35 @@
     'Spacetoon', 'Cartoon Network Arabic', 'Majid TV', 'Jeem TV', 'Baraem', 'Toyor Al Janah',
     'Saudi Quran TV', 'Saudi Sunnah TV', 'Iqraa', 'Al Resalah', 'Zad TV', ...SPORT_AR,
   ];
-  // Liste « OTT » d'un fournisseur (catégorie « FRANCE HD | OTT »), dans son ordre, sans les séparateurs.
+  // Liste « OTT » (112 chaînes françaises : Généralistes, Canal+, Cinéma, Canal Play, Séries, Divertissement, Découverte, Jeunesse).
   const OTT = `TF1, France 2, France 3, France 4, France 5, M6, Arte, RTS Un, RTS Deux,
-    Canal+, Canal+ Foot, Canal+ Sport, Canal+ Sport 360, Canal+ Box Office, Canal+ Grand Ecran, Canal+ Cinema(s), Canal+ Cinema, Canal+ Docs, Canal+ Kids,
+    Canal+, Canal+ Foot, Canal+ Sport, Canal+ Sport 360, Canal+ Box Office, Canal+ Grand Ecran, Canal+ Cinema(s), Canal+ Docs, Canal+ Kids,
     Cine+ OCS, Cine+ Frisson, Cine+ Emotion, Cine+ Family, Cine+ Festival, Cine+ Classic, Drive In Movie Channel, Action, TCM Cinema,
     Eurochannel, La Chaine de Noel, Studio Movie 1, Studio Movie 2, Studio Movie 3, Disney+ Marvels, Disney+ Star Wars,
     Canal Play 1, Canal Play 2, Canal Play 3, Canal Play 4, Canal Play 5, Canal Play 6, Canal Play 7, Canal Play 8, Canal Play 9, Canal Play 10,
     13eme Rue, Syfy, Warner TV, Polar+, Serie Club, TV Breizh, RTL9, AB1, Novelas TV, TF1 Series Films, France TV Series, Studio Comedy, Studio Crime,
-    Comedie+, Paris Premiere, Teva, W9, TMC, TFX, CStar, T18, Novo19, 6ter, RMC Story, RMC Life, AB3, Carac 1, TV5 Monde, TV5 Monde Europe, TV5Monde Europe,
-    Planete+, Planete+ Crime, Planete+ Aventure, National Geo, National Geographic, National Geo Wild, Nat Geo Wild, Discovery Channel, TLC, Discovery ID, RMC Decouverte, Museum,
+    Comedie+, Paris Premiere, Teva, W9, TMC, TFX, CStar, T18, Novo19, 6ter, RMC Story, RMC Life, AB3, Carac 1, TV5 Monde, TV5 Monde Europe,
+    Planete+, Planete+ Crime, Planete+ Aventure, National Geographic, Nat Geo Wild, Discovery Channel, TLC, Discovery ID, RMC Decouverte, Museum,
     Ushuaia TV, Histoire, Toute l'Histoire, Seasons, Chasse et Peche, Science & Vie, Crime District, Animaux, Trek, L'Esprit Sorcier, France TV Docs, Imearth,
     Piwi+, Disney Junior, Nickelodeon Junior, Boomerang, Cartoonito, Tiji, Teletoon+, Disney Channel, Nickelodeon, Nickelodeon +1, Canal J,
-    Nickelodeon Teen, Cartoon Network, Gulli, Dreamworks, Pitchoun TV, Pitchoun Kids Music, Baby TV, Duck TV,
-    Disney+ Pixar [VOD], Les Simpson [VOD], Bob l'Eponge [VOD], Spirit : au galop en toute liberte [VOD], Miraculous [VOD], Masha et Michka [VOD],
-    Peppa Pig, Lilo & Stitch [VOD], La Maison de Mickey [VOD], La Garde du Roi Lion [VOD], Elena d'Avalor [VOD], Dora l'exploratrice [VOD],
-    Docteur la Peluche [VOD], South Park [VOD], La Pat Patrouille [VOD], A table T'choupi [VOD], T'choupi et Doudou [VOD], T'choupi et ses amis [VOD],
-    MTV, MCM, Bravo, Comedy Central, Warner TV Next, Mangas, ADN, MGG TV, Ginx Esport, Ginx Esports TV, Game Toon, Lucky Jack, Gong, Gong Max, Sqool TV,
-    La Chaine Meteo, CNews, CNews Prime, BFM, BFM 2, BFM2, LCI, France Info, LCP-AN 24/24, LCP, Public Sénat, France 24, Euronews, BFM Business, Tech&Co, Tech&Eco,
-    B-Smart, Le Media, I24 News, RT France, Bloomberg Europe, CNBC Europe, BBC News, CNN International,
-    beIN Sports 1, beIN Sports 2, beIN Sports 3, RMC Sport 1, Infosport+, L'Equipe, Eurosport 1, Eurosport 2, Journal du Golf, Golf+, Automoto,
-    Autoplus, Equidia, Cheval TV, OLTV, After Foot RMC, RMC After Foot TV, SportenFrance, Sport en France, Nautical Channel, Motorvision, Motorvision+, Padel Time TV, PadelTime TV`
+    Nickelodeon Teen, Cartoon Network, Gulli, Dreamworks, Pitchoun TV, Pitchoun Kids Music`
     .split(',').map((p) => p.trim()).filter(Boolean);
+  const BELGIQUE = [
+    'La Une', 'RTBF La Une', 'Tipik', 'RTBF Tipik', 'La Deux', 'La Trois', 'RTBF La Trois',
+    'RTL-TVI', 'Club-RTL', 'Plug-RTL', 'RTL District', 'RTL Play', 'RTL Play 2', 'Arte Belgique',
+    'LN24', 'Canal Z', 'AB1', 'AB3', 'ABXplore', 'AB Xplore', 'Dobbit TV (FR)', 'Dobbit TV',
+    'Be 1', 'Be Ciné', 'Be Séries',
+    'DAZN Channel 1 (FR)', 'DAZN Channel 2 (FR)', 'DAZN Pro League 1 (FR)', 'DAZN Pro League 2 (FR)',
+    ...numbered('DAZN', 1, 5).map((n) => `${n} (FR)`),
+    'Play Sports 1 (FR)', 'Play Sports 2 (FR)',
+    ...numbered('VOO Sport World', 1, 3), 'Divertissez-VOO',
+    'Antenne Centre TV', 'BX1', 'Bouké', 'Canal Zoom', 'Ma Télé', 'No Télé', 'Qu4tre (RTC Liège)',
+    'Télé Sambre', 'Télé MB', 'TV Com', 'TV Lux', 'Vedia',
+    'Fun Radio Vision', 'Radio Contact Vision', 'Bel-RTL Vision', 'Tipik Vision', 'Arabel Vision', 'NRJ Live TV',
+    'RTL Lux', 'RTL 2 Lux', 'Eldo TV', 'Chamber TV',
+  ];
   const PRESETS = [
-    { name: 'OTT', match: 'exact', hint: 'Ta liste « OTT » (188 chaînes françaises) dans l\'ordre du fournisseur ; les autres versions de chaque chaîne (VIP, 4K, FHD…) deviennent ses secours',
+    { name: 'OTT', match: 'exact', hint: 'Ta liste « OTT » (112 chaînes françaises : Généralistes, Canal+, Cinéma, Canal Play, Séries, Divertissement, Découverte, Jeunesse) dans l\'ordre du fournisseur',
       patterns: OTT },
     { name: 'Bouquet Canal+', match: 'exact', hint: 'Toutes les chaînes du bouquet Canal+, rangées par thème comme sur le décodeur (TNT, Canal+, cinéma, sport, séries, découverte, jeunesse, info, musique)',
       patterns: ['1: TF1', '2: France 2', '3: France 3', '4: Canal+', '5: France 5', '6: M6', '7: Arte',
@@ -420,11 +513,12 @@
         'Infosport+', 'Golf+', 'Automoto', 'Equidia', 'Sport en France', 'MotorVision', 'Trace Sport Stars',
         'Série Club', '13ème Rue', '13e Rue', 'Syfy', 'Warner TV', 'Paramount Network', 'MTV', 'E!', 'AB1', 'Novelas TV', 'J-One',
         'Planète+', 'Planète+ Aventure', 'Planète+ Crime', 'Ushuaïa TV', 'Love Nature', 'Histoire TV', 'Toute l\'Histoire',
-        'Discovery Channel', 'Discovery', 'Discovery Investigation', 'National Geographic', 'Nat Geo Wild', 'Dogs & Cats',
+        'Discovery Channel', 'Discovery', 'Discovery Science', 'Discovery Family', 'Discovery Investigation', 'National Geographic', 'Nat Geo Wild', 'Dogs & Cats',
         'Science et Vie TV', 'Animaux', 'Seasons', 'Trek', 'Museum TV', 'Crime District', 'Chasse et Pêche',
         'Piwi+', 'TiJi', 'Canal J', 'Disney Channel', 'Disney Junior', 'Nickelodeon', 'Nickelodeon Junior', 'Nick Jr',
         'Nickelodeon Teen', 'Boomerang', 'Cartoon Network', 'Cartoonito', 'Boing', 'Mangas', 'Game One',
-        'CNews Prime', 'France 24', 'Euronews', 'BFM Business', 'BFM Paris', 'i24News', 'Europe 1 TV', 'Le Figaro TV', 'TV Monaco',
+        'CNews Prime', 'France 24', 'Euronews', 'BFM Business', 'BFM Paris', 'BFM Lyon', 'BFM Marseille', 'BFM Côte d\'Azur',
+        'BFM Alsace', 'BFM Littoral', 'BFM Grand Lille', 'BFM Normandie', 'i24News', 'Europe 1 TV', 'Le Figaro TV', 'TV Monaco',
         'MCM', 'M6 Music', 'MTV Hits', 'NRJ Hits', 'CStar Hits', 'RFM TV', 'Trace Urban', 'Mezzo', 'Mezzo Live', 'Melody',
         'Clubbing TV', ...LIVES] },
     { name: 'TNT', match: 'exact', hint: 'Chaînes gratuites de la TNT, dans l\'ordre de leurs numéros',
@@ -438,7 +532,7 @@
         '2: 2M', '2M Maroc', '2M Monde', '2M National', '2M Natioanl', '2M TV', '2M HD',
         '3: Arryadia', 'Arryadia HD', 'Arriadia', 'Arryadia Live', 'Arryadia TNT', 'Arryadia TNT Local',
         'Arryadia 1', 'Arryadia 2', 'Arryadia 3', 'Arryadia Olympics', 'Arryadia TV Maroc',
-        '4: Athaqafia', 'Assaqafia', 'Attakafia', 'Arrabia',
+        '4: Athaqafia', 'Assaqafia', 'Attakafia', 'Arrabia', 'Arrabiaa',
         '5: Al Maghribia', 'Al Maghribia HD', 'Maghribia',
         '6: Assadissa', 'Assadissa Maroc', 'Assadissa Moroc', 'Mohammed VI', 'Assadissa Mohammed VI',
         '7: Aflam 7', 'Aflam 7 Local', 'Aflam TV',
@@ -447,7 +541,7 @@
         '10: Medi 1 TV', 'Medi1 TV', 'Medi 1 TV Maghreb', 'Medi1 TV Maghreb', 'Medi 1 Maghreb TV',
         'Medi 1 Arabic TV', 'Medi 1 TV Arabic', 'Medi 1 TV Afrique', 'Medi 1 Afrique TV', 'Medi 1 TV Europe', 'Medi 1 News',
         '11: Chada TV', 'Chada',
-        '12: Télé Maroc', 'Tele Maroc', 'Tele Moroc',
+        '12: Télé Maroc', 'Tele Maroc', 'Tele Moroc', 'Telemaroc',
         '13: M24', 'M24 Maroc', 'M24 TV',
         'MBC 5', 'MBC5', 'Al Ons TV', 'Al Ons', 'TV5', 'Omar Peche 24/7',
       ] },
@@ -457,18 +551,12 @@
       patterns: SPORT_FR },
     { name: 'Sport AR', match: 'exact', region: 'ar', hint: 'Sport arabophone, avec beIN Sports MENA en tête',
       patterns: SPORT_AR },
-    { name: 'Belgique', match: 'exact', hint: 'Chaînes belges francophones (RTBF, RTL, LN24, AB3…) puis néerlandophones (VRT, VTM, Play…)',
-      patterns: ['La Une', 'RTBF La Une', 'Tipik', 'RTBF Tipik', 'La Deux', 'La Trois', 'RTBF La Trois', 'RTL TVI', 'RTL-TVI',
-        'Club RTL', 'Plug RTL', 'LN24', 'AB3', 'ABXplore', 'AB Xplore', 'BX1', 'Canal Z', 'Télé MB', 'Canal C', 'TV Lux',
-        'Notélé', 'RTC Télé Liège', 'Antenne Centre', 'Télésambre', 'TV Com', 'Matélé', 'Vedia',
-        'VRT 1', 'Een', 'Eén', 'VRT Canvas', 'Canvas', 'Ketnet', 'VTM', 'VTM 2', 'VTM2', 'VTM 3', 'VTM3', 'VTM 4', 'VTM4',
-        'VTM Gold', 'VTM Kids', 'Play4', 'Play 4', 'Play5', 'Play 5', 'Play6', 'Play 6', 'Play7', 'Play 7', 'Play Crime',
-        'Vier', 'Vijf', 'Zes', 'Q2', 'CAZ', 'Kanaal Z', 'Eclips', 'Njam', 'Studio 100 TV', 'Bruzz', 'ATV', 'Sporza'] },
-    { name: 'Francophonie', match: 'exact', hint: 'Chaînes francophones de Belgique (en premier) et de Suisse romande, puis TV5Monde',
-      patterns: ['La Une', 'RTBF La Une', 'Tipik', 'RTBF Tipik', 'La Deux', 'La Trois', 'RTBF La Trois', 'RTL TVI', 'RTL-TVI',
-        'Club RTL', 'Plug RTL', 'LN24', 'AB3', 'ABXplore', 'AB Xplore', 'BX1', 'Canal Z', 'Télé MB', 'Canal C', 'TV Lux',
-        'Notélé', 'RTC Télé Liège', 'Antenne Centre', 'Télésambre', 'TV Com', 'Matélé', 'Vedia',
+    { name: 'Belgique', match: 'exact', hint: 'Chaînes belges francophones (RTBF, RTL, Be TV, DAZN FR, VOO Sport, régionales, Radio Vision) et Luxembourg',
+      patterns: BELGIQUE },
+    { name: 'Francophonie', match: 'exact', hint: 'Chaînes francophones de Belgique & Luxembourg (en premier) et de Suisse romande, puis TV5Monde',
+      patterns: [...BELGIQUE,
         'RTS 1', 'RTS Un', 'RTS 2', 'RTS Deux', 'RTS Info', 'Léman Bleu', 'La Télé', 'Canal 9', 'Canal Alpha', 'Carac 1', 'Carac 2',
+        ...numbered('Blue Sport', 1, 10), ...numbered('My Sports', 1, 9),
         'TV5Monde', 'TV5 Monde', 'TV5Monde Europe', 'TV5Monde FBS'] },
     { name: 'Chaînes Canal+', match: 'words', hint: 'Seulement les chaînes dont le nom contient Canal+',
       patterns: ['Canal+', 'Canal plus'] },
@@ -567,20 +655,22 @@
   function baseName(name) {
     return squash(name).replace(QUALITY_TAGS, ' ').replace(/[|()[\]{}:._\-+*/\\]+/g, ' ').split(/\s+/).filter(Boolean).join(' ');
   }
-  const CLEAN_SUPERSCRIPTS = {
-    'ᴴ': 'H', 'ᴰ': 'D', 'ᴿ': 'R', 'ᴬ': 'A', 'ᵂ': 'W', 'ᵁ': 'U', 'ᶠ': 'F', 'ˢ': 'S', 'ᵏ': 'K', '⁴': '4', '⁸': '8',
-    'ꜰ': 'F', 'ʜ': 'H', 'ᴅ': 'D', 'ʀ': 'R', 'ᴀ': 'A', 'ᴡ': 'W', 'ᴜ': 'U', 'ꜱ': 'S',
-  };
-  const CLEAN_PREFIX = /^(?:\s*[\[\(|•●★☆▶►◉♦♣\-]+\s*)*(?:(?:[A-Za-z]{2,3}(?:\s*[-/]\s*(?:VIP|OTT|HD|FHD|4K|UHD|RAW|HEVC))?|VIP|BEIN\s+(?:FR|AR))\s*[:|\-\]\)●•»◉]+\s*)+/i;
-  const CLEAN_SYMBOLS = /[◉●★☆▶►•♦♣]+/g;
-  const CLEAN_BRACKETS = /(?:\*+\s*(?:local|backup|bkp|multi|raw|hevc|h\.?26[45]|vip|fhd|uhd|hd|sd|4k|8k|low|lq|hq)\s*\*+|[\[(]\s*(?:local|backup|bkp|multi|raw|hevc|h\.?26[45]|vip|fhd|uhd|hd|sd|4k|8k|low|lq|hq|50\s*fps|60\s*fps|5\.1|aac|ac3)\s*[\])])/gi;
-  const CLEAN_TAGS = /(?:^|\s)(?:full\s*hd|fhd|uhd|4k|8k|hd|sd|hevc|h\.?26[45]|1080p?|720p?|576p?|480p?|50\s*fps|60\s*fps|raw|vip|low|lq|hq|backup|bkp|multi|local|5\.1|aac|ac3)(?=\s|$)/gi;
+  const CLEAN_PREFIX = /^(?:\s*[\[\(|•●★☆▶►◉♦♣✦▼\-]+\s*)*(?:(?:[A-Za-z]{2,3}(?:\s*[-/]\s*(?:VIP|OTT|HD|FHD|4K|UHD|RAW|HEVC))?|VIP|SPO|UHD|FHD|8K|4K|HEVC|F|BEIN\s+(?:FR|AR))\s*[:|\-\]\)●•»◉]+\s*)+/i;
+  const CLEAN_SYMBOLS = /[◉●★☆▶►•♦♣✦▼▲⚽✟\ufe0f]+/g;
+  const CLEAN_TAGS = /(?:^|(?<=\s))(?:full\s*hd|fhd|uhd|4k|8k|3840p?|2160p?|1080[pi]?|720p?|576[pi]?|480[pi]?|hd|sd|hevc|h\.?26[45]|x26[45]|hdr10?|dolby|atmos|60\s*fps|50\s*fps|30\s*fps|25\s*fps|multi[- ]?audio|multi[- ]?langues?|raw|vip|low|lq|hq|backup|bkp|bk|multi|local|5\.1|aac|ac3)\.?(?=\s|$)/gi;
   function cleanChannelName(name) {
     const raw = String(name || '').trim();
     if (!raw) return raw;
-    let text = raw.replace(/[ᴴᴰᴿᴬᵂᵁᶠˢᵏ⁴⁸ꜰʜᴅʀᴀᴡᴜꜱ]/g, (ch) => CLEAN_SUPERSCRIPTS[ch] || ch);
-    text = text.replace(CLEAN_SYMBOLS, ' ').replace(CLEAN_PREFIX, '').replace(CLEAN_BRACKETS, ' ');
-    text = text.replace(/\s*[|•]+\s*/g, ' ');
+    let text = fixSoccerO(expandSuperscripts(raw)).replace(CLEAN_SYMBOLS, ' ');
+    const prefixMatch = text.match(CLEAN_PREFIX);
+    if (prefixMatch) {
+      const codeMatch = prefixMatch[0].match(/^\W*([A-Za-z]{2})\b/);
+      const prefixCode = codeMatch ? codeMatch[1].toUpperCase() : '';
+      text = text.slice(prefixMatch[0].length);
+      if (prefixCode && text.startsWith(`${prefixCode} `)) text = text.slice(prefixCode.length + 1);
+    }
+    text = text.replace(NOISE_BRACKETS, ' ').replace(SLASH_QUALITY, ' ').replace(GLUED_DIGIT_QUALITY, '');
+    text = text.replace(/\s*[|•]+\s*/g, ' ').replace(CLEAN_PREFIX, '');
     let prev;
     do { prev = text; text = text.replace(CLEAN_TAGS, ' '); } while (text !== prev);
     text = text.replace(/^[\s\-:|*]+|[\s\-:|*]+$/g, '').replace(/\s+/g, ' ').trim();

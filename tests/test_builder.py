@@ -266,14 +266,13 @@ class CustomGroupIntegrationTests(StackTestCase):
 
 
 class OttPresetTests(unittest.TestCase):
-    """Le modèle « OTT » de l'interface reconnaît les noms réels du fournisseur (catégorie FRANCE HD | OTT)."""
+    """Le modèle « OTT » de l'interface couvre exactement les 112 chaînes (Généralistes → Jeunesse / Pitchoun Kids Music)."""
 
     PROVIDER = [
         "|FR| TF1 HD", "|FR| FRANCE 2 HD", "|FR| RTS DEUX HD", "|FR| CANAL+ SPORT 360 HD", "|FR| CANAL+ CINEMA(S) HD",
         "|FR| CINE+ OCS HD", "|FR| CANAL PLAY 10 HD", "|FR| 13EME RUE HD", "|FR| TF1 SERIES FILMS HD", "|FR| NOVO19 HD",
-        "|FR| TOUTE L'HISTOIRE HD", "|FR| SCIENCE & VIE HD", "|FR| NICKELODEON +1 HD",
-        "|FR| SPIRIT : AU GALOP EN TOUTE LIBERTE [VOD]", "|FR| PEPPA PIG HD", "|FR| LCP-AN 24/24 HD",
-        "|FR| PUBLIC SÉNAT HD", "|FR| TECH&CO HD", "|FR| BEIN SPORTS 1 HD", "|FR| MOTORVISION+ HD", "|FR| PADEL TIME TV HD",
+        "|FR| NATIONAL GEO HD", "|FR| NATIONAL GEO WILD HD", "|FR| DISCOVERY ID HD", "|FR| MUSEUM HD", "|FR| HISTOIRE HD",
+        "|FR| TOUTE L'HISTOIRE HD", "|FR| SCIENCE & VIE HD", "|FR| NICKELODEON +1 HD", "|FR| PITCHOUN KIDS MUSIC HD",
     ]
 
     def patterns(self):
@@ -286,7 +285,7 @@ class OttPresetTests(unittest.TestCase):
     def test_every_listed_channel_matches_its_own_pattern_in_order(self):
         from app.builder import group_matches, match_name, ordered_custom_groups, is_separator
         patterns = self.patterns()
-        self.assertEqual(len(patterns), 199)   # 531 à 729 sans les 12 séparateurs, + Padel Time TV, + 11 alias
+        self.assertEqual(len(patterns), 112)   # 534 à 652 sans les séparateurs (s'arrête à Pitchoun Kids Music)
         group = ordered_custom_groups({"custom_groups": [{"id": "ott", "name": "OTT", "match": "exact", "patterns": patterns}]})[0]
         ranks = []
         for name in self.PROVIDER:
@@ -297,6 +296,9 @@ class OttPresetTests(unittest.TestCase):
         # Les séparateurs du fournisseur ne correspondent à aucun nom de la liste.
         for sep in ("♣♦♣----|FR| FRANCE HD |FR|----♣♦♣", "•●★---|FR| CH. CANAL+ HD |FR|---★●•"):
             self.assertTrue(is_separator(sep))
+        # Les chaînes après Pitchoun Kids Music (VOD, Info, Sport, Musique) ne rentrent pas dans OTT.
+        for excluded in ("|FR| BABY TV HD", "|FR| PEPPA PIG HD", "|FR| BFM TV HD", "|FR| BEIN SPORTS 1 HD", "|FR| PADEL TIME TV HD"):
+            self.assertIsNone(group_matches(match_name(excluded), group), excluded)
         # Une autre version de TF1 (VIP 4K) tombe dans le même groupe : elle devient une version de secours.
         self.assertEqual(group_matches(match_name("VIP: TF1 ᴿᴬᵂ"), group), 0)
         self.assertIsNone(group_matches(match_name("|FR| TF1 SERIES FILMS HD"), {**group, "_patterns": ["tf1"], "_numbers": [None]}))
@@ -307,9 +309,9 @@ class OttPresetTests(unittest.TestCase):
         patterns = self.patterns()
         group = ordered_custom_groups({"custom_groups": [{"id": "ott", "name": "OTT", "match": "exact", "patterns": patterns}]})[0]
         second_provider = [
-            "VIP: NATIONAL GEOGRAPHIC ᴴᴰ", "VIP: NAT GEO WILD ᴴᴰ", "VIP: BFM2 ᴿᴬᵂ", "FR: LCP HD",
-            "FR: TECH&ECO", "FR: CANAL+ Cinema 4K", "FR: TV5MONDE EUROPE HEVC", "FR: RMC AFTER FOOT TV HD",
-            "FR: SPORT EN FRANCE", "VO: GINX ESPORTS TV ᴴᴰ", "US: PADELTIME TV",
+            "VIP: NATIONAL GEOGRAPHIC ᴴᴰ", "VIP: NAT GEO WILD ᴴᴰ", "FR: CANAL+ Cinema 4K",
+            "FR: TV5MONDE EUROPE HEVC", "FR: HISTOIRE TV HD", "FR: MUSEUM TV HD",
+            "FR: DISCOVERY INVESTIGATION HD", "FR: 13.EME RUE HD", "FR: SCIENCE ET VIE TV HD",
         ]
         for name in second_provider:
             with self.subTest(name=name):
