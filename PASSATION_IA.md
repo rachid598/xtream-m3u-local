@@ -1,7 +1,11 @@
 # Passation — Xtream M3U Local
 
-> **État au 27 novembre 2026 — version 3.36.1.** Document à transmettre tel quel à l'IA suivante avec le dépôt.
+> **État au 28 novembre 2026 — version 3.36.2.** Document à transmettre tel quel à l'IA suivante avec le dépôt.
 > Aucun mot de passe, token ni URL fournisseur réelle ne doit être copié ici ni commité sur GitHub.
+
+### Nouveautés en 3.36.2 (Remplacement en place des groupes modèles)
+
+- `app.js::createGroup(preset)` + `renderCustomGroups()` : quand un groupe modèle existe déjà (`OTT`, `Belgique`, `Maroc`…), son bouton affiche `↻ Nom` et un clic remplace directement `patterns`/`match`/`region` **à la même place** (même `id`, même rang dans `customGroups` et `groupOrder`, rangements manuels `itemGroups` conservés) avec toast du delta (`+N`, `−M`).
 
 ### Nouveautés en 3.36.1 (Amélioration nettoyage Mode Décodeur, rapprochement groupes/alias et protection EPG sur catalogue réel)
 

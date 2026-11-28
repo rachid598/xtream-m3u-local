@@ -273,6 +273,63 @@ console.log(JSON.stringify(fn(norm, { kind: 'live', cat: { live: { categoryNames
         for excluded in ("BE: VTM 2 HD", "BE-NL| EEN HD", "BE-NL| VRT CANVAS HD", "BE-NL| PLAY SPORTS 1 FHD"):
             self.assertIsNone(builder.group_matches(builder.match_name(excluded), group), excluded)
 
+    def test_preset_click_replaces_existing_group_in_place(self):
+        if shutil.which("node") is None:
+            self.skipTest("node absent")
+        node_code = r"""
+const fs = require('fs');
+const src = fs.readFileSync('app/static/app.js', 'utf8');
+const norm = (text) => String(text || '').normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+const m1 = src.indexOf('const EMPTY_SET = new Set();');
+const m2 = src.indexOf('/** Groupes perso par priorité');
+const c1 = src.indexOf('async function createGroup(');
+const c2 = src.indexOf('\n  function renderCustomGroups(');
+const block = src.slice(m1, m2) + '\n' + src.slice(c1, c2);
+const toasts = [];
+let refreshed = 0;
+const state = {
+  kind: 'live',
+  customGroups: [
+    { id: 'tnt', name: 'TNT', match: 'exact', patterns: ['TF1'] },
+    { id: 'ott', name: 'OTT', match: 'exact', patterns: ['TF1', 'Peppa Pig', 'BFM TV'] },
+    { id: 'maroc', name: 'Maroc', match: 'exact', region: 'ar', patterns: ['Al Aoula'] },
+  ],
+  groupOrder: ['g:tnt', 'g:ott', 'g:maroc'],
+  sel: { live: { included: new Set(), excluded: new Set() } },
+  cat: { live: { categoryNames: new Map(), channels: [] } },
+  groupCache: 'dirty',
+};
+const env = new Function(
+  'norm', 'state', '$', 'ask', 'toast', 'refresh', 'plural', 'slugify', 'ensureCatalog', 'includeRegionalChannels', 'orderedCustomGroups',
+  block + '\nreturn { PRESETS, createGroup };'
+)(
+  norm, state, () => ({ checked: false, value: 'backup' }),
+  async () => '', (msg) => toasts.push(msg), () => { refreshed += 1; },
+  (n, s, p) => `${n} ${n > 1 ? p : s}`, (s) => s.toLowerCase(),
+  async () => true, () => {}, () => state.customGroups
+);
+(async () => {
+  const ottPreset = env.PRESETS.find((p) => p.name === 'OTT');
+  await env.createGroup(ottPreset);
+  console.log(JSON.stringify({
+    ids: state.customGroups.map((g) => g.id),
+    groupOrder: state.groupOrder,
+    ottLen: state.customGroups[1].patterns.length,
+    hasPeppa: state.customGroups[1].patterns.includes('Peppa Pig'),
+    refreshed,
+    toast: toasts[0] || '',
+  }));
+})();
+"""
+        root = Path(__file__).resolve().parents[1]
+        data = json.loads(subprocess.check_output(["node", "-e", node_code], cwd=root, text=True))
+        self.assertEqual(data["ids"], ["tnt", "ott", "maroc"])
+        self.assertEqual(data["groupOrder"], ["g:tnt", "g:ott", "g:maroc"])
+        self.assertEqual(data["ottLen"], 112)
+        self.assertFalse(data["hasPeppa"])
+        self.assertEqual(data["refreshed"], 1)
+        self.assertIn("remplacé à la même place", data["toast"])
+
 
 if __name__ == "__main__":
     unittest.main()
